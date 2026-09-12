@@ -82,9 +82,24 @@ main{max-width:1480px;margin:0 auto;padding:18px}
 .chip:hover{color:var(--fg);border-color:var(--dim)}
 .chip.on{background:var(--bg3);color:var(--fg);border-color:var(--info)}
 .chip .n{font-family:var(--mono);opacity:.75;margin-left:5px}
-svg.map{display:block;width:100%;height:clamp(380px,52vh,580px);touch-action:manipulation}
-svg.map circle{cursor:pointer;transition:r .12s,opacity .12s}
-svg.map circle:hover{stroke:#fff;stroke-width:1.4}
+.mapwrap{position:relative}
+svg.map{display:block;width:100%;height:clamp(380px,52vh,580px);touch-action:pan-y;cursor:grab}
+svg.map.dragging{cursor:grabbing}
+.zoomctl{position:absolute;right:11px;top:11px;display:flex;flex-direction:column;gap:5px;z-index:2}
+.zoomctl button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line2);
+  background:rgba(11,14,20,.82);color:var(--mute);font-size:15px;line-height:1;
+  backdrop-filter:blur(6px);transition:.15s}
+.zoomctl button:hover{color:var(--fg);border-color:var(--info)}
+.zoomctl .zlevel{margin-top:2px;text-align:center;font-size:9.5px;color:var(--dim);
+  font-family:var(--mono);background:rgba(11,14,20,.82);border-radius:6px;padding:2px 0;
+  border:1px solid var(--line)}
+.maphint{position:absolute;left:13px;bottom:11px;font-size:10.5px;color:var(--dim);
+  background:rgba(11,14,20,.7);padding:3px 9px;border-radius:6px;pointer-events:none}
+.onlymobile{display:none}
+@media(hover:none){.onlymobile{display:inline}}
+/* 透明描邊只是為了把命中區撐大，手指才按得到；視覺上完全看不出來 */
+svg.map circle{cursor:pointer;transition:opacity .12s;stroke:transparent;pointer-events:all}
+svg.map circle:hover{stroke:#ffffffcc}
 svg.map text.dlab{fill:#93a3bd;font-size:17px;font-weight:700;letter-spacing:1px;
   cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#0b0e14;stroke-width:5px;
   stroke-linejoin:round;user-select:none;opacity:.85}
@@ -210,7 +225,7 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', mdist:null, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
+           filter:'all', mdist:null, mv:{k:1,tx:0,ty:0}, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -309,7 +324,7 @@ function mapSVG(){
     const op = (f==='all'&&!dsel)?.92:(show?1:.06);
     const r = show&&(f!=='all'||dsel)? m.r+1.1 : m.r;
     return `<circle cx="${px(s).toFixed(1)}" cy="${py(s).toFixed(1)}" r="${r}" fill="${m.c}"
-      opacity="${op}" data-sid="${s.sid}"/>`;
+      opacity="${op}" data-sid="${s.sid}" data-r="${r}"/>`;
   }).join('');
   // 行政區標籤：用該區站點的重心，只標站數夠多的區，避免糊成一團
   const byD={};
@@ -333,7 +348,17 @@ function mapSVG(){
         ${dsel?`<button class="chip on" data-f="__cleardist">${esc(dsel)} ✕</button>`:''}
       </div>
     </div>
-    <svg class="map" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${circles}${labels}</svg>
+    <div class="mapwrap">
+      <svg class="map" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"
+           data-w="${W}" data-h="${H}">${circles}${labels}</svg>
+      <div class="zoomctl">
+        <button data-z="in" title="放大">＋</button>
+        <button data-z="out" title="縮小">−</button>
+        <button data-z="reset" title="重設">⤢</button>
+        <div class="zlevel" id="zlevel"></div>
+      </div>
+      <div class="maphint">滾輪縮放・拖曳平移・雙擊放大<span class="onlymobile">　手機：先按 ＋ 放大再拖曳</span></div>
+    </div>
     <div class="legend">
       <span><i style="background:#c084fc"></i>整站無服務（借還皆 0）</span>
       <span><i style="background:#f2615b"></i>只是無位可還</span>
@@ -348,9 +373,98 @@ function mapSVG(){
         地圖分類把它們獨立出來，所以兩邊的數字不會相等。</span>
     </div></div>`;
 }
+const MZ={min:1,max:14};
+function applyMapView(){
+  const svg=$('svg.map'); if(!svg) return;
+  const W=+svg.dataset.w, H=+svg.dataset.h, v=S.mv;
+  v.k=Math.min(MZ.max,Math.max(MZ.min,v.k));
+  const vw=W/v.k, vh=H/v.k;
+  // 不讓使用者把地圖拖到看不見內容的地方
+  v.tx=Math.min(W-vw,Math.max(0,v.tx));
+  v.ty=Math.min(H-vh,Math.max(0,v.ty));
+  svg.setAttribute('viewBox',`${v.tx.toFixed(2)} ${v.ty.toFixed(2)} ${vw.toFixed(2)} ${vh.toFixed(2)}`);
+  // 點與字要維持固定的視覺大小，否則放大只是整團一起變胖，分不開密集區
+  const inv=1/v.k;
+  // 點用 k^-0.8 而不是 1/k：視覺大小大致固定（密集區才分得開），
+  // 但放大時會微幅變大一點，比較好按得到。
+  const rScale=Math.pow(v.k,-0.8);
+  svg.querySelectorAll('circle').forEach(c=>{
+    const rr=+c.dataset.r*rScale;
+    c.setAttribute('r',rr.toFixed(2));
+    c.style.strokeWidth=(rr*1.9).toFixed(2);   // 命中區約為點本身的三倍寬
+  });
+  // 注意：CSS 的 font-size 會蓋掉 presentation attribute，所以要寫成 inline style
+  svg.querySelectorAll('text.dlab').forEach(t=>{
+    t.style.fontSize=((t.classList.contains('on')?20:17)*inv).toFixed(2)+'px';
+    t.style.strokeWidth=(5*inv).toFixed(2)+'px';
+  });
+  // 手機上：沒放大時一指維持捲頁（不然滑到地圖就卡住），放大後才接管拖曳
+  svg.style.touchAction = v.k>1.01 ? 'none' : 'pan-y';
+  const z=$('#zlevel'); if(z) z.textContent=v.k<1.05?'1x':v.k.toFixed(1)+'x';
+  const hint=$('.maphint'); if(hint) hint.style.opacity=v.k>1.05?'0':'1';
+}
+function svgPoint(svg,clientX,clientY){
+  const r=svg.getBoundingClientRect(), v=S.mv;
+  const W=+svg.dataset.w, H=+svg.dataset.h;
+  // preserveAspectRatio="xMidYMid meet"：實際繪圖區可能有留白，要扣掉才不會偏移
+  const scale=Math.min(r.width/(W/v.k), r.height/(H/v.k));
+  const dw=(W/v.k)*scale, dh=(H/v.k)*scale;
+  const ox=r.left+(r.width-dw)/2, oy=r.top+(r.height-dh)/2;
+  return {x:v.tx+(clientX-ox)/scale, y:v.ty+(clientY-oy)/scale};
+}
+function zoomAt(svg,clientX,clientY,factor){
+  const p=svgPoint(svg,clientX,clientY), v=S.mv;
+  const k0=v.k, k1=Math.min(MZ.max,Math.max(MZ.min,k0*factor));
+  if(k1===k0) return;
+  // 讓游標底下的那一點在縮放前後停在原地
+  v.tx=p.x-(p.x-v.tx)*(k0/k1);
+  v.ty=p.y-(p.y-v.ty)*(k0/k1);
+  v.k=k1;
+  applyMapView();
+}
 function bindMap(){
   const svg=$('svg.map'); if(!svg) return;
-  svg.addEventListener('mousemove',e=>{
+  applyMapView();                    // 重繪後把上次的縮放狀態接回來
+
+  let drag=null, moved=0;
+  const pts=new Map();               // 多點觸控：pointerId → 座標
+  let pinch=null;
+
+  svg.addEventListener('pointerdown',e=>{
+    svg.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===2){
+      const [a,b]=[...pts.values()];
+      pinch={d:Math.hypot(a.x-b.x,a.y-b.y),cx:(a.x+b.x)/2,cy:(a.y+b.y)/2};
+      drag=null;
+    }else{
+      drag={x:e.clientX,y:e.clientY,tx:S.mv.tx,ty:S.mv.ty}; moved=0;
+    }
+  });
+  svg.addEventListener('pointermove',e=>{
+    if(pts.has(e.pointerId)) pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pinch&&pts.size>=2){
+      const [a,b]=[...pts.values()];
+      const d=Math.hypot(a.x-b.x,a.y-b.y);
+      if(pinch.d>0&&Math.abs(d-pinch.d)>1){
+        zoomAt(svg,(a.x+b.x)/2,(a.y+b.y)/2,d/pinch.d);
+        pinch.d=d;
+      }
+      return;
+    }
+    if(drag){
+      const r=svg.getBoundingClientRect();
+      const W=+svg.dataset.w, v=S.mv;
+      const scale=r.width/(W/v.k);
+      v.tx=drag.tx-(e.clientX-drag.x)/scale;
+      v.ty=drag.ty-(e.clientY-drag.y)/scale;
+      moved+=Math.abs(e.movementX)+Math.abs(e.movementY);
+      if(moved>4) svg.classList.add('dragging');
+      applyMapView();
+      $('#tip').style.display='none';
+      return;
+    }
+    // 沒在拖曳才顯示工具提示
     const c=e.target.closest('circle');
     const tip=$('#tip');
     if(!c){tip.style.display='none';return;}
@@ -365,15 +479,42 @@ function bindMap(){
     tip.style.left=Math.min(innerWidth-260,e.clientX+14)+'px';
     tip.style.top=Math.min(innerHeight-140,e.clientY+14)+'px';
   });
+  const endPointer=e=>{
+    pts.delete(e.pointerId);
+    if(pts.size<2) pinch=null;
+    if(drag){ drag=null; setTimeout(()=>svg.classList.remove('dragging'),0); }
+  };
+  svg.addEventListener('pointerup',endPointer);
+  svg.addEventListener('pointercancel',endPointer);
   svg.addEventListener('mouseleave',()=>$('#tip').style.display='none');
+
+  svg.addEventListener('wheel',e=>{
+    e.preventDefault();
+    zoomAt(svg,e.clientX,e.clientY,e.deltaY<0?1.18:1/1.18);
+  },{passive:false});
+
+  svg.addEventListener('dblclick',e=>{
+    e.preventDefault();
+    zoomAt(svg,e.clientX,e.clientY,1.9);
+  });
+
   svg.addEventListener('click',e=>{
+    if(moved>4) return;             // 拖曳結束的那一下不要當成點選站點
     const c=e.target.closest('circle'); if(!c) return;
     openStation(+c.dataset.sid);
   });
+
+  $$('.zoomctl button').forEach(b=>b.onclick=()=>{
+    const r=svg.getBoundingClientRect();
+    if(b.dataset.z==='reset'){ S.mv={k:1,tx:0,ty:0}; applyMapView(); }
+    else zoomAt(svg,r.left+r.width/2,r.top+r.height/2,b.dataset.z==='in'?1.5:1/1.5);
+  });
+
   $$('.chip[data-f]').forEach(b=>b.onclick=()=>{
     if(b.dataset.f==='__cleardist'){ S.mdist=null; } else { S.filter=b.dataset.f; }
     render();});
-  $$('text.dlab').forEach(t=>t.addEventListener('click',()=>{
+  $$('text.dlab').forEach(t=>t.addEventListener('click',e=>{
+    if(moved>4) return;
     S.mdist = (S.mdist===t.dataset.dist)?null:t.dataset.dist; render();}));
 }
 async function openStation(sid){
