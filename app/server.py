@@ -18,6 +18,7 @@ import weather as WX
 import awsloc as AWSLOC
 import metrics as MX
 import events as EV
+import tickets as TK
 
 if not (os.environ.get("AWS_PROFILE") or "").strip():
     os.environ.pop("AWS_PROFILE", None); os.environ.pop("AWS_DEFAULT_PROFILE", None)
@@ -264,6 +265,7 @@ TICKET_LABEL = {"reported": "已回報", "accepted": "授權店家接單（模�
 def progress_tickets():
     for tk in STATE["tickets"]:
         if tk["status"] == "closed": continue
+        if tk.get("manual"): continue          # 已由派車端實際派工的單，狀態只能由人推進
         steps = int((now_ts() - pd.Timestamp(tk["ts"])).total_seconds() / 1800)
         want = TICKET_FLOW[min(len(TICKET_FLOW) - 1, steps)]
         if TICKET_FLOW.index(want) > TICKET_FLOW.index(tk["status"]):
@@ -701,19 +703,37 @@ def api_notifications(channel: str = "citizen"): return {"items": STATE["notific
 @app.get("/api/tickets")
 def api_tickets(): return {"tickets": STATE["tickets"], "flow": [{"key": k, "label": TICKET_LABEL[k]} for k in TICKET_FLOW]}
 
+def _ticket_age_s(tk):
+    return (now_ts() - pd.Timestamp(tk["ts"])).total_seconds()
+
+def submit_ticket(body: dict):
+    """唯一的建單入口。HTTP 路由與 server 內部呼叫都走這裡，才不會出現兩套去重規則。
+    實作在 app/tickets.py（B 線擁有），這裡只負責站名、廣播與通知。"""
+    sid = int(body["sid"])
+    row = ST.loc[ST.sid == sid]
+    if row.empty: return None
+    name = row["name"].iloc[0]
+    tk, action = TK.SERVICE.submit(STATE["tickets"], body, station_name=name,
+                                   now_iso=iso(now_ts()), now_str=str(now_ts()), age_s=_ticket_age_s)
+    ddb_put("yb_tickets", tk); broadcast("ticket", tk)
+    ident = tk.get("bike_no") or (f"{tk['dock_id']} 號柱" if tk.get("dock_id") else "無資產識別")
+    if action == "idempotent":
+        return tk
+    if action == "merged":
+        notify("citizen", "回報已合併", f"{name} 的同一個{TK.ASSET_LABEL.get(tk.get('asset_type'), '設備')}（{ident}）回報已在處理中，感謝補充。", "ticket",
+               {"ticket_id": tk["id"], "sid": sid})
+        return tk
+    notify("citizen", "報修已受理", f"{name}｜{tk['issue']}。工單 {tk['id']}；處理進度會在此更新。", "ticket", {"ticket_id": tk["id"], "sid": sid})
+    notify("gov", f"民眾報修｜{name}", f"{tk['issue']}（{ident}）。工單 {tk['id']}，由營運端主責處理。", "ticket", {"ticket_id": tk["id"], "sid": sid})
+    notify("ops", f"維修工單 {tk['id']}｜{name}", f"{TK.ASSET_LABEL.get(tk.get('asset_type'), '設備')}｜{tk['issue']}（{ident}）"
+           + ("。明確機械問題，可直接派修。" if tk.get("diagnosis") == "direct_repair" else "。證據不足，列待診斷。"),
+           "ticket", {"ticket_id": tk["id"], "sid": sid, "asset_type": tk.get("asset_type")})
+    return tk
+
 @app.post("/api/tickets")
 def api_ticket_create(body: dict):
-    sid = int(body["sid"]); issue = body.get("issue", "其他"); name = ST.loc[ST.sid == sid, "name"].iloc[0]
-    for tk in STATE["tickets"]:
-        if tk["sid"] == sid and tk["issue"] == issue and tk["status"] not in ("closed",) and (now_ts() - pd.Timestamp(tk["ts"])).total_seconds() < 7200:
-            tk["reports"] += 1; tk["history"].append({"ts": iso(now_ts()), "status": tk["status"], "label": f"重複回報合併（第 {tk['reports']} 次）"}); broadcast("ticket", tk)
-            notify("citizen", "回報已合併", f"{name} 的同類回報已在處理中，感謝補充。", "ticket"); return tk
-    tk = {"id": f"R{len(STATE['tickets'])+1:03d}", "sid": sid, "station": name, "bike_no": body.get("bike_no", ""), "issue": issue, "note": body.get("note", ""), "reports": 1,
-          "ts": str(now_ts()), "status": "reported", "history": [{"ts": iso(now_ts()), "status": "reported", "label": TICKET_LABEL["reported"]}], "assignee": "授權店家 A（模擬）"}
-    STATE["tickets"].insert(0, tk); ddb_put("yb_tickets", tk); broadcast("ticket", tk)
-    notify("citizen", "報修已送出", f"{name}｜{issue}。請勿騎乘故障車送修；處理進度會在此更新。", "ticket")
-    notify("gov", f"民眾報修｜{name}", f"{issue}（車號 {body.get('bike_no','未填')}），已轉授權店家（模擬）", "ticket")
-    notify("ops", f"民眾報修｜{name}", f"{issue}（車號 {body.get('bike_no','未填')}）。工單 {tk['id']} 已建立，待授權店家接單（模擬）", "ticket", {"ticket_id": tk["id"], "sid": sid})
+    tk = submit_ticket(body)
+    if tk is None: return JSONResponse({"error": "unknown sid"}, 404)
     return tk
 
 
@@ -965,6 +985,7 @@ def api_reset():
     STATE["intents"].clear(); STATE["tickets"].clear(); STATE["alerts"].clear(); STATE["alert_log"].clear(); STATE["tasks"].clear(); STATE["task_seq"] = 0
     for c in STATE["notifications"]: STATE["notifications"][c].clear()
     STATE["rewards"] = {"points": 0, "seed_points": 0, "demo_seed": False, "stamps": [], "coupons": [], "history": []}; STATE["last_plan_hour"] = None; STATE["last_reminder"] = {}; PRED._cache.clear()
+    TK.SERVICE.reset(); PL.ledger_reset()          # B 線自有狀態：建單冪等表、規劃週期資源帳
     return {"ok": True}
 
 # ------------------------------------------------------------------ 外部資料：即時 API、藝文活動、模型報告
@@ -1328,80 +1349,102 @@ def api_ledger_note(aid: str, body: dict = None):
 
 
 # ================================================================== B 線（派車端）附加端點
-# 只在檔尾新增，不改動上面任何既有函式。
-# 工單去重改用資產識別：同一張單應該是「同一台車」或「同一個柱」的問題，
-# 舊的「站點＋問題類別＋2 小時」會把同一站不同設備的故障合併成一張，維修派不出去。
-ASSET_LABEL = {"bike": "車輛", "dock": "車柱", "station": "站端系統", "unknown": "待判定"}
+# 只在檔尾新增，不改動上面既有函式的行為。建單邏輯一律委派 app/tickets.py，不在這裡複製規則。
 
-def _ticket_key(sid, issue, bike_no, dock_id):
-    """去重鍵的優先序：車號 > 柱號 > 站點＋問題類別。有資產識別就不靠站點猜。"""
-    if bike_no: return f"bike:{str(bike_no).strip()}", "bike"
-    if dock_id: return f"dock:{int(sid)}:{str(dock_id).strip()}", "dock"
-    return f"station:{int(sid)}:{issue}", "station"
-
-def _legacy_key(tk):
-    """舊工單沒有 dedup_key，補算一個，才能跟新回報合併。"""
-    if tk.get("dedup_key"): return tk["dedup_key"]
-    k, _ = _ticket_key(tk["sid"], tk.get("issue", ""), tk.get("bike_no", ""), tk.get("dock_id", ""))
-    return k
+def _find_ticket(tid):
+    for tk in STATE["tickets"]:
+        if tk["id"] == tid: return tk
+    return None
 
 @app.post("/api/ops/tickets")
 def api_ops_ticket(body: dict):
-    """派工端建立／合併維修工單。
-    body: sid(必填), issue, note, bike_no, dock_id, error_code, asset_type, source
-    去重：車號相同或柱號相同就合併（不限 2 小時，因為同一台壞車隔天回報還是同一台）；
-    沒有資產識別才退回站點＋問題類別的 2 小時窗。"""
-    try:
-        sid = int(body["sid"])
-    except Exception:
-        return JSONResponse({"error": "sid is required"}, 400)
-    row = ST.loc[ST.sid == sid]
-    if row.empty: return JSONResponse({"error": "unknown sid"}, 404)
-    name = row["name"].iloc[0]
-    issue = (body.get("issue") or "其他").strip()
-    bike_no = (body.get("bike_no") or "").strip()
-    dock_id = (body.get("dock_id") or "").strip()
-    err = (body.get("error_code") or "").strip()
-    src = (body.get("source") or "ops").strip()
-    key, inferred = _ticket_key(sid, issue, bike_no, dock_id)
-    asset = (body.get("asset_type") or inferred or "unknown").strip()
+    """派車端／民眾端共用的建單入口（與 POST /api/tickets 走同一個 submit_ticket）。
+    body: sid(必填), issue, note, bike_no, dock_id|dock_no, error_code, asset_type,
+          request_id(冪等), report_id, source, symptom_keys[], evidence[], certainty"""
+    if "sid" not in (body or {}): return JSONResponse({"error": "sid is required"}, 400)
+    before = {t["id"] for t in STATE["tickets"]}
+    tk = submit_ticket(body)
+    if tk is None: return JSONResponse({"error": "unknown sid"}, 404)
+    action = "created" if tk["id"] not in before else ("merged" if tk.get("reports", 1) > 1 else "idempotent")
+    return {**tk, "action": action}
 
-    for tk in STATE["tickets"]:
-        if tk["status"] == "closed": continue
-        if _legacy_key(tk) != key: continue
-        if asset == "station" and (now_ts() - pd.Timestamp(tk["ts"])).total_seconds() >= 7200: continue
-        tk["reports"] = tk.get("reports", 1) + 1
-        tk.setdefault("error_codes", [])
-        if err and err not in tk["error_codes"]: tk["error_codes"].append(err)
-        tk["history"].append({"ts": iso(now_ts()), "status": tk["status"],
-                              "label": f"重複回報合併（第 {tk['reports']} 次，{ASSET_LABEL.get(asset, asset)}識別：{key.split(':', 1)[1]}）"})
-        ddb_put("yb_tickets", tk); broadcast("ticket", tk)
-        return {**tk, "merged": True}
-
-    tk = {"id": f"R{len(STATE['tickets']) + 1:03d}", "sid": sid, "station": name, "bike_no": bike_no,
-          "dock_id": dock_id, "asset_type": asset, "error_code": err, "error_codes": [err] if err else [],
-          "dedup_key": key, "source": src, "issue": issue, "note": (body.get("note") or ""), "reports": 1,
-          "ts": str(now_ts()), "status": "reported",
-          "history": [{"ts": iso(now_ts()), "status": "reported",
-                       "label": f"{TICKET_LABEL['reported']}（{ASSET_LABEL.get(asset, asset)}"
-                                + (f"：{bike_no}" if bike_no else (f"：{dock_id} 號柱" if dock_id else "，無資產識別"))
-                                + (f"，錯誤碼 {err}" if err else "") + "）"}],
-          "assignee": "授權店家 A（模擬）"}
-    STATE["tickets"].insert(0, tk); ddb_put("yb_tickets", tk); broadcast("ticket", tk)
-    notify("ops", f"維修工單 {tk['id']}｜{name}",
-           f"{ASSET_LABEL.get(asset, asset)}｜{issue}" + (f"（{bike_no or dock_id}）" if (bike_no or dock_id) else "（無資產識別，待現場確認）"),
-           "ticket", {"ticket_id": tk["id"], "sid": sid, "asset_type": asset})
-    return {**tk, "merged": False}
+@app.get("/api/ops/tickets")
+def api_ops_tickets(state: str = "", pending: int = 0):
+    """唯讀。state=open 只看未結案；pending=1 只看待診斷（證據不足、尚未確認是哪個設備）。"""
+    out = list(STATE["tickets"])
+    if state == "open": out = [t for t in out if t["status"] != "closed"]
+    if pending: out = [t for t in out if t.get("diagnosis") == "pending_triage"]
+    return {"tickets": out, "flow": [{"key": k, "label": TK.FLOW_LABEL[k]} for k in TK.FLOW],
+            "contract_version": "b-1", "clock_source": "replay", "ts": iso(now_ts())}
 
 @app.get("/api/ops/tickets/dedup")
 def api_ops_ticket_dedup():
-    """給驗收看的：目前工單各是用什麼識別去重的。"""
+    """給驗收看的：每張單是靠什麼識別去重的。唯讀。"""
     out = []
     for tk in STATE["tickets"]:
-        k = _legacy_key(tk)
+        k, b = TK.ticket_key(tk)
         out.append({"id": tk["id"], "station": tk["station"], "issue": tk.get("issue"),
-                    "asset_type": tk.get("asset_type", "unknown"), "dedup_key": k,
-                    "keyed_by": k.split(":", 1)[0], "reports": tk.get("reports", 1),
-                    "bike_no": tk.get("bike_no", ""), "dock_id": tk.get("dock_id", ""),
-                    "error_codes": tk.get("error_codes", []), "status": tk["status"]})
-    return {"tickets": out, "rule": "車號 > 柱號 > 站點＋問題類別（僅後者限 2 小時窗）"}
+                    "asset_type": tk.get("asset_type", "unknown"), "dedup_key": k, "keyed_by": b,
+                    "reports": tk.get("reports", 1), "bike_no": tk.get("bike_no"), "dock_id": tk.get("dock_id"),
+                    "error_codes": tk.get("error_codes", []), "related_ids": tk.get("related_ids", []),
+                    "status": tk["status"], "version": tk.get("version", 1)})
+    return {"tickets": out, "rule": "車號 > 柱號 > 站點＋問題類別（只有最後一種限 2 小時窗，且雙方都必須沒有資產識別）"}
+
+@app.get("/api/ops/tickets/{tid}")
+def api_ops_ticket_one(tid: str):
+    tk = _find_ticket(tid)
+    if tk is None: return JSONResponse({"error": "not found"}, 404)
+    return {**tk, "clock_source": "replay", "ts": iso(now_ts())}
+
+@app.post("/api/ops/tickets/{tid}/saddle")
+def api_ops_ticket_saddle(tid: str, body: dict = None):
+    """用戶端回報是否照官方方式把故障車坐墊調低反轉。
+    只更新附加欄位：不結案、不改工單狀態、不等於已維修、不影響工單處理。"""
+    tk = _find_ticket(tid)
+    if tk is None: return JSONResponse({"error": "not found"}, 404)
+    st = ((body or {}).get("status") or "unknown").strip()
+    res, code = TK.SERVICE.set_saddle(tk, st, source=((body or {}).get("source") or "user_report"), now_iso=iso(now_ts()))
+    if code != "ok": return JSONResponse({"error": code, "allowed": list(TK.SADDLE)}, 400)
+    ddb_put("yb_tickets", tk); broadcast("ticket", tk)
+    return {**tk, "note": "坐墊標記僅為現場提醒，非維修確認，工單仍在處理中"}
+
+@app.post("/api/ops/tickets/{tid}/transition")
+def api_ops_ticket_transition(tid: str, body: dict = None):
+    """派車端推進工單：接單→現場→處理→驗收→結案。
+    帶 version 做樂觀鎖，舊版本回 409，同一個決策重送不會重複推進。"""
+    tk = _find_ticket(tid)
+    if tk is None: return JSONResponse({"error": "not found"}, 404)
+    b = body or {}
+    res, code = TK.SERVICE.transition(tk, (b.get("to") or "").strip(), actor=b.get("actor") or "派車端",
+                                      now_iso=iso(now_ts()), version=b.get("version"),
+                                      note=b.get("note"), crew=b.get("crew"), eta=b.get("eta"))
+    if code == "conflict":
+        return JSONResponse({"error": "version_conflict", "current_version": tk.get("version", 1),
+                             "current_status": tk["status"], "hint": "先 GET 取回最新版本再重送"}, 409)
+    if code in ("bad_status", "backwards"):
+        return JSONResponse({"error": code, "current_status": tk["status"], "flow": TK.FLOW}, 400)
+    tk["manual"] = True          # 已由人實際派工，模擬流程不再自動推進它
+    ddb_put("yb_tickets", tk); broadcast("ticket", tk)
+    if code == "ok":
+        notify("gov", f"工單進度 {tk['id']}｜{tk['station']}", f"{TK.FLOW_LABEL[tk['status']]}"
+               + (f"｜{tk.get('crew')}" if tk.get("crew") else ""), "ticket",
+               {"ticket_id": tk["id"], "sid": tk["sid"], "status": tk["status"], "version": tk["version"]})
+    return {**tk, "action": code}
+
+@app.get("/api/ops/contract")
+def api_ops_contract():
+    """給 A／C 對照的契約摘要，避免三端各自猜欄位。唯讀。"""
+    return {
+        "contract_version": "b-1",
+        "single_entry": "POST /api/tickets 與 POST /api/ops/tickets 都委派 server.submit_ticket → app/tickets.py",
+        "identifiers": {"dock": "對外統一 dock_id，相容輸入 dock_no，內部正規化一次",
+                        "null_policy": "沒有就是 null，不用空字串冒充識別"},
+        "idempotency": "帶 request_id 重送回同一張單（action=idempotent）",
+        "dedup_rule": "車號 > 柱號 > 站點＋問題類別；站點層級限 2 小時且雙方都必須沒有資產識別",
+        "states": {"status": TK.FLOW, "service_state": list(TK.SERVICE_STATE),
+                   "asset_state": list(TK.ASSET_STATE), "saddle_marker": list(TK.SADDLE)},
+        "state_meaning": {"status": "工單處理流程", "service_state": "站點服務是否恢復",
+                          "asset_state": "設備驗收", "saddle_marker": "用戶現場標記，非維修確認"},
+        "version": "每次變更 +1；transition 帶舊 version 回 409",
+        "clock_source": "replay", "ts": iso(now_ts()),
+    }
