@@ -267,7 +267,11 @@ def progress_tickets():
     for tk in STATE["tickets"]:
         if tk["status"] == "closed": continue
         if tk.get("manual"): continue          # 已由派車端實際派工的單，狀態只能由人推進
-        steps = int((now_ts() - pd.Timestamp(tk["ts"])).total_seconds() / 1800)
+        # 回放時鐘可以往回跳（POST /api/clock action=set 設到更早的時刻）。
+        # 那時 steps 會是負數，TICKET_FLOW[負數] 會從尾端反向取，超過長度就 IndexError，
+        # 整個 on_tick 連帶回 500，後面的 check_reminders 等步驟都不會執行。夾在 0 以上。
+        # 夾成 0 只會得到 "reported"，下面那行的前進守衛會擋住，不會讓已推進的工單倒退。
+        steps = max(0, int((now_ts() - pd.Timestamp(tk["ts"])).total_seconds() / 1800))
         want = TICKET_FLOW[min(len(TICKET_FLOW) - 1, steps)]
         if TICKET_FLOW.index(want) > TICKET_FLOW.index(tk["status"]):
             tk["status"] = want; tk["history"].append({"ts": iso(now_ts()), "status": want, "label": TICKET_LABEL[want]})
