@@ -771,7 +771,7 @@ def trip(from_sid: int, to_sid: int):
                     "extra_min": round(max(0.0, extra), 1),
                     "points_per_extra_min": (round(_points(mult) / extra, 1) if extra > 0.5
                                              else _points(mult)),
-                    "note": (f"這站還差 {deficit} 輛，把車還過去可得 {_points(mult)} 點"
+                    "note": (f"這站還差 {deficit} 輛，把車還過去可得 {_points(mult)} 元"
                              f"（×{mult} 加碼）；"
                              + (f"只比最快方案多花 {extra:.0f} 分鐘" if extra > 0.5
                                 else "而且不比最快方案慢"))}
@@ -805,6 +805,9 @@ def trip(from_sid: int, to_sid: int):
 # ---------------------------------------------------------------- 獎勵
 def _points(multiplier):
     """單次點數 = 5 × 倍率，固定四捨五入。
+
+    點數與新臺幣 1:1（docs/REWARDS.md 的設計：基礎 5 元、單次上限 25 元），
+    畫面上直接寫「元」比寫「點」有感——但必須同時標明是示範機制、兌付尚未取得。
 
     不用內建 round()：它是銀行家捨入，round(22.5)=22 但 round(23.5)=24，
     會讓 ×4.5 的任務比 ×4.4 給得還少，對使用者是莫名其妙的。
@@ -896,7 +899,9 @@ def rewards_board(sid: int = None):
         "quests": top, "quest_total": len(quests),
         "budget_cap_twd": budget,
         "issued_today_points": issued,
+        "point_value_twd": 1,
         "rules": {
+            "point_value": "1 點 = 1 元（設計上 1:1；示範機制，兌付尚未取得）",
             "formula": "倍率 = 1 + min(4, 缺口權重 + 急迫權重 + 距離權重)；單次上限 25 元",
             "guards": ["借還同站不計", "騎乘距離需 ≥400 公尺", "沿用官方每帳號 10 分鐘最多 2 次"],
             "baseline": ("官方友愛接力 2026-01-01~06-30 北北桃試辦：日均發券 17,323 張、"
