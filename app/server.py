@@ -1448,3 +1448,74 @@ def api_ops_contract():
         "version": "每次變更 +1；transition 帶舊 version 回 409",
         "clock_source": "replay", "ts": iso(now_ts()),
     }
+
+# ---- B 線：規劃週期與任務資源狀態 ----
+def _find_task(tid):
+    for tk in STATE["tasks"]:
+        if tk["id"] == tid: return tk
+    return None
+
+@app.get("/api/ops/cycle")
+def api_ops_cycle():
+    """唯讀：目前規劃週期的資源帳。候選／已確認／在途／已釋放分開列，GET 不改任何狀態。"""
+    cid = PL.cycle_open(now_ts())
+    snap = PL.cycle_snapshot(cid)
+    names = {}
+    for row in snap["by_station"]:
+        if row["sid"] >= 0:
+            r = ST.loc[ST.sid == row["sid"]]
+            names[row["sid"]] = r["name"].iloc[0] if not r.empty else str(row["sid"])
+        else:
+            names[row["sid"]] = "調度中心／跨區補給（情境）"
+    for row in snap["by_station"]: row["station"] = names.get(row["sid"])
+    return {**snap, "clock_source": "replay", "ts": iso(now_ts()),
+            "states": {"candidate": "規劃產生、尚未確認", "confirmed": "調度員已確認派工",
+                       "in_transit": "已出車", "released": "取消或重算釋放，不再占用資源"}}
+
+@app.post("/api/ops/tasks/{tid}/{action}")
+def api_ops_task_action(tid: str, action: str, body: dict = None):
+    """派車端的任務動作。除了推進任務狀態，同時把資源帳上的預約改成對應狀態。
+    confirm→confirmed、dispatch→in_transit、cancel→released（釋放資源）。"""
+    tk = _find_task(tid)
+    if tk is None: return JSONResponse({"error": "not found"}, 404)
+    b = body or {}
+    if b.get("version") is not None and int(b["version"]) != int(tk.get("res_version", 1)):
+        return JSONResponse({"error": "version_conflict", "current_version": tk.get("res_version", 1),
+                             "current_state": tk.get("reservation_state"), "hint": "先 GET /api/tasks 取回最新版本"}, 409)
+    mapping = {"confirm": "confirmed", "dispatch": "in_transit", "cancel": "released"}
+    if action not in mapping and action != "escalate":
+        return JSONResponse({"error": "unknown action", "allowed": list(mapping) + ["escalate"]}, 400)
+    now = iso(now_ts())
+    if action == "escalate":
+        plan = (b.get("plan") or "").strip()
+        if plan not in ("cross_district", "accept_delay", "divert_only"):
+            return JSONResponse({"error": "plan must be cross_district / accept_delay / divert_only"}, 400)
+        if plan == "cross_district" and not b.get("eta"):
+            return JSONResponse({"error": "cross_district 必須帶實際可行的 eta，沒有可派資源就不要給 ETA"}, 400)
+        tk["escalation"] = {"plan": plan, "eta": b.get("eta"), "reason": b.get("reason") or "",
+                            "owner": b.get("owner") or "微笑單車調度中心", "ts": now}
+        tk.setdefault("history", []).append({"ts": now, "status": tk["status"],
+                                             "note": f"營運端主責處理：{ {'cross_district': '跨區支援', 'accept_delay': '接受延誤並通知', 'divert_only': '無可派資源，改民眾分流'}[plan] }"
+                                                     + (f"，ETA {b['eta']}" if b.get("eta") else "，不提供 ETA（無可派資源）")})
+        tk["res_version"] = int(tk.get("res_version", 1)) + 1
+        ddb_put("yb_tasks", tk); broadcast("task", tk)
+        notify("gov", f"營運端處理方案｜{tk['district']} {tk['id']}",
+               tk["escalation"]["reason"] or {"cross_district": "已安排跨區支援", "accept_delay": "接受延誤，持續處理",
+                                              "divert_only": "無可派人車，改以民眾分流"}[plan], "warn",
+               {"task_id": tid, "plan": plan, "eta": b.get("eta"), "owner": tk["escalation"]["owner"]})
+        return tk
+    state = mapping[action]
+    moved = PL.cycle_set_res_state(tk.get("cycle"), tk.get("reservations"), state)
+    tk["reservation_state"] = state
+    tk["res_version"] = int(tk.get("res_version", 1)) + 1
+    if action == "confirm":
+        tk["confirmed_by"] = b.get("actor") or "調度員"
+        tk.setdefault("history", []).append({"ts": now, "status": tk["status"], "note": "調度員確認派工，資源改為已確認"})
+    elif action == "dispatch":
+        tk["status"] = "dispatched"; tk["depart_by"] = str(now_ts())
+        tk.setdefault("history", []).append({"ts": now, "status": "dispatched", "note": "調度員手動立即出車（執行進度為模擬）"})
+    elif action == "cancel":
+        tk["status"] = "cancelled"
+        tk.setdefault("history", []).append({"ts": now, "status": "cancelled", "note": b.get("reason") or "調度員取消，資源已釋放"})
+    ddb_put("yb_tasks", tk); broadcast("task", tk)
+    return {**tk, "reservations_changed": moved}

@@ -145,20 +145,108 @@ def apply_intents(pred, intents, now_ts):
                 pred.loc[i, f"pb_{h}"] = np.minimum(pred.loc[i, "cap"], pred.loc[i, f"pb_{h}"] + conv); pred.loc[i, f"ps_{h}"] = np.maximum(0, pred.loc[i, f"ps_{h}"] - conv)
     return pred
 
-# ---------- 調度端：跨尺度共用的資源帳 ----------
-# 伺服器同一個 tick 會先排 120 再排 180。沒有共用帳本時，兩次規劃會對同一站重複承諾送車，
-# 也會把同一個供給站的車重複抽兩次。帳本以「回放時刻」為鍵，同一尺度再次進來就視為新一輪、整本重置。
-_LEDGER = {"ts": None, "horizons": [], "promised": {}, "taken": {}, "depot_drawn": 0.0}
+# ---------- 調度端：顯式規劃週期（planning cycle）與資源帳 ----------
+# 為什麼要有週期：伺服器同一個 tick 會先排 120 再排 180。沒有共用帳本時，兩次規劃會對同一站
+# 重複承諾送車，也會把同一個供給站的車重複抽兩次。
+# 為什麼要分狀態：重算時只能釋放「還沒確認」的候選，已確認或已在途的承諾不可以被重算吃掉。
+#
+# 一筆預約 = {id, cycle, kind(supply/demand), sid, qty, state, horizon, task}
+#   candidate  規劃產生、調度員還沒確認
+#   confirmed  調度員確認派工
+#   in_transit 已出車
+#   released   取消或重算釋放（不再占用資源）
+# 可用量 = 原始可用量 − 該站所有 candidate/confirmed/in_transit 的 qty。released 不計。
+
+_CYCLES = {}          # cycle_id -> cycle dict
+_CYCLE_BY_TS = {}     # ts -> cycle_id（同一個回放時刻沿用同一個週期）
+_RES_SEQ = [0]
+ACTIVE_RES = ("candidate", "confirmed", "in_transit")
+
 
 def ledger_reset():
-    _LEDGER.update({"ts": None, "horizons": [], "promised": {}, "taken": {}, "depot_drawn": 0.0})
+    """整個資源帳歸零。只有 /api/reset 與情境切換該呼叫。"""
+    _CYCLES.clear(); _CYCLE_BY_TS.clear(); _RES_SEQ[0] = 0
 
-def _ledger_for(now_ts, horizon):
+
+def cycle_open(now_ts):
+    """取得（或開啟）這個回放時刻的規劃週期。"""
     ts = str(now_ts)
-    if _LEDGER["ts"] != ts or horizon in _LEDGER["horizons"]:
-        ledger_reset(); _LEDGER["ts"] = ts
-    _LEDGER["horizons"].append(horizon)
-    return _LEDGER
+    cid = _CYCLE_BY_TS.get(ts)
+    if cid and cid in _CYCLES: return cid
+    _RES_SEQ[0] += 1
+    cid = f"CY-{ts[:16].replace(' ', 'T')}-{_RES_SEQ[0]}"
+    _CYCLES[cid] = {"id": cid, "ts": ts, "horizons": [], "res": {}}
+    _CYCLE_BY_TS[ts] = cid
+    return cid
+
+
+def _cycle(cid): return _CYCLES.get(cid) or {}
+
+
+def cycle_release_candidates(cid, horizon=None):
+    """重算前釋放候選。已確認與在途的不動——那才是「重算不超配、取消才釋放」。"""
+    c = _cycle(cid); freed = 0
+    for r in c.get("res", {}).values():
+        if r["state"] != "candidate": continue
+        if horizon is not None and r["horizon"] != horizon: continue
+        r["state"] = "released"; freed += 1
+    return freed
+
+
+def _reserve(cid, kind, sid, qty, horizon):
+    _RES_SEQ[0] += 1
+    rid = f"RES{_RES_SEQ[0]:05d}"
+    _cycle(cid).setdefault("res", {})[rid] = {"id": rid, "cycle": cid, "kind": kind, "sid": int(sid),
+                                              "qty": float(qty), "state": "candidate", "horizon": horizon, "task": None}
+    return rid
+
+
+def _committed(cid, kind, sid):
+    return sum(r["qty"] for r in _cycle(cid).get("res", {}).values()
+               if r["kind"] == kind and r["sid"] == int(sid) and r["state"] in ACTIVE_RES)
+
+
+def cycle_bind_task(cid, res_ids, task_id):
+    for rid in res_ids or []:
+        r = _cycle(cid).get("res", {}).get(rid)
+        if r: r["task"] = task_id
+
+
+def cycle_set_state(cid, task_id, state):
+    """調度員確認／出車／取消時改變該任務所有預約的狀態。回傳異動筆數。"""
+    if state not in ACTIVE_RES + ("released",): return 0
+    c = _cycle(cid); k = 0
+    for r in c.get("res", {}).values():
+        if r.get("task") != task_id: continue
+        if r["state"] == "released" and state != "released": continue
+        r["state"] = state; k += 1
+    return k
+
+
+def cycle_set_res_state(cid, res_ids, state):
+    """直接用預約 id 改狀態。任務 id 是伺服器排完才給的，前端只拿得到 reservations。"""
+    if state not in ACTIVE_RES + ("released",): return 0
+    c = _cycle(cid); k = 0
+    for rid in res_ids or []:
+        r = c.get("res", {}).get(rid)
+        if not r: continue
+        if r["state"] == "released" and state != "released": continue
+        r["state"] = state; k += 1
+    return k
+
+
+def cycle_snapshot(cid):
+    """唯讀：週期內每個站的承諾量。GET 用這個，不會改任何狀態。"""
+    c = _cycle(cid)
+    by = {}
+    for r in c.get("res", {}).values():
+        d = by.setdefault((r["kind"], r["sid"]), {"kind": r["kind"], "sid": r["sid"], "candidate": 0.0,
+                                                  "confirmed": 0.0, "in_transit": 0.0, "released": 0.0})
+        d[r["state"]] = d.get(r["state"], 0.0) + r["qty"]
+    return {"cycle": c.get("id"), "ts": c.get("ts"), "horizons": list(c.get("horizons", [])),
+            "reservations": len(c.get("res", {})),
+            "by_station": sorted(by.values(), key=lambda x: (x["kind"], x["sid"]))}
+
 
 # ---------- 調度端：缺口計算 ----------
 DISPATCHABLE = {"normal", "empty", "full"}
@@ -201,15 +289,20 @@ def gaps(pred, horizon, scenario_delta=None):
     d["due_min"] = due
     return d
 
-def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, existing_locked=None):
+def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, existing_locked=None, cycle=None):
     """每行政區用貪婪最近鄰組趟：先取運出/供給站，再送缺車站。回傳任務列表。"""
     A = ASSUMPTIONS; g = gaps(pred, horizon, scenario_delta)
     target_ts = now_ts + pd.Timedelta(minutes=horizon)
     tasks = []
     locked_sids = existing_locked or set()
-    L = _ledger_for(now_ts, horizon)
-    if L["promised"]:                        # 別的尺度已經承諾要送的量，這一輪不再重複承諾
-        g["need_in"] = np.maximum(0.0, g["need_in"] - g["sid"].map(L["promised"]).fillna(0.0))
+    cid = cycle or cycle_open(now_ts)
+    cyc = _cycle(cid)
+    if horizon in cyc.get("horizons", []):   # 同一個尺度再算一次＝重算，先釋放自己的候選再重排
+        cycle_release_candidates(cid, horizon)
+    else:
+        cyc.setdefault("horizons", []).append(horizon)
+    promised = {sid: _committed(cid, "demand", sid) for sid in g["sid"].tolist()}
+    g["need_in"] = np.maximum(0.0, g["need_in"] - g["sid"].map(promised).fillna(0.0))
     for dist_name, grp in g.groupby("district"):
         if districts and dist_name not in districts: continue
         deficits = grp[(grp.need_in > 0) & ~grp.sid.isin(locked_sids)].copy()
@@ -217,13 +310,14 @@ def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, ex
         district_deficit = float(deficits.need_in.sum()); covered = 0.0; event_sids = set(grp[grp.event_delta != 0].sid.tolist())
         sources = grp[(grp.need_out > 0) | (grp.donor > 0)].copy()
         sources["avail"] = np.where(sources.need_out > 0, np.maximum(sources.need_out, np.minimum(sources.pb_adj - sources.min_stock, 8)), sources.donor)
-        sources["avail"] = np.maximum(0.0, sources["avail"] - sources["sid"].map(L["taken"]).fillna(0.0))   # 扣掉別的尺度已經抽走的
+        sources["avail"] = np.maximum(0.0, sources["avail"] - sources["sid"].map(
+            {sid: _committed(cid, "supply", sid) for sid in sources["sid"].tolist()}).fillna(0.0))
         sources = sources[sources.avail > 0]
         depot = (float(grp.lat.mean()), float(grp.lon.mean()))
         trip_no = 0
         while not deficits.empty and trip_no < 3:
             trip_no += 1
-            cap_left = A["truck_capacity"]; stops = []; pos = depot; load = 0
+            cap_left = A["truck_capacity"]; stops = []; pos = depot; load = 0; res_ids = []
             total_def = float(deficits.need_in.sum())
             # 取車
             src = sources.copy()
@@ -236,13 +330,13 @@ def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, ex
                               "reason": "預測將滿站，需運出" if r.need_out > 0 else "庫存充裕可供給，保留下限 %d 輛" % int(max(r.min_stock, r.cap * A["donor_keep_ratio"]))})
                 cap_left -= q; load += q; pos = (float(r.lat), float(r.lon))
                 sources.loc[sources.sid == r.sid, "avail"] -= q; src = src.drop(src.index[i])
-                L["taken"][int(r.sid)] = L["taken"].get(int(r.sid), 0.0) + q
+                res_ids.append(_reserve(cid, "supply", int(r.sid), q, horizon))
             if A["depot_supply"] and load < min(total_def, A["truck_capacity"]) and cap_left > 0:
                 q = int(min(cap_left, math.ceil(total_def - load)))
                 if q > 0:
                     stops.insert(0, {"sid": -1, "name": "調度中心／跨區補給（情境）", "lat": depot[0], "lon": depot[1], "action": "pickup", "qty": q, "now_bikes": None, "pred_bikes": None, "cap": None,
                                      "reason": "區內可供給站不足，由調度中心或跨區整車補給；倉儲庫存未提供，為情境假設"})
-                    cap_left -= q; load += q; L["depot_drawn"] += q
+                    cap_left -= q; load += q; res_ids.append(_reserve(cid, "supply", -1, q, horizon))
             if 0 < load < 3:
                 tasks.append({"district": dist_name, "horizon": horizon, "status": "minor_gap", "stops": [], "deficit_total": int(total_def),
                               "reason": f"缺口僅 {int(total_def)} 輛，不單獨成趟；先以鄰站引導與民眾分流，併入下一趟", "target_ts": str(target_ts), "trip": trip_no, "load": 0, "route_minutes": 0, "route_km": 0, "depot": depot, "depart_by": str(target_ts), "earliest_arrival": str(target_ts)})
@@ -262,7 +356,7 @@ def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, ex
                               "p_empty": round(float(r.pe_h), 2), "due_min": due_min, "due_ts": str(now_ts + pd.Timedelta(minutes=due_min)),
                               "reason": f"預測 {horizon} 分鐘後零車機率 {r.pe_h:.0%}，低於目標庫存 {int(r.min_stock)} 輛；本站自己的服務時限是 {due_min} 分鐘後"})
                 load -= q; covered += q; pos = (float(r.lat), float(r.lon))
-                L["promised"][int(r.sid)] = L["promised"].get(int(r.sid), 0.0) + q
+                res_ids.append(_reserve(cid, "demand", int(r.sid), q, horizon))
                 remain = float(r.need_in) - q
                 if remain >= 1:      # 只補到一部分時保留殘量，不可把整站從缺口清單移除
                     deficits.iloc[i, deficits.columns.get_loc("need_in")] = remain
@@ -304,7 +398,8 @@ def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, ex
                                            % (horizon, len(ok_drops), "、".join(late[:2]), len(late), tight))) if feasible
                                     else ("所有送車站都趕不上自己的服務時限（最緊 %d 分鐘）：人員準備 %d 分＋行車作業 %d 分才到得了第一站，派車來不及；改以在勤資源、人力就近補與民眾分流因應"
                                           % (tight, A["lead_prepare_min"], first_drop)),
-                          "depot": depot, "event_related": any(s_["sid"] in event_sids for s_ in stops)})
+                          "depot": depot, "event_related": any(s_["sid"] in event_sids for s_ in stops),
+                          "cycle": cid, "reservations": res_ids, "reservation_state": "candidate"})
         remaining = max(0.0, district_deficit - covered)
         if remaining > 0 or covered > 0:
             # 分流建議：缺車站 500m 內預測仍有車的鄰站
