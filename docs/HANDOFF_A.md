@@ -238,3 +238,97 @@ python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8787
 
 指標來源：`reports/model_eval.json`（六月測試期一次評估）、`data/processed/` 的回放矩陣、
 `reports/ANALYSIS.md`（500 公尺替代站比例）。定義見 `docs/METRICS.md`。
+
+---
+
+# 接手段（2026-09-13 更新）
+
+## 1. 現況
+
+A 主線本輪要做的都做完了，對目前 main 重驗過：五套測試全過（離線 fixture 四套不需伺服器，
+`test_a_i01_loop.py` 需要伺服器）。8787 重啟復原後以唯讀 GET 確認跑的是最新程式：
+台帳帶 `version`、`overview` 八個區塊齊全、資源帳 `available: true`、契約缺口如實回報。
+
+**沒有我能獨立推進的待辦了**，剩下的都卡在別人的契約或需要授權碰共用檔。
+
+## 2. 檔案歸屬（A 的東西只有這些）
+
+```
+app/events.py          事件台帳、分級、原因與證據、決策卡、全域儀表板資料層
+app/metrics.py         驗收指標（服務中斷事件、告警門檻取捨、流程時效）
+app/static/gov.html    政府端整頁
+tests/test_a_*.py      五套測試
+docs/METRICS.md        指標定義
+docs/HANDOFF_A.md      本檔
+app/server.py          只有 `# A 主線（政府端）` 那一段與 api_ledger 內的兩行接線
+```
+
+**動 `app/server.py` 前一定要先 `git diff app/server.py` 逐 hunk 確認。**
+這個工作目錄三個 session 共用，path-scoped `git add` 對共用檔沒有保護作用——
+本輪已經發生過兩次「我的區塊被別人連帶提交」，其中一次讓 main 上的 `/api/ledger` 直接 NameError。
+若別人有 staged 未 commit 的檔案，用 `git commit -- <你的路徑>`（新檔要先 `git add`）。
+
+## 3. 測試
+
+```bash
+export PATH=$HOME/Library/Python/3.9/bin:$PATH
+# 離線，不需伺服器
+python3 tests/test_a_numeric.py     # 42 項　數值口徑 N01/N02/ack≠指派
+python3 tests/test_a_actions.py     # 38 項　版本、冪等、409、不建任務
+python3 tests/test_a_coverage.py    # 15 項　缺車 dropoff／缺位 pickup
+python3 tests/test_a_decision.py    # 38 項　決策卡、防雙重派工
+# 需要伺服器。會建測試工單，別對 8787 跑
+python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8788 &
+YB_BASE=http://127.0.0.1:8788 python3 tests/test_a_i01_loop.py   # 41 項　三端閉環
+```
+
+期望值一律寫在測試檔內手算，不取被測程式輸出。`test_a_i01_loop.py` 每次用唯一車號，
+可重複執行。**每個 server 吃約 1.5GB，測完記得關。**
+
+改 `gov.html` 後一定要驗語法，本輪被這個坑過一次（整頁 JS 掛掉還進了 commit）：
+
+```bash
+python3 -c "import re;s=open('app/static/gov.html',encoding='utf-8').read();open('/tmp/g.js','w').write(re.findall(r'<script>(.*?)</script>',s,re.S)[-1])" && node --check /tmp/g.js
+```
+
+## 4. 還沒做的（依重要性）
+
+1. **主管決策卡的方案比較不完整** — 卡在 B 沒有改派方案端點（`/api/ops/contract` 仍是 `b-1`，
+   只涵蓋工單）。需要 B 提供：就近改道與跨區支援各自的抵達時間、原任務延後幾分鐘、增加里程、
+   車源來自哪一區、受影響站點。**政府端不會自行估算，沒有這支端點卡片只能顯示既有任務。**
+2. **task 缺 `version`／`event_id`／`operator_owner`** — `overview.tasks.contract_missing` 會如實列出。
+3. **真實視覺模型未驗** — AI 欄位是用 C 的 `image_analysis` 介面送測試樁資料驗的，
+   C 接上 Bedrock 後要再驗一次。
+4. **B 端是否呈現政府端的決策與要求未驗** — A 這邊送出並留痕了，也確認進入 ops channel，
+   B 畫面需 B 確認。
+5. **獨立把關兩輪未執行** — 本檔是 A 端自測加一條真實三端閉環，不等於獨立把關。
+
+## 5. 仍未修的共用程式缺陷（已回報三次，不是 A 的檔案）
+
+`app/server.py:269-270` 的 `progress_tickets()`，回放時鐘往回跳時 `steps` 為負數，
+`TICKET_FLOW[min(len-1, steps)]` 索引越界，整個 `on_tick` 回 **HTTP 500**。
+截至 2026-09-13 仍是原樣（已再次以程式碼確認）。
+
+重現：先建任何工單，再 `POST /api/clock {"action":"set","ts":"<比工單建立時間更早的時刻>"}`。
+時鐘會前進但回應 500，該次 tick 的後續步驟不執行。**demo 當天有人把時鐘往回拉就會踩到。**
+修法一行 `steps = max(0, steps)`。屬共用邏輯，依分工規則我沒有自行修改。
+
+另有一個環境現象未判定：三端頁面在預覽瀏覽器都出現同一則 SyntaxError 且
+`navigator.serviceWorker.getRegistrations()` 回 0 筆。已排除 `sw.js`／`common.js`／`gov.html`
+的語法問題（都過 `node --check`，伺服器送出的與磁碟一致），比較像預覽瀏覽器沙箱擋掉 SW，
+但**沒有證據下定論**，需在一般瀏覽器再測。
+
+## 6. 講話的界線（介面與文件都要守）
+
+- **零值快照跨度不是確定的連續中斷時間**。08:00／08:30／09:00 三筆零快照的跨度是 60 分鐘，
+  不能說成確定連續 60 分鐘，更不是 90 分鐘。
+- **未知上界就是未知**，不准用跨度加一格之類的數字代替。
+- **候選觸發量不是通知量**。去重後的通知量無法從校準分箱推算，所以不提供估計值。
+- **ack 不等於指派**。未指派比例以 `owner` 計，不用 ack 代替。
+- **任務清單沒有這一站，只代表排程沒涵蓋**，不能推論沒有人到過現場——本系統沒有巡查或人員定位紀錄。
+- **AI 圖片觀察是推測**，獨立一欄，不進「已確認原因」；「照片無法確認」要跟觀察分開顯示。
+- **工單流程、服務是否恢復、設備是否修好是三件事**。已處理不等於服務恢復；站點恢復有車也不等於那台壞車已修好或驗收。
+- **官方可借與本工具的已知不可用並列不相減**，兩者不可相加。
+- **政府端不建立也不修改派車任務**，不生成任何 ETA——沒有真實車隊位置、班表與載量，算出來的都是虛構的。
+- **通知情境是應用內示意**，不是 iOS 鎖定畫面，沒有 Web Push／APNs，關掉分頁不會收到任何東西。
+- 快照零車不等於有人借不到，也不等於失敗旅次；候選鄰站存在不等於使用者走得到。
