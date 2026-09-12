@@ -814,11 +814,60 @@ function citizenView(){
     </div></div>`;
 }
 
+function histOnly(){
+  const a=S.ana; if(!a) return '';
+  const wd=a.curves.weekday;
+  const hours=wd.hours.map(h=>String(h).padStart(2,'0'));
+  const s1=[{name:'無車可借',color:'#f5c451',data:wd.no_bike},{name:'無位可還',color:'#f2615b',data:wd.no_dock}];
+  const am=a.mrt_compare.am, pm=a.mrt_compare.pm;
+  return `<div class="grid g2">
+    <div class="card"><h3>平日全市失效曲線 <span class="tag hist">歷史</span></h3>
+      <p class="sub">日間 06–23 時，各小時的快照比例（2026-01~06）</p>${lineChart(hours,s1)}${legendDots(s1)}</div>
+    <div class="card"><h3>同一趟通勤，早晚各壞一次 <span class="tag hist">歷史</span></h3>
+      <p class="sub">起點與終點是兩種不同的失敗模式</p>
+      <table><tbody>
+        <tr><td>早峰 非捷運站 無車可借</td><td class="mono" style="color:var(--bad)">${am.non_mrt.no_bike}%</td></tr>
+        <tr><td>早峰 捷運站 無位可還</td><td class="mono" style="color:var(--bad)">${am.mrt.no_dock}%</td></tr>
+        <tr><td>晚峰 捷運站 無車可借</td><td class="mono" style="color:var(--bad)">${pm.mrt.no_bike}%</td></tr>
+      </tbody></table></div></div>`;
+}
+
 /* ============================================================ render */
+function offlineBanner(){
+  const st=S.live?.status;
+  if(!st) return '';
+  if(!st.available){
+    return `<div class="card" style="border-color:rgba(242,97,91,.45);
+      background:linear-gradient(135deg,rgba(242,97,91,.12),transparent)">
+      <h3>官方即時 API 目前取不到資料</h3>
+      <p class="sub">來源：${esc(st.source||'—')}<br>
+        已嘗試 ${st.ok+st.errors} 次，其中失敗 ${st.errors} 次。
+        ${st.last_error?`最後的錯誤：<span class="mono">${esc(st.last_error)}</span><br>`:''}
+        服務會每 ${st.poll_sec} 秒自動重試。<b>歷史分析不受影響</b>，
+        下方的歷史區塊仍然是完整的；即時區塊會等連線恢復後自動補上。</p>
+      <p class="sub">需要離線展示時，可改用<a href="/">情境回放模式</a>——它只用本機的歷史矩陣，不需要外網。</p>
+      </div>`;
+  }
+  if(st.stale){
+    return `<div class="card" style="border-color:rgba(245,196,81,.45)">
+      <h3>即時資料已過期</h3>
+      <p class="sub">最後一次成功取得是 ${st.age_sec?Math.round(st.age_sec/60):'—'} 分鐘前
+        （正常應在 ${Math.round(st.poll_sec/60)} 分鐘內）。畫面上的即時數字是那一刻的快照，不是現在。
+        ${st.last_error?`最後的錯誤：<span class="mono">${esc(st.last_error)}</span>`:''}</p></div>`;
+  }
+  return '';
+}
 function render(){
   const m=$('#main');
   try{
-    m.innerHTML = S.view==='gov'?govView():S.view==='ops'?opsView():citizenView();
+    const banner=offlineBanner();
+    if(S.live && !S.live.status.available){
+      // 沒有即時資料時不要渲染三端儀表板，否則整頁都是 undefined
+      m.innerHTML = banner + (S.ana?`<div style="margin-top:14px">${histOnly()}</div>`:'');
+      bindMap(); return;
+    }
+    m.innerHTML = banner + (banner?'<div style="height:14px"></div>':'')
+      + (S.view==='gov'?govView():S.view==='ops'?opsView():citizenView());
   }catch(e){
     m.innerHTML=`<div class="card"><h3>畫面渲染失敗</h3><p class="sub">${esc(e.message)}</p></div>`;
     console.error(e); return;

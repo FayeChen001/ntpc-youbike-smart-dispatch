@@ -21,8 +21,10 @@ from datetime import datetime, timezone, timedelta
 
 import numpy as np
 
-NTPC_URL = ("https://data.ntpc.gov.tw/api/datasets/"
-            "010e5b15-3823-4b20-b401-b1cf000550c5/json?size=3000")
+# 可用 YB_LIVE_URL 覆寫，供離線／失敗路徑測試
+NTPC_URL = os.environ.get("YB_LIVE_URL") or (
+    "https://data.ntpc.gov.tw/api/datasets/"
+    "010e5b15-3823-4b20-b401-b1cf000550c5/json?size=3000")
 TPE_URL = "https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json"
 TZ = timezone(timedelta(hours=8))
 POLL_SEC = 120          # 官方每 5 分鐘更新，我們每 2 分鐘取一次
