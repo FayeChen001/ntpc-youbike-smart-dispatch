@@ -1,0 +1,464 @@
+"""v2api.py — 一站式網站的後端（v2 新增，不改動任何既有端點）。
+
+三個資料模式，畫面上一律標示：
+  即時   新北市政府資料開放平臺官方 API（app/live.py），每 5 分鐘更新
+  歷史   2026-01~06 共 1,332 萬筆快照的預算分析（analytics/build_analytics.py）
+  回放   既有的情境回放與訓練好的 30/60/120/180 分模型（既有端點，本模組不碰）
+
+即時模式下的「風險」＝ 該站在歷史同一時段（平日/假日 × 半小時分箱）的無車／無位快照比例，
+**不是模型預測**，畫面上標為「歷史同時段」。模型預測只在回放模式提供。
+"""
+import json
+import math
+import os
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+TZ = timezone(timedelta(hours=8))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ANA = os.path.join(ROOT, "data", "analytics")
+
+router = APIRouter(prefix="/api/v2", tags=["v2"])
+
+_CTX = {}
+
+
+# ---------------------------------------------------------------- 初始化
+class Risk:
+    """歷史同時段風險查表：sid → 平日/假日 × 48 分箱。"""
+
+    def __init__(self, path):
+        self.ok = False
+        self.wd, self.we = {}, {}
+        if not os.path.exists(path):
+            return
+        t = pd.read_parquet(path)
+        for wk, store in ((True, self.wd), (False, self.we)):
+            sub = t[t.weekday == wk]
+            for sid, g in sub.groupby("sid"):
+                a = np.full((48, 4), np.nan, dtype="float32")
+                a[g.slot.to_numpy(), 0] = g.p_no_bike.to_numpy()
+                a[g.slot.to_numpy(), 1] = g.p_no_dock.to_numpy()
+                a[g.slot.to_numpy(), 2] = g.mean_bikes.to_numpy()
+                a[g.slot.to_numpy(), 3] = g.mean_docks.to_numpy()
+                store[int(sid)] = a
+        self.ok = True
+
+    def at(self, sid, when=None, ahead_min=0):
+        when = (when or datetime.now(TZ)) + timedelta(minutes=ahead_min)
+        store = self.wd if when.weekday() < 5 else self.we
+        a = store.get(int(sid))
+        if a is None:
+            return None
+        slot = when.hour * 2 + (1 if when.minute >= 30 else 0)
+        row = a[slot]
+        if np.isnan(row[0]):
+            return None
+        return {"slot": int(slot),
+                "at": when.strftime("%H:%M"),
+                "p_no_bike": round(float(row[0]), 4),
+                "p_no_dock": round(float(row[1]), 4),
+                "mean_bikes": round(float(row[2]), 2),
+                "mean_docks": round(float(row[3]), 2)}
+
+
+def init(live_store, stations_df, state, planner=None):
+    _CTX["live"] = live_store
+    _CTX["st"] = stations_df
+    _CTX["state"] = state
+    _CTX["planner"] = planner
+    _CTX["risk"] = Risk(os.path.join(ANA, "slot_risk.parquet"))
+    _CTX["summary"] = _load(os.path.join(ANA, "summary.json"), {})
+    rows = _load(os.path.join(ANA, "stations.json"), [])
+    _CTX["stations"] = {int(r["sid"]): r for r in rows}
+    return _CTX
+
+
+def _sanitize(o):
+    """NaN/Inf 進到回應會讓 FastAPI 直接 500，載入時就換成 None。"""
+    if isinstance(o, float):
+        return None if (math.isnan(o) or math.isinf(o)) else o
+    if isinstance(o, dict):
+        return {k: _sanitize(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_sanitize(v) for v in o]
+    return o
+
+
+def _load(p, default):
+    try:
+        with open(p, encoding="utf-8") as f:
+            return _sanitize(json.load(f))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _live():
+    lv = _CTX.get("live")
+    if lv is None:
+        raise HTTPException(503, "即時資料層尚未初始化")
+    return lv
+
+
+# ---------------------------------------------------------------- 即時
+@router.get("/live")
+def live_overview():
+    lv = _live()
+    stats, status = lv.stats(), lv.status()
+    s = _CTX.get("summary", {})
+    hist = None
+    if s:
+        mrt = s.get("mrt_compare", {})
+        hist = {"am": mrt.get("am"), "pm": mrt.get("pm"),
+                "avail_june": s.get("rates", {}).get("avail_june", {}).get("mean"),
+                "park_june": s.get("rates", {}).get("park_june", {}).get("mean")}
+    return {"status": status, "stats": stats, "history_context": hist,
+            "semantics": {
+                "capacity_gap": ("總停車格數 −（可借＋可還）的差額。名目上存在、"
+                                 "但官方 API 既不計入可借也不計入可還的車柱。不判定根因。"),
+                "no_bike": "官方回報可借車輛為 0，不等於現場真的一台都借不到，也不等於失敗旅次。",
+                "inactive": "官方標示暫停營運（act≠1），與無車可借是兩件事。",
+                "risk": "即時模式的風險為歷史同時段快照比例，不是模型預測。"}}
+
+
+@router.get("/live/stations")
+def live_stations(district: str = None, only: str = None, limit: int = 2000):
+    """only: no_bike / no_dock / gap / inactive。回傳精簡欄位供地圖用。"""
+    snap = _live().snapshot()
+    out = []
+    for x in snap.values():
+        if district and x["district"] != district:
+            continue
+        if only == "no_bike" and not (x["no_bike"] and x["active"]):
+            continue
+        if only == "no_dock" and not (x["no_dock"] and x["active"]):
+            continue
+        if only == "gap" and x["capacity_gap"] <= 0:
+            continue
+        if only == "inactive" and x["active"]:
+            continue
+        meta = _CTX.get("stations", {}).get(x["sid"], {})
+        out.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
+                    "lat": x["lat"], "lon": x["lon"], "cap": x["capacity"],
+                    "b": x["bikes"], "d": x["docks"], "e": x["bikes_electric"],
+                    "gap": x["capacity_gap"], "act": x["active"],
+                    "age": x["age_min"], "prof": meta.get("profile")})
+        if len(out) >= limit:
+            break
+    return {"count": len(out), "stations": out}
+
+
+@router.get("/station/{sid}")
+def station_detail(sid: int):
+    lv = _live()
+    cur = lv.station(sid)
+    meta = _CTX.get("stations", {}).get(int(sid), {})
+    risk = _CTX.get("risk")
+    horizon = []
+    if risk and risk.ok:
+        for m in (0, 30, 60, 120, 180):
+            r = risk.at(sid, ahead_min=m)
+            if r:
+                horizon.append({"ahead_min": m, **r})
+    alts = []
+    nbp = os.path.join(ROOT, "data", "processed", "neighbors_800m.parquet")
+    if os.path.exists(nbp):
+        nb = pd.read_parquet(nbp)
+        near = nb[(nb.sid == int(sid)) & (nb.dist_m <= 500)].sort_values("dist_m")
+        for _, r in near.head(6).iterrows():
+            a = lv.station(int(r.nsid))
+            if a:
+                alts.append({"sid": int(r.nsid), "name": a["name"],
+                             "dist_m": int(r.dist_m), "walk_min": round(r.dist_m / 80.0, 1),
+                             "bikes": a["bikes"], "docks": a["docks"], "act": a["active"]})
+    is_new = int(sid) < 0
+    return {"live": cur, "history": meta, "horizon": horizon, "alternatives": alts,
+            "is_new_station": is_new,
+            "horizon_semantics": (
+                "本站為 2026 年 6 月之後新增，歷史快照資料沒有涵蓋，因此沒有同時段風險可比。"
+                if is_new else
+                "歷史同時段（平日/假日 × 半小時分箱）的快照比例，不是模型預測")}
+
+
+# ---------------------------------------------------------------- 歷史分析
+@router.get("/analytics")
+def analytics():
+    s = _CTX.get("summary")
+    if not s:
+        raise HTTPException(503, "分析結果尚未產生，請先跑 analytics/build_analytics.py")
+    return s
+
+
+# ---------------------------------------------------------------- 建議
+@router.get("/insights")
+def insights():
+    """把即時狀況與歷史分析交叉，產生可執行建議。每條都附證據與口徑。"""
+    lv = _live()
+    stats, snap = lv.stats(), lv.snapshot()
+    s = _CTX.get("summary", {})
+    risk = _CTX.get("risk")
+    now = datetime.now(TZ)
+    items = []
+
+    gap_units = stats.get("capacity_gap_units", 0)
+    gap_st = stats.get("capacity_gap_stations", 0)
+    if gap_st:
+        worst = lv.worst("capacity_gap", 5)
+        items.append({
+            "level": "high" if gap_units > 300 else "mid",
+            "audience": "gov", "title": "名目庫存與服務可用性的落差",
+            "body": (f"此刻 {gap_st} 站（{stats.get('capacity_gap_pct')}%）的總停車格數不等於可借加可還，"
+                     f"合計 {gap_units} 個車柱名目上存在但既借不到也還不了。"
+                     "見車率與見位率都不會反映這個缺口，因為兩者各自只看單邊數量。"),
+            "evidence": [f"{x['name']}（{x['district']}）總 {x['capacity']}／可借 {x['bikes']}／可還 {x['docks']}，差 {x['capacity_gap']}"
+                         for x in worst],
+            "action": "把容量落差納入巡檢排程，並逐站確認是設備故障、保留柱位還是資料延遲。",
+            "caveat": "本工具不判定根因，也不將落差等同於故障台數。"})
+
+    if stats.get("stale_stations"):
+        items.append({
+            "level": "mid", "audience": "gov", "title": "資料新鮮度",
+            "body": (f"{stats['stale_stations']} 站的最後上傳時間超過 30 分鐘"
+                     f"（全市中位數 {stats.get('data_age_min_median')} 分鐘）。"
+                     "資料停止更新不等於服務恢復，也不等於空站。"),
+            "evidence": [], "action": "資料中斷需單獨立案，不可與空站事件混算。",
+            "caveat": "來源為官方 API 的場站上傳時間欄位。"})
+
+    for kind, label, who in (("no_dock", "還不了", "ops"), ("no_bike", "借不到", "ops")):
+        worst = lv.worst(kind, 8)
+        if not worst:
+            continue
+        rows = []
+        for x in worst:
+            r = risk.at(x["sid"], ahead_min=60) if (risk and risk.ok) else None
+            p = r[("p_no_dock" if kind == "no_dock" else "p_no_bike")] if r else None
+            rows.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
+                         "bikes": x["bikes"], "docks": x["docks"], "cap": x["capacity"],
+                         "hist_risk_60": None if p is None else round(p * 100, 1)})
+        high = [r for r in rows if (r["hist_risk_60"] or 0) >= 30]
+        items.append({
+            "level": "high" if high else "mid", "audience": who,
+            "title": f"此刻最可能{label}的站",
+            "body": (f"{len(worst)} 站已在臨界（可{'還車位' if kind=='no_dock' else '借車輛'} ≤2）。"
+                     + (f"其中 {len(high)} 站在歷史同時段的一小時後風險超過 30%，屬結構性而非偶發。"
+                        if high else "歷史同時段風險不高，可能是偶發。")),
+            "evidence": [f"{r['name']}（{r['district']}）可借 {r['bikes']}／可還 {r['docks']}／容量 {r['cap']}"
+                         + (f"，歷史同時段 1 小時後{label}機率 {r['hist_risk_60']}%" if r["hist_risk_60"] is not None else "")
+                         for r in rows[:5]],
+            "action": ("優先處理結構性站；人車前置至少 60 分鐘，來不及的缺口改用民眾分流誘因補位。"
+                       if high else "納入一般排程即可。"),
+            "caveat": "歷史同時段風險是快照比例，不是模型預測，也不保證今天會發生。"})
+
+    dil = s.get("dilution", [])
+    if dil:
+        hi = [d for d in dil if d["band"] == "高"]
+        items.append({
+            "level": "high", "audience": "gov", "title": "月平均指標把尖峰稀釋掉了",
+            "body": (f"{len(hi)} 個站的六月見位率落在官方分級的「高」（≥90%），"
+                     "但平日早峰有三成以上的時間還不了車。18 小時月平均會把通勤者真正遇到的那兩小時洗掉。"),
+            "evidence": [f"{d['name']} 見位率 {d['park_rate']}%（{d['band']}），早峰無位可還 {d['am_no_dock']}%"
+                         for d in dil[:5]],
+            "action": "驗收指標加上尖峰口徑，不要只看日間平均。",
+            "caveat": "見位率為 2026 年 6 月、06:00–23:59 的快照比例。"})
+
+    mrt = s.get("mrt_compare", {})
+    if mrt.get("am") and mrt.get("pm"):
+        items.append({
+            "level": "mid", "audience": "citizen", "title": "同一趟通勤，早晚各壞一次",
+            "body": (f"平日早峰非捷運站無車可借 {mrt['am']['non_mrt']['no_bike']}%、"
+                     f"捷運站無位可還 {mrt['am']['mrt']['no_dock']}%；"
+                     f"晚峰翻轉成捷運站無車可借 {mrt['pm']['mrt']['no_bike']}%。"
+                     "起點與終點是兩種不同的失敗。"),
+            "evidence": [], "action": "出發前就給替代站，不要等使用者到現場才發現。",
+            "caveat": "快照比例，非旅次成功率。"})
+
+    return {"generated_at": now.isoformat(), "count": len(items), "insights": items}
+
+
+# ---------------------------------------------------------------- 微笑單車看板
+@router.get("/ops/board")
+def ops_board():
+    """調度候選清單。
+
+    三類分開，不可混為一談：
+      送車／清運   真正靠調度能解決的缺口，依歷史同時段風險排序
+      整站無服務   可借與可還同時為 0 —— 那不是缺車，是整站設備離線或未投車，
+                   派車過去也沒有柱位可用，必須先查修。**不列入調度優先序。**
+      設備查修     容量落差過大但仍有服務
+    """
+    lv = _live()
+    risk = _CTX.get("risk")
+    now = datetime.now(TZ)
+    dispatch, offline, repair = [], [], []
+    for x in lv.snapshot().values():
+        if not x["active"] or x["capacity"] <= 0:
+            continue
+        meta = _CTX.get("stations", {}).get(x["sid"], {})
+        base = {"sid": x["sid"], "name": x["name"], "district": x["district"],
+                "bikes": x["bikes"], "docks": x["docks"], "cap": x["capacity"],
+                "gap": x["capacity_gap"], "profile": meta.get("profile"),
+                "burden": meta.get("burden"),
+                "retired_in_history": bool(meta.get("retired"))}
+
+        if x["bikes"] == 0 and x["docks"] == 0:
+            offline.append({**base, "need": "整站無服務",
+                            "note": ("歷史上六月整月零車，可能已退場"
+                                     if meta.get("retired") else "可借與可還同時為 0")})
+            continue
+
+        target = max(3, round(x["capacity"] * 0.2))
+        need_bike = max(0, target - x["bikes"])
+        need_dock = max(0, target - x["docks"])
+        if need_bike or need_dock:
+            r60 = risk.at(x["sid"], ahead_min=60) if (risk and risk.ok) else None
+            r120 = risk.at(x["sid"], ahead_min=120) if (risk and risk.ok) else None
+            key = "p_no_dock" if need_dock else "p_no_bike"
+            p60 = r60[key] if r60 else None
+            p120 = r120[key] if r120 else None
+            dispatch.append({**base,
+                             "need": "清運" if need_dock else "送車",
+                             "qty": need_dock or need_bike,
+                             "hist_risk_60": None if p60 is None else round(p60 * 100, 1),
+                             "hist_risk_120": None if p120 is None else round(p120 * 100, 1),
+                             "priority": round((p60 or 0) * 100 + (need_dock or need_bike) * 6, 1)})
+        elif x["capacity_gap"] > 3:
+            repair.append({**base, "need": "設備查修", "qty": x["capacity_gap"]})
+
+    dispatch.sort(key=lambda c: -c["priority"])
+    offline.sort(key=lambda c: -c["cap"])
+    repair.sort(key=lambda c: -c["gap"])
+    structural = sum(1 for c in dispatch if (c["hist_risk_60"] or 0) >= 30)
+    return {"generated_at": now.isoformat(),
+            "candidates": dispatch[:40],
+            "offline": offline[:20], "repair": repair[:20],
+            "totals": {"送車": sum(1 for c in dispatch if c["need"] == "送車"),
+                       "清運": sum(1 for c in dispatch if c["need"] == "清運"),
+                       "整站無服務": len(offline), "設備查修": len(repair),
+                       "結構性": structural},
+            "semantics": ("候選清單依即時站況與歷史同時段風險排序，**不是派車任務**；"
+                          "沒有真實車隊位置、班表與載量，本看板不產生 ETA。"
+                          "可借與可還同時為 0 的站另列為整站無服務，派車無法解決。")}
+
+
+# ---------------------------------------------------------------- 獎勵
+def _multiplier(deficit_ratio, minutes_to_target, extra_walk_min):
+    """docs/REWARDS.md 第 1 層：倍率 = 1 + min(4, 缺口 + 急迫 + 距離)。"""
+    w_gap = min(2.0, deficit_ratio * 2.0)
+    w_urg = 1.5 if minutes_to_target < 60 else (1.0 if minutes_to_target < 120 else 0.5)
+    w_dist = 0.5 if extra_walk_min >= 8 else 0.0
+    return round(1.0 + min(4.0, w_gap + w_urg + w_dist), 2)
+
+
+@router.get("/rewards/board")
+def rewards_board(sid: int = None):
+    """動態加碼任務板：只在真的有缺口的站加碼，並標出還差幾輛就解除。"""
+    lv = _live()
+    risk = _CTX.get("risk")
+    rw = _CTX["state"].get("rewards", {})
+    quests = []
+    for x in lv.snapshot().values():
+        if not x["active"] or x["capacity"] <= 0:
+            continue
+        target_min = max(3, round(x["capacity"] * 0.2))
+        r60 = risk.at(x["sid"], ahead_min=60) if (risk and risk.ok) else None
+        # 缺車型任務：鼓勵「還車到這一站」
+        if x["bikes"] < target_min:
+            deficit = target_min - x["bikes"]
+            mult = _multiplier(deficit / target_min, 60 if (r60 and r60["p_no_bike"] > .3) else 120, 0)
+            quests.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
+                           "lat": x["lat"], "lon": x["lon"], "kind": "還車到這站",
+                           "deficit": deficit, "multiplier": mult, "points": int(round(5 * mult)),
+                           "remaining_to_clear": deficit,
+                           "hist_risk_60": round(r60["p_no_bike"] * 100, 1) if r60 else None})
+        # 滿站型任務：鼓勵「從這一站借車騎走」
+        if x["docks"] < target_min:
+            deficit = target_min - x["docks"]
+            mult = _multiplier(deficit / target_min, 60 if (r60 and r60["p_no_dock"] > .3) else 120, 0)
+            quests.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
+                           "lat": x["lat"], "lon": x["lon"], "kind": "從這站借走",
+                           "deficit": deficit, "multiplier": mult, "points": int(round(5 * mult)),
+                           "remaining_to_clear": deficit,
+                           "hist_risk_60": round(r60["p_no_dock"] * 100, 1) if r60 else None})
+    quests.sort(key=lambda q: (-q["multiplier"], -q["deficit"]))
+    top = quests[:40]
+    budget = sum(q["deficit"] * 25 for q in top)
+    return {
+        "wallet": {"points": rw.get("points", 0),
+                   "stamps": len(rw.get("stamps", [])),
+                   "streak_days": rw.get("streak_days", 0),
+                   "level": rw.get("level", "青銅調度師"),
+                   "next_level_at": rw.get("next_level_at", 10)},
+        "quests": top, "quest_total": len(quests),
+        "budget_cap_twd": budget,
+        "rules": {
+            "formula": "倍率 = 1 + min(4, 缺口權重 + 急迫權重 + 距離權重)；單次上限 25 元",
+            "guards": ["借還同站不計", "騎乘距離需 ≥400 公尺", "沿用官方每帳號 10 分鐘最多 2 次"],
+            "baseline": ("官方友愛接力 2026-01-01~06-30 北北桃試辦：日均發券 17,323 張、"
+                         "見車率 +4.62%、見位率 +1.52%（官方公布數字）"),
+        },
+        "caveat": "點數與優惠為示範機制，兌付與合作商家尚未取得，不代表可實際兌換。"}
+
+
+class ClaimIn(BaseModel):
+    sid: int
+    kind: str
+    request_id: str = None
+
+
+@router.post("/rewards/claim")
+def rewards_claim(body: ClaimIn):
+    """領取任務：示範用，寫進既有 STATE.rewards，並套用防呆與冪等。"""
+    st = _CTX["state"]
+    rw = st.setdefault("rewards", {})
+    rw.setdefault("history", []); rw.setdefault("stamps", []); rw.setdefault("points", 0)
+    claimed = rw.setdefault("claimed_ids", [])
+    if body.request_id and body.request_id in claimed:
+        return {"ok": True, "idempotent": True, "points": rw["points"]}
+    lv = _live()
+    x = lv.station(body.sid)
+    if not x:
+        raise HTTPException(404, "查無此站的即時資料")
+    cap = max(1, x["capacity"])
+    target_min = max(3, round(cap * 0.2))
+    deficit = (target_min - x["bikes"]) if body.kind == "還車到這站" else (target_min - x["docks"])
+    if deficit <= 0:
+        raise HTTPException(409, "這一站目前已經沒有缺口，加碼已解除")
+    mult = _multiplier(deficit / target_min, 60, 0)
+    pts = int(round(5 * mult))
+    rw["points"] = rw.get("points", 0) + pts
+    rw["streak_days"] = rw.get("streak_days", 0) + (0 if rw.get("streak_today") else 1)
+    rw["streak_today"] = True
+    rw["stamps"].append({"name": "接力章", "type": "relay",
+                         "ts": datetime.now(TZ).strftime("%Y-%m-%d %H:%M")})
+    n = len(rw["stamps"])
+    rw["level"] = ("白金調度師" if n >= 30 else "黃金調度師" if n >= 20
+                   else "白銀調度師" if n >= 10 else "青銅調度師")
+    rw["next_level_at"] = 10 if n < 10 else 20 if n < 20 else 30 if n < 30 else n
+    rw["history"].insert(0, {"ts": datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),
+                             "points": pts,
+                             "reason": f"{body.kind}：{x['name']}（×{mult} 加碼，示範紀錄）"})
+    if body.request_id:
+        claimed.append(body.request_id)
+    return {"ok": True, "points": rw["points"], "gained": pts, "multiplier": mult,
+            "stamps": n, "level": rw["level"], "streak_days": rw["streak_days"],
+            "caveat": "示範機制，不代表可實際兌換"}
+
+
+@router.get("/rewards/leaderboard")
+def leaderboard():
+    """第 3 層：團體賽。示範資料，明確標示。"""
+    rw = _CTX["state"].get("rewards", {})
+    me = rw.get("points", 0)
+    teams = [{"team": "板橋隊", "points": 12840, "members": 312},
+             {"team": "新莊隊", "points": 11226, "members": 288},
+             {"team": "中和隊", "points": 9871, "members": 265},
+             {"team": "三重隊", "points": 9540, "members": 251},
+             {"team": "土城隊", "points": 7233, "members": 190}]
+    return {"teams": teams, "me": {"points": me, "team": "板橋隊"},
+            "week_task": {"title": "本週完成 3 次尖峰分流", "progress": min(3, len(rw.get("stamps", []))),
+                          "target": 3, "bonus": "50 元券"},
+            "caveat": "排行榜為示範資料，非真實用戶。"}

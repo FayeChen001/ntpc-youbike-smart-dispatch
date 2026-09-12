@@ -1903,3 +1903,26 @@ def api_ops_availability(district: str = "", sid: int = -1, only_flagged: int = 
             "excluded_from_recommendation": "本工具不再推薦這些設備；沒有遠端停租介接，不代表已鎖車",
         },
     }
+
+
+# ==================================================================== v2 一站式（新增，不改動既有端點）
+import live as LIVE          # noqa: E402
+import v2api as V2           # noqa: E402
+
+LIVE_STORE = LIVE.LiveStore(ST)
+V2.init(LIVE_STORE, ST, STATE, PL)
+app.include_router(V2.router)
+
+
+@app.on_event("startup")
+def _start_live_poll():
+    """啟動官方即時 API 的背景輪詢。抓取失敗不影響既有回放功能。"""
+    LIVE_STORE.start()
+    s = LIVE_STORE.status()
+    print(f"live: available={s['available']} ok={s['ok']} err={s['errors']} "
+          f"stations={LIVE_STORE.stats().get('stations')}", flush=True)
+
+
+@app.get("/v2", response_class=HTMLResponse)
+def v2_page():
+    return FileResponse(os.path.join(STATIC, "v2.html"))

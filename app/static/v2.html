@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>新北 YouBike 智慧調度｜一站式</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<style>
+:root{
+  --bg:#0b0e14; --bg2:#111621; --bg3:#161d2b; --line:#222c3d; --line2:#2e3b52;
+  --fg:#e8edf6; --mute:#8a97ad; --dim:#5d6a80;
+  --ok:#38d39f; --warn:#f5c451; --bad:#f2615b; --info:#5aa9f7; --purple:#a78bfa;
+  --shadow:0 8px 28px rgba(0,0,0,.45);
+  --r:14px; --r2:10px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+  font-family:"PingFang TC","Noto Sans TC","Helvetica Neue",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+body{min-height:100vh}
+a{color:var(--info);text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.xs{font-size:11px} .sm{font-size:12px} .md{font-size:13px}
+.mute{color:var(--mute)} .dim{color:var(--dim)}
+
+/* ---------------- header ---------------- */
+header{position:sticky;top:0;z-index:40;background:rgba(11,14,20,.92);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.hwrap{max-width:1480px;margin:0 auto;padding:10px 18px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.3px}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 0 4px rgba(56,211,159,.15);animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.brand small{display:block;font-weight:400;font-size:10.5px;color:var(--dim);letter-spacing:0}
+nav.views{display:flex;gap:4px;background:var(--bg2);padding:4px;border-radius:12px;border:1px solid var(--line)}
+nav.views button{padding:7px 15px;border-radius:9px;font-size:13px;color:var(--mute);
+  transition:.18s;white-space:nowrap}
+nav.views button .ic{margin-right:6px;opacity:.85}
+nav.views button:hover{color:var(--fg)}
+nav.views button.on{background:var(--bg3);color:var(--fg);box-shadow:0 1px 0 rgba(255,255,255,.05) inset}
+.feed{margin-left:auto;display:flex;align-items:center;gap:14px;font-size:11.5px;color:var(--mute)}
+.feed .lamp{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;margin-right:5px}
+.feed .lamp.stale{background:var(--warn)} .feed .lamp.down{background:var(--bad)}
+.feed a.replay{border:1px solid var(--line2);padding:5px 11px;border-radius:8px;color:var(--mute)}
+.feed a.replay:hover{color:var(--fg);border-color:var(--info)}
+
+/* ---------------- layout ---------------- */
+main{max-width:1480px;margin:0 auto;padding:18px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+.split{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,.95fr);gap:14px;align-items:start}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px}
+.card.pad0{padding:0;overflow:hidden}
+.card h3{margin:0 0 3px;font-size:13.5px;font-weight:600;letter-spacing:.2px}
+.card h3 .tag{float:right;font-weight:400}
+.card .sub{margin:0 0 12px;font-size:11.5px;color:var(--dim);line-height:1.55}
+.tag{font-size:10px;padding:2px 8px;border-radius:20px;border:1px solid var(--line2);color:var(--mute)}
+.tag.live{color:var(--ok);border-color:rgba(56,211,159,.4);background:rgba(56,211,159,.08)}
+.tag.hist{color:var(--purple);border-color:rgba(167,139,250,.4);background:rgba(167,139,250,.08)}
+.tag.sim{color:var(--warn);border-color:rgba(245,196,81,.4);background:rgba(245,196,81,.08)}
+
+/* ---------------- KPI ---------------- */
+.kpi{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);padding:14px 15px;position:relative;overflow:hidden}
+.kpi::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--line2)}
+.kpi.bad::after{background:var(--bad)} .kpi.warn::after{background:var(--warn)}
+.kpi.ok::after{background:var(--ok)} .kpi.info::after{background:var(--info)}
+.kpi .lab{font-size:11px;color:var(--mute);margin-bottom:7px;display:flex;align-items:center;gap:6px}
+.kpi .val{font-size:30px;font-weight:650;line-height:1;letter-spacing:-.5px}
+.kpi .val em{font-style:normal;font-size:13px;font-weight:400;color:var(--mute);margin-left:4px}
+.kpi .note{margin-top:7px;font-size:10.5px;color:var(--dim);line-height:1.5}
+
+/* ---------------- map ---------------- */
+.mapbox{position:relative;background:
+  radial-gradient(900px 520px at 62% 38%,rgba(90,169,247,.07),transparent 65%),var(--bg2)}
+.maphead{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.chips{display:flex;gap:5px;flex-wrap:wrap}
+.chip{padding:5px 11px;border-radius:20px;border:1px solid var(--line2);font-size:11.5px;color:var(--mute);transition:.15s}
+.chip:hover{color:var(--fg);border-color:var(--dim)}
+.chip.on{background:var(--bg3);color:var(--fg);border-color:var(--info)}
+.chip .n{font-family:var(--mono);opacity:.75;margin-left:5px}
+svg.map{display:block;width:100%;height:clamp(380px,52vh,580px);touch-action:manipulation}
+svg.map circle{cursor:pointer;transition:r .12s,opacity .12s}
+svg.map circle:hover{stroke:#fff;stroke-width:1.4}
+.legend{display:flex;gap:14px;flex-wrap:wrap;padding:10px 15px;border-top:1px solid var(--line);font-size:11px;color:var(--mute)}
+.legend i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:-1px}
+#tip{position:fixed;pointer-events:none;z-index:99;background:#050810ee;border:1px solid var(--line2);
+  border-radius:9px;padding:9px 11px;font-size:11.5px;line-height:1.6;box-shadow:var(--shadow);display:none;max-width:250px}
+#tip b{font-size:12.5px}
+
+/* ---------------- list / table ---------------- */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;font-weight:500;color:var(--dim);font-size:10.5px;padding:7px 9px;
+  border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg2);z-index:1}
+td{padding:8px 9px;border-bottom:1px solid rgba(34,44,61,.55);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--bg3)}
+.scroll{max-height:430px;overflow:auto}
+.scroll::-webkit-scrollbar{width:9px;height:9px}
+.scroll::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px}
+.bar{height:5px;border-radius:3px;background:var(--bg3);overflow:hidden;min-width:46px}
+.bar i{display:block;height:100%;border-radius:3px}
+.pill{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10.5px;border:1px solid var(--line2)}
+.pill.bad{color:var(--bad);border-color:rgba(242,97,91,.45);background:rgba(242,97,91,.1)}
+.pill.warn{color:var(--warn);border-color:rgba(245,196,81,.45);background:rgba(245,196,81,.1)}
+.pill.ok{color:var(--ok);border-color:rgba(56,211,159,.45);background:rgba(56,211,159,.1)}
+.pill.info{color:var(--info);border-color:rgba(90,169,247,.45);background:rgba(90,169,247,.1)}
+
+/* ---------------- insight ---------------- */
+.ins{border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:var(--r2);
+  padding:13px 15px;margin-bottom:10px;background:var(--bg2)}
+.ins.high{border-left-color:var(--bad)} .ins.mid{border-left-color:var(--warn)}
+.ins h4{margin:0 0 6px;font-size:13px;font-weight:600}
+.ins p{margin:0 0 9px;font-size:12.5px;line-height:1.75;color:#cbd5e4}
+.ins ul{margin:0 0 9px;padding-left:17px;font-size:11.5px;color:var(--mute);line-height:1.85}
+.ins .act{font-size:12px;color:var(--ok);line-height:1.6}
+.ins .cav{margin-top:7px;font-size:10.5px;color:var(--dim);line-height:1.6;
+  border-top:1px dashed var(--line);padding-top:7px}
+
+/* ---------------- chart ---------------- */
+.chart{width:100%;height:190px}
+.chart .gl{stroke:var(--line);stroke-width:1}
+.chart text{fill:var(--dim);font-size:9.5px;font-family:var(--mono)}
+
+/* ---------------- phone ---------------- */
+.phonewrap{display:flex;justify-content:center;padding:6px 0 14px}
+.phone{width:392px;max-width:100%;background:var(--bg2);border:1px solid var(--line2);
+  border-radius:30px;padding:13px;box-shadow:var(--shadow)}
+.pscreen{background:var(--bg);border-radius:21px;overflow:hidden;height:690px;display:flex;flex-direction:column}
+.ptop{padding:14px 16px 11px;border-bottom:1px solid var(--line);flex-shrink:0}
+.pbody{flex:1;overflow:auto;padding:14px 16px}
+.pbody::-webkit-scrollbar{width:0}
+.ptabs{display:flex;border-top:1px solid var(--line);flex-shrink:0;background:var(--bg2)}
+.ptabs button{flex:1;padding:11px 0;font-size:11px;color:var(--dim)}
+.ptabs button.on{color:var(--ok)}
+.ptabs button .ic{display:block;font-size:16px;margin-bottom:2px}
+.qcard{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:9px;background:var(--bg2)}
+.qcard .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.mult{font-size:19px;font-weight:700;color:var(--warn);line-height:1}
+.mult small{font-size:10px;color:var(--dim);font-weight:400;display:block;margin-top:2px}
+.btn{display:block;width:100%;text-align:center;padding:9px;border-radius:9px;
+  background:linear-gradient(180deg,#38d39f,#24b487);color:#04231a;font-weight:650;font-size:12.5px;margin-top:10px}
+.btn:active{transform:scale(.985)}
+.btn.ghost{background:none;border:1px solid var(--line2);color:var(--mute);font-weight:400}
+.stampgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:10px 0}
+.stamp{aspect-ratio:1;border-radius:10px;border:1px dashed var(--line2);display:flex;
+  align-items:center;justify-content:center;font-size:17px;color:var(--dim)}
+.stamp.on{border:1px solid var(--ok);background:rgba(56,211,159,.12);color:var(--ok)}
+.streak{display:flex;gap:5px;margin:9px 0}
+.streak i{flex:1;height:26px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;
+  justify-content:center;font-size:9.5px;color:var(--dim);font-style:normal}
+.streak i.on{background:rgba(245,196,81,.16);color:var(--warn)}
+
+.foot{max-width:1480px;margin:0 auto;padding:22px 18px 40px;font-size:11px;color:var(--dim);line-height:1.9;
+  border-top:1px solid var(--line);margin-top:22px}
+.foot b{color:var(--mute);font-weight:600}
+.loading{padding:60px 0;text-align:center;color:var(--dim);font-size:13px}
+@media(max-width:1080px){.split{grid-template-columns:1fr}.g4{grid-template-columns:repeat(2,1fr)}
+  .g3,.g2{grid-template-columns:1fr}}
+@media(max-width:560px){.hwrap{padding:9px 12px;gap:10px}main{padding:12px}
+  nav.views button{padding:7px 10px;font-size:12px}.feed{font-size:10.5px;gap:9px}
+  .kpi .val{font-size:25px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="hwrap">
+    <div class="brand"><span class="dot"></span>
+      <div>新北 YouBike 智慧調度<small>NEW TAIPEI YOUBIKE · 即時 × 歷史 × 分流誘因</small></div>
+    </div>
+    <nav class="views">
+      <button data-v="gov" class="on"><span class="ic">🏛</span>政府端</button>
+      <button data-v="ops"><span class="ic">🚚</span>微笑單車端</button>
+      <button data-v="citizen"><span class="ic">📱</span>民眾端</button>
+    </nav>
+    <div class="feed">
+      <span id="feedstat"><span class="lamp"></span>連線中…</span>
+      <a class="replay" href="/" title="既有的情境回放與模型預測介面">情境回放 ↗</a>
+    </div>
+  </div>
+</header>
+
+<main id="main"><div class="loading">載入即時站況與歷史分析…</div></main>
+
+<div class="foot">
+  <b>資料來源</b>　即時：新北市政府資料開放平臺 YouBike2.0 即時站況（每 5 分鐘、政府資料開放授權 1.0）；
+  歷史：2026-01-01～06-30 共 13,324,945 筆半小時快照；台北對照數字取自臺北城市儀表板公開元件。<br>
+  <b>口徑</b>　所有比例皆為<b>半小時快照比例</b>，不是連續中斷時長，也不是旅次成功率。
+  快照零車不等於有人借不到；替代站存在不等於使用者走得到。
+  即時模式的風險為<b>歷史同時段分布</b>，不是模型預測；模型預測（30/60/120/180 分）在情境回放模式。<br>
+  <b>明示模擬</b>　派車執行進度、店家接單與驗收、獎勵兌付與合作商家、排行榜對手均為示範，不代表可實際兌換或已取得合作。
+  本系統不產生 ETA——沒有真實車隊位置、班表與載量。
+</div>
+
+<div id="tip"></div>
+
+<script>
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
+const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n);
+const pct = n => n==null?'—':n.toFixed(1)+'%';
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
+           filter:'all', sel:null, ptab:'nearby', cdist:'板橋區', cq:''};
+
+async function api(p,opt){
+  const r = await fetch(p,opt);
+  if(!r.ok) throw new Error(p+' → '+r.status);
+  return r.json();
+}
+
+/* ============================================================ 開機 */
+async function boot(){
+  try{
+    const [live,stations,ana] = await Promise.all([
+      api('/api/v2/live'), api('/api/v2/live/stations'), api('/api/v2/analytics')
+    ]);
+    S.live=live; S.stations=stations.stations; S.ana=ana;
+    feed(live.status);
+    render();
+    api('/api/v2/insights').then(d=>{S.ins=d; if(S.view==='gov')render();}).catch(()=>{});
+    api('/api/v2/ops/board').then(d=>{S.ops=d; if(S.view==='ops')render();}).catch(()=>{});
+    api('/api/v2/rewards/board').then(d=>{S.rw=d; if(S.view==='citizen')render();}).catch(()=>{});
+    setInterval(refresh, 60000);
+  }catch(e){
+    $('#main').innerHTML = `<div class="card"><h3>載入失敗</h3>
+      <p class="sub">${esc(e.message)}　伺服器可能還在載入模型（約 45 秒），稍後會自動重試。</p></div>`;
+    setTimeout(boot, 8000);
+  }
+}
+async function refresh(){
+  try{
+    const [live,stations] = await Promise.all([api('/api/v2/live'),api('/api/v2/live/stations')]);
+    S.live=live; S.stations=stations.stations; feed(live.status);
+    if(S.view==='ops') api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
+    else if(S.view==='citizen') api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
+    else { api('/api/v2/insights').then(d=>{S.ins=d;render();}); render(); }
+  }catch(e){ /* 保留上一份快照，狀態列會顯示過期 */ }
+}
+function feed(st){
+  const cls = !st.available?'down':(st.stale?'stale':'');
+  const t = st.fetched_at? new Date(st.fetched_at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
+  $('#feedstat').innerHTML = `<span class="lamp ${cls}"></span>官方即時 ${t}`
+    + (st.stale?'（已過期）':'') + `<span class="dim"> · 每 5 分更新</span>`;
+}
+
+/* ============================================================ 地圖 */
+const MAP={x0:0,y0:0,k:1};
+function projectInit(w,h){
+  const la=S.stations.map(s=>s.lat), lo=S.stations.map(s=>s.lon);
+  const laMin=Math.min(...la),laMax=Math.max(...la),loMin=Math.min(...lo),loMax=Math.max(...lo);
+  const pad=26, cy=(laMin+laMax)/2, kx=Math.cos(cy*Math.PI/180);
+  const bw=(loMax-loMin)*kx, bh=(laMax-laMin);
+  const k=Math.min((w-pad*2)/bw,(h-pad*2)/bh);
+  MAP.k=k; MAP.kx=kx; MAP.loMin=loMin; MAP.laMax=laMax;
+  MAP.ox=(w-bw*k)/2; MAP.oy=(h-bh*k)/2;
+}
+const px = s => MAP.ox + (s.lon-MAP.loMin)*MAP.kx*MAP.k;
+const py = s => MAP.oy + (MAP.laMax-s.lat)*MAP.k;
+
+function stColor(s){
+  if(!s.act) return {c:'#4a5568',r:2.2,k:'inactive'};
+  if(s.d===0) return {c:'#f2615b',r:4.2,k:'no_dock'};
+  if(s.b===0) return {c:'#f5c451',r:4.2,k:'no_bike'};
+  if(s.gap>3) return {c:'#a78bfa',r:3.4,k:'gap'};
+  if(s.b<=2||s.d<=2) return {c:'#f59e5b',r:3.0,k:'tight'};
+  return {c:'#38d39f',r:2.4,k:'ok'};
+}
+function mapSVG(){
+  const W=1000,H=560;
+  projectInit(W,H);
+  const f=S.filter;
+  const circles=S.stations.map(s=>{
+    const m=stColor(s);
+    const show = f==='all'||f===m.k||(f==='tight'&&(m.k==='tight'||m.k==='no_bike'||m.k==='no_dock'));
+    const op = f==='all'?.92:(show?1:.07);
+    const r = show&&f!=='all'? m.r+1.1 : m.r;
+    return `<circle cx="${px(s).toFixed(1)}" cy="${py(s).toFixed(1)}" r="${r}" fill="${m.c}"
+      opacity="${op}" data-sid="${s.sid}"/>`;
+  }).join('');
+  const cnt=k=>S.stations.filter(s=>stColor(s).k===k).length;
+  const chip=(id,lab)=>`<button class="chip ${S.filter===id?'on':''}" data-f="${id}">${lab}`+
+      (id==='all'?`<span class="n">${S.stations.length}</span>`:`<span class="n">${cnt(id)}</span>`)+`</button>`;
+  return `<div class="card pad0 mapbox">
+    <div class="maphead">
+      <div><h3 style="margin:0">全市即時站況 <span class="tag live">即時</span></h3>
+        <div class="sm dim" style="margin-top:3px">點任一站看歷史同時段風險與替代站</div></div>
+      <div class="chips" style="margin-left:auto">
+        ${chip('all','全部')}${chip('no_dock','還不了')}${chip('no_bike','借不到')}
+        ${chip('gap','容量落差')}${chip('inactive','暫停營運')}
+      </div>
+    </div>
+    <svg class="map" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${circles}</svg>
+    <div class="legend">
+      <span><i style="background:#f2615b"></i>無位可還</span>
+      <span><i style="background:#f5c451"></i>無車可借</span>
+      <span><i style="background:#f59e5b"></i>剩 ≤2</span>
+      <span><i style="background:#a78bfa"></i>容量落差 &gt;3</span>
+      <span><i style="background:#38d39f"></i>正常</span>
+      <span><i style="background:#4a5568"></i>暫停營運</span>
+    </div></div>`;
+}
+function bindMap(){
+  const svg=$('svg.map'); if(!svg) return;
+  svg.addEventListener('mousemove',e=>{
+    const c=e.target.closest('circle');
+    const tip=$('#tip');
+    if(!c){tip.style.display='none';return;}
+    const s=S.stations.find(x=>x.sid==c.dataset.sid); if(!s){tip.style.display='none';return;}
+    tip.innerHTML=`<b>${esc(s.name)}</b><br><span class="dim">${esc(s.district)}</span><br>
+      可借 <b class="mono">${s.b}</b>　可還 <b class="mono">${s.d}</b>　容量 <span class="mono">${s.cap}</span>
+      ${s.e?`<br>電輔車 <span class="mono">${s.e}</span>`:''}
+      ${s.gap?`<br><span style="color:#a78bfa">容量落差 ${s.gap}</span>`:''}
+      ${!s.act?'<br><span style="color:#f2615b">官方標示暫停營運</span>':''}
+      ${s.prof?`<br><span class="dim">${esc(s.prof)}</span>`:''}`;
+    tip.style.display='block';
+    tip.style.left=Math.min(innerWidth-260,e.clientX+14)+'px';
+    tip.style.top=Math.min(innerHeight-140,e.clientY+14)+'px';
+  });
+  svg.addEventListener('mouseleave',()=>$('#tip').style.display='none');
+  svg.addEventListener('click',e=>{
+    const c=e.target.closest('circle'); if(!c) return;
+    openStation(+c.dataset.sid);
+  });
+  $$('.chip[data-f]').forEach(b=>b.onclick=()=>{S.filter=b.dataset.f;render();});
+}
+async function openStation(sid){
+  S.sel={sid,loading:true}; render();
+  try{ S.sel=await api('/api/v2/station/'+sid); S.sel.sid=sid; }
+  catch(e){ S.sel={sid,err:e.message}; }
+  render();
+}
+
+/* ============================================================ 站點詳情 */
+function stationPanel(){
+  if(!S.sel) return `<div class="card"><h3>站點詳情</h3>
+    <p class="sub">點地圖上的任一站，這裡會顯示它的即時狀況、歷史同時段風險，以及 500 公尺內的替代站。</p></div>`;
+  if(S.sel.loading) return `<div class="card"><h3>載入中…</h3></div>`;
+  if(S.sel.err) return `<div class="card"><h3>讀取失敗</h3><p class="sub">${esc(S.sel.err)}</p></div>`;
+  const L=S.sel.live, H=S.sel.history||{}, hz=S.sel.horizon||[], alt=S.sel.alternatives||[];
+  if(!L) return `<div class="card"><h3>查無即時資料</h3></div>`;
+  const risk = hz.map(h=>{
+    const nb=(h.p_no_bike*100), nd=(h.p_no_dock*100);
+    return `<tr><td class="mono">${h.ahead_min===0?'現在':'+'+h.ahead_min+'分'}
+      <span class="dim xs">${h.at}</span></td>
+      <td><div class="bar"><i style="width:${Math.min(100,nb)}%;background:var(--warn)"></i></div></td>
+      <td class="mono" style="width:44px">${nb.toFixed(0)}%</td>
+      <td><div class="bar"><i style="width:${Math.min(100,nd)}%;background:var(--bad)"></i></div></td>
+      <td class="mono" style="width:44px">${nd.toFixed(0)}%</td></tr>`;
+  }).join('');
+  return `<div class="card">
+    <h3>${esc(L.name)} <span class="tag live">即時</span></h3>
+    <p class="sub">${esc(L.district)}　${esc(L.address||'')}<br>
+      資料時間 ${esc(L.info_time?L.info_time.slice(11,16):'—')}（${L.age_min??'—'} 分鐘前）</p>
+    <div class="grid g3" style="margin-bottom:12px">
+      <div class="kpi ${L.bikes===0?'bad':L.bikes<=2?'warn':'ok'}" style="padding:11px 12px">
+        <div class="lab">可借</div><div class="val">${L.bikes}<em>台</em></div>
+        <div class="note">電輔 ${L.bikes_electric}</div></div>
+      <div class="kpi ${L.docks===0?'bad':L.docks<=2?'warn':'ok'}" style="padding:11px 12px">
+        <div class="lab">可還</div><div class="val">${L.docks}<em>位</em></div>
+        <div class="note">容量 ${L.capacity}</div></div>
+      <div class="kpi ${L.capacity_gap>0?'info':''}" style="padding:11px 12px">
+        <div class="lab">容量落差</div><div class="val">${L.capacity_gap}</div>
+        <div class="note">既不可借也不可還</div></div>
+    </div>
+    ${H.profile?`<p class="sm" style="margin:0 0 10px">站點分型　<span class="pill info">${esc(H.profile)}</span>
+      ${H.burden!=null?`<span class="pill" title="日內庫存振幅÷容量">調度負擔 ${H.burden}</span>`:''}
+      ${H.alt_500m!=null?`<span class="pill">500m 內 ${H.alt_500m} 站</span>`:''}</p>`:''}
+    <h3 style="margin-top:14px">歷史同時段風險 <span class="tag hist">歷史</span></h3>
+    <p class="sub">過去六個月、同樣是${new Date().getDay()%6===0?'假日':'平日'}的同一個半小時分箱裡，
+      這一站無車／無位的快照比例。<b>不是模型預測</b>，不保證今天會發生。</p>
+    <table><thead><tr><th>時點</th><th colspan="2">無車可借</th><th colspan="2">無位可還</th></tr></thead>
+      <tbody>${risk||'<tr><td colspan="5" class="dim">此站歷史樣本不足</td></tr>'}</tbody></table>
+    ${alt.length?`<h3 style="margin-top:15px">500 公尺內的替代站 <span class="tag live">即時</span></h3>
+      <p class="sub">替代站存在不等於使用者走得到，也不保證抵達時仍可用。</p>
+      <table><thead><tr><th>站名</th><th>步行</th><th>可借</th><th>可還</th></tr></thead><tbody>
+      ${alt.map(a=>`<tr class="click" data-alt="${a.sid}"><td>${esc(a.name)}</td>
+        <td class="mono dim">${a.walk_min} 分</td>
+        <td class="mono" style="color:${a.bikes===0?'var(--bad)':'var(--ok)'}">${a.bikes}</td>
+        <td class="mono" style="color:${a.docks===0?'var(--bad)':'var(--ok)'}">${a.docks}</td></tr>`).join('')}
+      </tbody></table>`:''}
+  </div>`;
+}
+
+/* ============================================================ 圖表 */
+function lineChart(hours, series, h=190){
+  const W=560,H=h,pl=34,pr=10,pt=12,pb=22;
+  const max=Math.max(4,...series.flatMap(s=>s.data));
+  const x=i=>pl+(W-pl-pr)*(i/(hours.length-1));
+  const y=v=>pt+(H-pt-pb)*(1-v/max);
+  const grid=[0,.25,.5,.75,1].map(t=>{
+    const v=max*t; return `<line class="gl" x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}"/>
+      <text x="${pl-6}" y="${y(v)+3}" text-anchor="end">${v.toFixed(0)}%</text>`;}).join('');
+  const paths=series.map(s=>{
+    const d=s.data.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    const area=`${d}L${x(s.data.length-1).toFixed(1)},${y(0)}L${x(0).toFixed(1)},${y(0)}Z`;
+    return `<path d="${area}" fill="${s.color}" opacity=".1"/>
+            <path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"
+              stroke-linejoin="round" stroke-linecap="round"/>`;}).join('');
+  const xl=hours.map((hh,i)=>i%3===0?`<text x="${x(i)}" y="${H-6}" text-anchor="middle">${hh}</text>`:'').join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}${paths}${xl}</svg>`;
+}
+function legendDots(series){
+  return `<div class="sm mute" style="display:flex;gap:14px;margin-top:6px">`+
+    series.map(s=>`<span><i style="display:inline-block;width:9px;height:9px;border-radius:50%;
+      background:${s.color};margin-right:5px;vertical-align:-1px"></i>${s.name}</span>`).join('')+`</div>`;
+}
+
+/* ============================================================ 政府端 */
+function govView(){
+  const st=S.live.stats, sta=S.live.status, a=S.ana;
+  const k=(cls,lab,val,unit,note)=>`<div class="kpi ${cls}">
+    <div class="lab">${lab}</div><div class="val">${val}<em>${unit||''}</em></div>
+    <div class="note">${note||''}</div></div>`;
+  const kpis=`<div class="grid g4">
+    ${k('bad','此刻無位可還',st.no_dock,'站',`營運中站點的 ${pct(st.no_dock_pct)}`)}
+    ${k('warn','此刻無車可借',st.no_bike,'站',`營運中站點的 ${pct(st.no_bike_pct)}`)}
+    ${k('info','容量落差',st.capacity_gap_stations,'站',
+        `${fmt(st.capacity_gap_units)} 個車柱名目存在但借不到也還不了（${pct(st.capacity_gap_pct)}）`)}
+    ${k(st.stale_stations>40?'warn':'ok','資料新鮮度',st.data_age_min_median,'分',
+        `中位數；超過 30 分未更新 ${st.stale_stations} 站`)}
+  </div>`;
+
+  const wd=a.curves.weekday, we=a.curves.weekend;
+  const hours=wd.hours.map(h=>String(h).padStart(2,'0'));
+  const s1=[{name:'無車可借',color:'#f5c451',data:wd.no_bike},{name:'無位可還',color:'#f2615b',data:wd.no_dock}];
+  const s2=[{name:'無車可借',color:'#f5c451',data:we.no_bike},{name:'無位可還',color:'#f2615b',data:we.no_dock}];
+
+  const dil=a.dilution.slice(0,6).map(d=>`<tr class="click" data-sid="${d.sid}">
+    <td>${esc(d.name)}<div class="xs dim">${esc(d.district)}</div></td>
+    <td><span class="pill ${d.band==='高'?'ok':d.band==='中'?'warn':'bad'}">見位率 ${d.park_rate}%・${d.band}</span></td>
+    <td style="width:110px"><div class="bar"><i style="width:${d.am_no_dock}%;background:var(--bad)"></i></div></td>
+    <td class="mono" style="color:var(--bad)">${d.am_no_dock}%</td></tr>`).join('');
+
+  const am=a.mrt_compare.am, pm=a.mrt_compare.pm;
+  const cmp=`<table><thead><tr><th>平日時段</th><th>非捷運站（住家端）</th><th>捷運站（目的地端）</th></tr></thead><tbody>
+    <tr><td>早峰 07–09<div class="xs dim">無車可借</div></td>
+      <td class="mono" style="color:var(--bad);font-size:15px">${am.non_mrt.no_bike}%</td>
+      <td class="mono dim">${am.mrt.no_bike}%</td></tr>
+    <tr><td>早峰 07–09<div class="xs dim">無位可還</div></td>
+      <td class="mono dim">${am.non_mrt.no_dock}%</td>
+      <td class="mono" style="color:var(--bad);font-size:15px">${am.mrt.no_dock}%</td></tr>
+    <tr><td>晚峰 17–19<div class="xs dim">無車可借</div></td>
+      <td class="mono dim">${pm.non_mrt.no_bike}%</td>
+      <td class="mono" style="color:var(--bad);font-size:15px">${pm.mrt.no_bike}%</td></tr>
+    </tbody></table>`;
+
+  const bands=(o,ref,lab)=>{
+    const row=(n,v,tot,c)=>`<tr><td>${n}</td><td style="width:120px"><div class="bar">
+      <i style="width:${(v/tot*100).toFixed(1)}%;background:${c}"></i></div></td>
+      <td class="mono">${v}</td><td class="mono dim">${(v/tot*100).toFixed(1)}%</td></tr>`;
+    return `<table><thead><tr><th>${lab}</th><th colspan="3">新北（本專案算）</th></tr></thead><tbody>
+      ${row('高 ≥90%',o.high,o.n,'var(--ok)')}${row('中 60–90%',o.mid,o.n,'var(--warn)')}
+      ${row('低 <60%',o.low,o.n,'var(--bad)')}</tbody></table>
+      <p class="sub" style="margin-top:9px">臺北同定義同月份：高 ${ref.high}／中 ${ref.mid}／低 ${ref.low}（共 ${ref.n} 站）</p>`;
+  };
+
+  const dist=a.districts.slice(0,10).map(d=>`<tr><td>${esc(d.district)}<span class="xs dim"> ${d.stations} 站</span></td>
+    <td style="width:100px"><div class="bar"><i style="width:${Math.min(100,d.no_bike*7)}%;background:var(--warn)"></i></div></td>
+    <td class="mono">${d.no_bike}%</td>
+    <td style="width:100px"><div class="bar"><i style="width:${Math.min(100,d.no_dock*7)}%;background:var(--bad)"></i></div></td>
+    <td class="mono">${d.no_dock}%</td></tr>`).join('');
+
+  const ins=(S.ins?.insights||[]).filter(i=>i.audience==='gov'||i.audience==='citizen');
+  const insHTML = S.ins? (ins.map(i=>`<div class="ins ${i.level}">
+      <h4>${esc(i.title)}</h4><p>${esc(i.body)}</p>
+      ${i.evidence?.length?`<ul>${i.evidence.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}
+      <div class="act">→ ${esc(i.action)}</div>
+      ${i.caveat?`<div class="cav">口徑：${esc(i.caveat)}</div>`:''}</div>`).join('')||'<p class="sub">目前沒有需要升級的項目。</p>')
+    : '<p class="sub">產生中…</p>';
+
+  return `${kpis}
+  <div class="split" style="margin-top:14px">
+    <div>
+      ${mapSVG()}
+      <div class="card" style="margin-top:14px"><h3>大數據分析建議 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
+        <p class="sub">把此刻的官方站況與六個月歷史交叉後自動產生，每條都附證據與口徑。</p>${insHTML}</div>
+      <div class="grid g2" style="margin-top:14px">
+        <div class="card"><h3>平日全市失效曲線 <span class="tag hist">歷史</span></h3>
+          <p class="sub">日間 06–23 時，各小時的快照比例</p>${lineChart(hours,s1)}${legendDots(s1)}</div>
+        <div class="card"><h3>假日全市失效曲線 <span class="tag hist">歷史</span></h3>
+          <p class="sub">同口徑，週末與假日</p>${lineChart(hours,s2)}${legendDots(s2)}</div>
+      </div>
+      <div class="grid g2" style="margin-top:14px">
+        <div class="card"><h3>見車率分級 <span class="tag hist">歷史</span></h3>
+          <p class="sub">2026 年 6 月、06:00–23:59，站上至少 1 台車的快照比例</p>
+          ${bands(a.rates.avail_june,a.rates.taipei_reference.avail,'見車率')}</div>
+        <div class="card"><h3>見位率分級 <span class="tag hist">歷史</span></h3>
+          <p class="sub">同期間，站上至少 1 個空位的快照比例</p>
+          ${bands(a.rates.park_june,a.rates.taipei_reference.park,'見位率')}</div>
+      </div>
+    </div>
+    <div>
+      ${stationPanel()}
+      <div class="card" style="margin-top:14px"><h3>月平均把尖峰稀釋掉了 <span class="tag hist">歷史</span></h3>
+        <p class="sub">這些站的六月見位率落在官方分級的「高」或「中」，
+          但平日早峰有三成上下的時間還不了車。18 小時平均會洗掉通勤者真正遇到的那兩小時。</p>
+        <table><tbody>${dil}</tbody></table></div>
+      <div class="card" style="margin-top:14px"><h3>同一趟通勤，早晚各壞一次 <span class="tag hist">歷史</span></h3>
+        <p class="sub">起點與終點是兩種不同的失敗模式</p>${cmp}</div>
+      <div class="card" style="margin-top:14px"><h3>行政區排名 <span class="tag hist">歷史</span></h3>
+        <p class="sub">平日早峰 07–09 的快照比例</p>
+        <table><thead><tr><th>行政區</th><th colspan="2">無車可借</th><th colspan="2">無位可還</th></tr></thead>
+          <tbody>${dist}</tbody></table></div>
+      <div class="card" style="margin-top:14px"><h3>資料品質 <span class="tag hist">歷史</span></h3>
+        <p class="sub">已從所有分析中排除，避免汙染排名</p>
+        <table><tbody>
+          <tr><td>雙零快照</td><td class="mono">${fmt(a.meta.double_zero_cells)} 格</td>
+            <td class="dim xs">涉及 ${a.meta.double_zero_stations} 站・語意未定，可能是整站服務中斷</td></tr>
+          <tr><td>停用／退場站</td><td class="mono">${a.meta.dead_stations} 站</td>
+            <td class="dim xs">六月整月零車，不是調度失敗</td></tr>
+          <tr><td>納入分析</td><td class="mono">${a.meta.stations_analyzed} 站</td>
+            <td class="dim xs">全市 ${a.meta.stations_total} 站</td></tr>
+        </tbody></table></div>
+    </div>
+  </div>`;
+}
+
+/* ============================================================ 微笑單車端 */
+function opsView(){
+  const st=S.live.stats;
+  if(!S.ops) return `<div class="card"><h3>調度看板</h3><p class="sub">載入中…</p></div>`;
+  const t=S.ops.totals;
+  const rows=S.ops.candidates.map(c=>{
+    const need=c.need==='送車'?'warn':'bad';
+    const r60=c.hist_risk_60, structural=(r60||0)>=30;
+    return `<tr class="click" data-sid="${c.sid}">
+      <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}${c.profile?'・'+esc(c.profile):''}</div></td>
+      <td><span class="pill ${need}">${c.need}</span>${structural?'<div class="xs" style="color:var(--bad);margin-top:3px">結構性</div>':''}</td>
+      <td class="mono">${c.qty}</td>
+      <td class="mono dim">${c.bikes}／${c.docks}<div class="xs dim">借／還</div></td>
+      <td style="width:92px">${r60==null?'<span class="dim xs">無歷史</span>':
+        `<div class="bar"><i style="width:${Math.min(100,r60)}%;background:${r60>=30?'var(--bad)':'var(--warn)'}"></i></div>
+         <div class="xs mono dim">${r60}%</div>`}</td>
+      <td class="mono dim">${c.hist_risk_120==null?'—':c.hist_risk_120+'%'}</td>
+      <td class="mono">${c.priority}</td></tr>`;}).join('');
+  const off=S.ops.offline.map(c=>`<tr class="click" data-sid="${c.sid}">
+      <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}</div></td>
+      <td class="mono dim">容量 ${c.cap}</td>
+      <td class="xs" style="color:var(--purple)">${esc(c.note)}</td></tr>`).join('');
+  const rep=S.ops.repair.map(c=>`<tr class="click" data-sid="${c.sid}">
+      <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}</div></td>
+      <td class="mono">${c.gap}</td>
+      <td class="mono dim">${c.bikes}／${c.docks}／${c.cap}</td></tr>`).join('');
+  return `<div class="grid g4">
+    <div class="kpi warn"><div class="lab">需要送車</div><div class="val">${t['送車']}<em>站</em></div>
+      <div class="note">可借低於容量 20%，且仍有可還柱位</div></div>
+    <div class="kpi bad"><div class="lab">需要清運</div><div class="val">${t['清運']}<em>站</em></div>
+      <div class="note">可還低於容量 20%，其中 ${t['結構性']} 站屬結構性</div></div>
+    <div class="kpi info"><div class="lab">整站無服務</div><div class="val">${t['整站無服務']}<em>站</em></div>
+      <div class="note">借還同時為 0，派車無法解決，需先查修</div></div>
+    <div class="kpi"><div class="lab">全市在站車輛</div><div class="val">${fmt(st.bikes_total)}<em>台</em></div>
+      <div class="note">其中電輔車 ${fmt(st.bikes_electric)} 台</div></div>
+  </div>
+  <div class="split" style="margin-top:14px">
+    <div>
+      <div class="card pad0">
+        <div class="maphead"><div><h3 style="margin:0">調度候選清單 <span class="tag live">即時</span><span class="tag hist">歷史風險</span></h3>
+          <div class="sm dim" style="margin-top:3px">依「一小時後的歷史同時段風險」排序，不是依現在有多空</div></div></div>
+        <div class="scroll"><table><thead><tr><th>站點</th><th>處置</th><th>數量</th><th>現況</th>
+          <th>1 小時後</th><th>2 小時後</th><th>優先度</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="dim">目前沒有候選</td></tr>'}</tbody></table></div>
+        <div class="legend"><span>${esc(S.ops.semantics)}</span></div>
+      </div>
+      ${mapSVG()}
+    </div>
+    <div>
+      ${stationPanel()}
+      <div class="card" style="margin-top:14px"><h3>整站無服務 <span class="tag live">即時</span></h3>
+        <p class="sub">可借與可還<b>同時為 0</b>。這不是缺車——派車過去也沒有柱位可用。
+          必須先確認是設備離線、整站未投車，還是已經退場。<b>不列入調度優先序。</b></p>
+        <div class="scroll" style="max-height:260px"><table><tbody>${off||'<tr><td class="dim">目前沒有</td></tr>'}</tbody></table></div></div>
+      <div class="card" style="margin-top:14px"><h3>設備查修 <span class="tag live">即時</span></h3>
+        <p class="sub">仍有服務，但容量落差超過 3 個車柱（總格數 ≠ 可借＋可還）</p>
+        <div class="scroll" style="max-height:220px"><table><thead><tr><th>站點</th><th>落差</th><th>借／還／容量</th></tr></thead>
+          <tbody>${rep||'<tr><td colspan="3" class="dim">目前沒有</td></tr>'}</tbody></table></div></div>
+      <div class="card" style="margin-top:14px"><h3>為什麼是 120 分鐘不是 30 分鐘</h3>
+        <p class="sub">訪談指出人車從決策到抵達通常至少 60 分鐘，而空站的恢復目標是 30 分鐘——
+          等空了才派車，本質上來不及。所以清單排序用的是<b>一小時後</b>的風險，不是現在的狀態。
+          前置時間已拆成新動員 15 分與在勤改道 3 分，兩者分開估。</p>
+        <p class="sub" style="border-top:1px dashed var(--line);padding-top:9px">
+          <b>本看板不產生 ETA。</b>沒有真實車隊位置、班表與載量，算出來的到達時間都是虛構的。
+          候選清單也不是派車任務，建立任務仍須由調度人員決定。</p></div>
+      <div class="card" style="margin-top:14px"><h3>來不及的缺口怎麼補</h3>
+        <p class="sub">派一趟貨車補 20 輛約 600 元（2 人 × 1.27 小時 × 200 元/時＋油耗折舊，人事費率為情境假設）；
+          同樣 20 輛用民眾分流動態加碼平均 300 元。官方友愛接力北北桃試辦期日均發券 17,323 張，
+          見車率 +4.62%、見位率 +1.52%（官方公布數字）。</p>
+        <p class="sub">→ 切到<b>民眾端</b>看此刻的加碼任務板。</p></div>
+    </div>
+  </div>`;
+}
+
+/* ============================================================ 民眾端 */
+function citizenView(){
+  const rw=S.rw;
+  const worstDock=[...S.stations].filter(s=>s.act&&s.d===0).slice(0,3);
+  const nearby=[...S.stations].filter(s=>s.act).sort((a,b)=>(b.b+b.d)-(a.b+a.d));
+  let body='';
+  if(S.ptab==='nearby'){
+    const dists=[...new Set(S.stations.map(s=>s.district))].sort();
+    const q=S.cq.trim();
+    let list=S.stations.filter(s=>q? s.name.includes(q) : s.district===S.cdist);
+    // 有問題的排前面：整站無服務 → 沒車／沒位 → 快見底 → 正常
+    const rank=s=>(!s.act?4:(s.b===0&&s.d===0)?0:(s.b===0||s.d===0)?1:(s.b<=2||s.d<=2)?2:3);
+    list.sort((a,b)=>rank(a)-rank(b)||b.cap-a.cap);
+    const cards=list.slice(0,18).map(s=>{
+      const off=s.b===0&&s.d===0, note=
+        !s.act?['var(--dim)','官方標示暫停營運']:
+        off?['var(--purple)','整站無服務：借還同時為 0，通常是設備離線，不是缺車']:
+        s.b===0?['var(--warn)','此刻沒有車可借，點開看 500 公尺內哪一站有']:
+        s.d===0?['var(--bad)','此刻沒有位可還，點開看 500 公尺內哪一站可以']:
+        (s.b<=2||s.d<=2)?['var(--warn)','快見底了，出發前再確認一次']:null;
+      return `<div class="qcard" data-sid="${s.sid}" style="cursor:pointer">
+        <div class="top"><div style="min-width:0"><b style="font-size:13px">${esc(s.name)}</b>
+          <div class="xs dim" style="margin-top:2px">${esc(s.district)}${s.prof?'・'+esc(s.prof):''}</div></div>
+          <div style="text-align:right;flex-shrink:0">
+            <div class="mono" style="font-size:15px;color:${s.b===0?'var(--bad)':'var(--ok)'}">${s.b}</div>
+            <div class="xs dim">可借</div></div>
+          <div style="text-align:right;flex-shrink:0">
+            <div class="mono" style="font-size:15px;color:${s.d===0?'var(--bad)':'var(--ok)'}">${s.d}</div>
+            <div class="xs dim">可還</div></div></div>
+        ${note?`<div class="xs" style="color:${note[0]};margin-top:7px">${note[1]}</div>`:''}
+      </div>`;}).join('');
+    body=`<div style="display:flex;gap:6px;margin-bottom:10px">
+        <select id="cdist" style="flex:1;background:var(--bg2);border:1px solid var(--line2);color:var(--fg);
+          border-radius:9px;padding:8px;font-size:12px">
+          ${dists.map(d=>`<option ${d===S.cdist?'selected':''}>${esc(d)}</option>`).join('')}</select>
+        <input id="cq" placeholder="搜尋站名" value="${esc(S.cq)}" style="flex:1;background:var(--bg2);
+          border:1px solid var(--line2);color:var(--fg);border-radius:9px;padding:8px;font-size:12px">
+      </div>
+      <p class="xs mute" style="margin:0 0 11px;line-height:1.7">
+        ${q?`符合「${esc(q)}」的站 ${list.length} 個`:`${esc(S.cdist)} 共 ${list.length} 站`}，有狀況的排在前面。
+        全市此刻 ${S.live.stats.no_bike} 站沒車、${S.live.stats.no_dock} 站沒位。出發前先看，不要到現場才發現。</p>
+      ${cards||'<p class="sm dim">找不到符合的站</p>'}`;
+  }
+  else if(S.ptab==='quest'){
+    if(!rw) body='<p class="sm mute">載入中…</p>';
+    else{
+      const qs=rw.quests.slice(0,12).map((q,i)=>`<div class="qcard">
+        <div class="top"><div><b style="font-size:13px">${esc(q.name)}</b>
+          <div class="xs dim" style="margin-top:2px">${esc(q.district)}</div>
+          <div class="xs" style="margin-top:5px;color:var(--info)">${esc(q.kind)}</div></div>
+          <div style="text-align:right"><div class="mult">×${q.multiplier}<small>${q.points} 點</small></div></div></div>
+        <div class="xs dim" style="margin-top:8px">還差 <b style="color:var(--warn)">${q.remaining_to_clear}</b> 輛就解除加碼
+          ${q.hist_risk_60!=null?`・歷史同時段一小時後風險 ${q.hist_risk_60}%`:''}</div>
+        <button class="btn" data-claim="${q.sid}" data-kind="${esc(q.kind)}">接下任務</button></div>`).join('');
+      body=`<div class="card" style="background:linear-gradient(135deg,rgba(245,196,81,.14),rgba(242,97,91,.08));
+          border-color:rgba(245,196,81,.3);margin-bottom:12px">
+          <div class="sm" style="color:var(--warn);font-weight:600">此刻有 ${rw.quest_total} 個加碼任務</div>
+          <div class="xs dim" style="margin-top:5px;line-height:1.7">
+            價格跟著缺口走：越缺、越急、要多走幾步，倍率越高，單次上限 25 元。
+            不缺的站不會有加碼——這樣才不會「該去的沒人去、不缺的一直有人領」。</div></div>
+        ${qs}
+        <div class="card" style="margin-top:4px"><div class="sm" style="font-weight:600;margin-bottom:6px">規則</div>
+          <div class="xs dim" style="line-height:1.8">${rw.rules.formula}<br>
+            ${rw.rules.guards.join('・')}<br><br>${esc(rw.rules.baseline)}</div>
+          <div class="xs dim" style="margin-top:9px;border-top:1px dashed var(--line);padding-top:8px">
+            ${esc(rw.caveat)}</div></div>`;
+    }
+  }
+  else{
+    if(!rw) body='<p class="sm mute">載入中…</p>';
+    else{
+      const n=rw.wallet.stamps, tgt=rw.wallet.next_level_at;
+      const stamps=Array.from({length:10},(_,i)=>`<div class="stamp ${i<n%10||(n>0&&n%10===0)?'on':''}">${i<n%10||(n>0&&n%10===0)?'🚲':''}</div>`).join('');
+      const days=['一','二','三','四','五','六','日'].map((d,i)=>
+        `<i class="${i<rw.wallet.streak_days?'on':''}">${d}</i>`).join('');
+      body=`<div class="card" style="background:linear-gradient(135deg,rgba(56,211,159,.16),rgba(90,169,247,.07));
+          border-color:rgba(56,211,159,.3)">
+          <div class="xs dim">目前點數</div>
+          <div style="font-size:34px;font-weight:700;line-height:1.1;margin:3px 0">${rw.wallet.points}</div>
+          <div class="sm" style="color:var(--ok)">${esc(rw.wallet.level)}
+            <span class="dim">再 ${Math.max(0,tgt-n)} 枚章升級</span></div></div>
+        <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">接力章　${n?(n%10||10):0}／10</div>
+          <div class="xs dim" style="margin-top:3px">集滿 10 枚換 50 元券</div>
+          <div class="stampgrid">${stamps}</div></div>
+        <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">連續天數　${rw.wallet.streak_days} 天</div>
+          <div class="xs dim" style="margin-top:3px">3／7／14／30 天各給一次加碼週。斷了就重來。</div>
+          <div class="streak">${days}</div></div>
+        <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">本週任務</div>
+          <div id="wk" class="xs dim" style="margin-top:6px">載入中…</div></div>
+        <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">團體賽</div>
+          <div id="lb" class="xs dim" style="margin-top:6px">載入中…</div></div>`;
+    }
+  }
+  const tab=(id,ic,lab)=>`<button class="${S.ptab===id?'on':''}" data-pt="${id}">
+    <span class="ic">${ic}</span>${lab}</button>`;
+  return `<div class="split">
+    <div class="phonewrap"><div class="phone"><div class="pscreen">
+      <div class="ptop"><div style="display:flex;justify-content:space-between;align-items:center">
+        <div><b style="font-size:14px">新北 YouBike</b>
+          <div class="xs dim" style="margin-top:2px">官方即時・${new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})}</div></div>
+        <span class="tag live">即時</span></div></div>
+      <div class="pbody" id="pbody">${body}</div>
+      <div class="ptabs">${tab('nearby','📍','站況')}${tab('quest','⚡','加碼任務')}${tab('wallet','🎁','我的獎勵')}</div>
+    </div></div></div>
+    <div>
+      ${stationPanel()}
+      <div class="card" style="margin-top:14px"><h3>為什麼分流值得做</h3>
+        <p class="sub">我們算過：零車發生的當下，<b>97.6%</b> 的情況在 500 公尺內還有一站有車；
+          零位時也有 <b>96.8%</b> 找得到可還的站。
+          也就是說痛點不是「沒有替代站」，而是<b>使用者出發前不知道、到現場才發現</b>。
+          分流的物理條件幾乎總是成立，缺的是資訊與誘因。</p>
+        <p class="sub">官方友愛接力已經驗證過效果，但固定 5 元的問題是「該去的地方沒人去」。
+          改成跟著缺口浮動，並加上集點、連續天數與團體賽，才會有人每天回來。</p></div>
+      <div class="card" style="margin-top:14px"><h3>誠實說明</h3>
+        <p class="sub">推播：本頁的通知是<b>應用內示意</b>，不是手機背景推播。
+          Service Worker 目前只有快取，沒有 push 與 notificationclick，關掉分頁不會收到任何東西。<br>
+          獎勵：點數、優惠券、合作商家與排行榜對手都是<b>示範</b>，兌付尚未取得，不代表可實際兌換。<br>
+          回報：借不到不等於車壞掉。我們只問可觀察到的症狀，不要求使用者判斷根因，
+          也不會因為照片看不出異常就判定車輛正常。</p></div>
+    </div></div>`;
+}
+
+/* ============================================================ render */
+function render(){
+  const m=$('#main');
+  try{
+    m.innerHTML = S.view==='gov'?govView():S.view==='ops'?opsView():citizenView();
+  }catch(e){
+    m.innerHTML=`<div class="card"><h3>畫面渲染失敗</h3><p class="sub">${esc(e.message)}</p></div>`;
+    console.error(e); return;
+  }
+  bindMap();
+  $$('[data-sid]').forEach(el=>{
+    if(el.tagName==='CIRCLE') return;
+    el.addEventListener('click',ev=>{ if(ev.target.closest('[data-claim]'))return;
+      openStation(+el.dataset.sid);});
+  });
+  $$('[data-alt]').forEach(el=>el.onclick=()=>openStation(+el.dataset.alt));
+  const cd=$('#cdist'); if(cd) cd.onchange=()=>{S.cdist=cd.value;S.cq='';render();};
+  const cq=$('#cq'); if(cq){ cq.oninput=()=>{S.cq=cq.value;render();
+      const n=$('#cq'); if(n){n.focus();n.setSelectionRange(n.value.length,n.value.length);} }; }
+  $$('[data-pt]').forEach(b=>b.onclick=()=>{S.ptab=b.dataset.pt;render();
+    if(S.ptab==='wallet')loadWallet();});
+  $$('[data-claim]').forEach(b=>b.onclick=()=>claim(b));
+  if(S.view==='citizen'&&S.ptab==='wallet')loadWallet();
+}
+async function loadWallet(){
+  try{
+    const d=await api('/api/v2/rewards/leaderboard');
+    const wk=$('#wk'), lb=$('#lb');
+    if(wk)wk.innerHTML=`${esc(d.week_task.title)}　<b style="color:var(--ok)">${d.week_task.progress}／${d.week_task.target}</b>
+      <div style="margin-top:5px">完成可得 ${esc(d.week_task.bonus)}</div>`;
+    if(lb)lb.innerHTML=d.teams.map((t,i)=>`<div style="display:flex;justify-content:space-between;padding:4px 0">
+      <span>${i+1}. ${esc(t.team)} <span class="dim">${t.members} 人</span></span>
+      <span class="mono">${fmt(t.points)}</span></div>`).join('')
+      +`<div style="margin-top:7px;border-top:1px dashed var(--line);padding-top:7px">
+        我的貢獻 <b class="mono" style="color:var(--ok)">${d.me.points}</b> 點（${esc(d.me.team)}）</div>
+        <div class="dim" style="margin-top:6px">${esc(d.caveat)}</div>`;
+  }catch(e){}
+}
+async function claim(btn){
+  btn.disabled=true; const old=btn.textContent; btn.textContent='處理中…';
+  try{
+    const r=await api('/api/v2/rewards/claim',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({sid:+btn.dataset.claim,kind:btn.dataset.kind,
+        request_id:'q'+btn.dataset.claim+'-'+Date.now()})});
+    btn.textContent=`＋${r.gained} 點（×${r.multiplier}）`;
+    btn.style.background='linear-gradient(180deg,#f5c451,#e0aa2e)';
+    btn.style.color='#2a1e00';
+    S.rw=await api('/api/v2/rewards/board');
+  }catch(e){
+    btn.textContent = /409/.test(e.message)?'加碼已解除':'領取失敗';
+    btn.classList.add('ghost');
+    setTimeout(()=>{btn.textContent=old;btn.disabled=false;btn.classList.remove('ghost');},2600);
+  }
+}
+$$('nav.views button').forEach(b=>b.onclick=()=>{
+  S.view=b.dataset.v; S.sel=null;
+  $$('nav.views button').forEach(x=>x.classList.toggle('on',x===b));
+  if(S.view==='ops'&&!S.ops) api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
+  if(S.view==='citizen'&&!S.rw) api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
+  render(); scrollTo({top:0,behavior:'smooth'});
+});
+boot();
+</script>
+</body>
+</html>
