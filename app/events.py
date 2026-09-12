@@ -661,7 +661,11 @@ def equipment_board(state):
             unidentified += 1
         field = [h for h in tk.get("history", []) if h.get("status") in FIELD_CONFIRMED]
         ev = tk.get("evidence") or []
+        # C 主線的 evidence 種類：user_choice／user_text／image_observation／image_uncertainty。
+        # 觀察與「照片無法確認」要分開顯示——把不確定寫成觀察，等於把推測升格成證據。
         img = [e for e in ev if (e.get("kind") or e.get("type")) in ("image", "image_observation", "vision")]
+        img_unknown = [e for e in ev if (e.get("kind") or e.get("type")) == "image_uncertainty"]
+        user_ev = [e for e in ev if (e.get("kind") or e.get("type")) in ("user_choice", "user_text")]
         srcs = tk.get("sources") or []
         d = _divergence(tk)
         if d:
@@ -682,13 +686,22 @@ def equipment_board(state):
             "operator": {"assignee": tk.get("assignee"), "crew": tk.get("crew"), "eta": tk.get("eta")},
             "divergence": d,
             # 三欄分開，不合併
-            "user_report": {"provided": bool(tk.get("issue")), "text": tk.get("issue") or None,
+            "user_report": {"provided": bool(tk.get("issue") or user_ev), "text": tk.get("issue") or None,
                             "note": tk.get("note") or None,
+                            "items": [{"text": x.get("text"), "certainty": x.get("certainty"),
+                                       "kind": x.get("kind")} for x in user_ev],
                             "sources": [{"source": x.get("source"), "certainty": x.get("certainty"), "ts": x.get("ts")}
                                         for x in srcs]},
-            "ai_observation": ({"provided": True, "observations": img}
-                               if img else {"provided": False,
-                                            "why": "這張單的 evidence 沒有圖片辨識結果（C 主線的 report_image 尚未附上）"}),
+            "ai_observation": ({"provided": True,
+                                "observations": [{"text": x.get("text"), "model": x.get("model"),
+                                                  "certainty": x.get("certainty")} for x in img],
+                                "uncertainties": [x.get("text") for x in img_unknown],
+                                "model_source": next((x.get("model") for x in img if x.get("model")), None),
+                                "caveat": "照片只能看到可見現象。不能憑照片確認煞車功能或內部電子故障，"
+                                          "照片看不出異常也不等於車況安全。這一欄是推測，不是已確認原因。"}
+                               if (img or img_unknown) else
+                               {"provided": False,
+                                "why": "這張單沒有附圖，或圖片辨識沒有產出可用結果"}),
             "field_check": ({"provided": True, "steps": [{"ts": h["ts"], "label": h.get("label")} for h in field]}
                             if field else {"provided": False, "why": "現場尚未回報確認"}),
         })

@@ -466,8 +466,8 @@ function ovRender(){
       <div class="xs muted">營運負責：${r.operator.assignee||r.operator.crew||'<b style="color:var(--bad)">未指派</b>'}・ETA：${r.operator.eta?String(r.operator.eta).slice(11,16):'未提供'}</div>
       ${r.divergence.length?r.divergence.map(x=>`<div class="alert warn" style="margin-top:5px"><div class="m"><span class="badge warn">差異</span> ${x.label}</div><div class="xs muted">${x.why}</div></div>`).join(''):''}
       <div class="ev3">
-        <div class="c"><h5>① 用戶描述（自述）</h5>${r.user_report.provided?`<div class="xs">${r.user_report.text}</div>${r.user_report.note?`<div class="xs muted">${r.user_report.note}</div>`:''}${r.user_report.sources.map(x=>`<div class="xs muted">來源 ${x.source||'未標示'}・${x.certainty||''}</div>`).join('')}`:na()}</div>
-        <div class="c ai"><h5>② AI 圖片觀察（推測，非已確認）</h5>${r.ai_observation.provided?(r.ai_observation.observations||[]).map(x=>`<div class="xs">・${x.text||x.note||JSON.stringify(x)}</div>`).join(''):na(r.ai_observation.why)}</div>
+        <div class="c"><h5>① 用戶描述（自述）</h5>${r.user_report.provided?`${(r.user_report.items||[]).map(x=>`<div class="xs">・${x.text}${x.kind==='user_choice'?'<span class="xs muted">（按鈕選項）</span>':''}</div>`).join('')||`<div class="xs">${r.user_report.text||''}</div>`}${r.user_report.sources.map(x=>`<div class="xs muted">來源 ${x.source||'未標示'}・${x.certainty||''}</div>`).join('')}`:na()}</div>
+        <div class="c ai"><h5>② AI 圖片觀察（推測，非已確認）</h5>${r.ai_observation.provided?`${(r.ai_observation.observations||[]).map(x=>`<div class="xs">・${x.text}</div>`).join('')}${(r.ai_observation.uncertainties||[]).map(x=>`<div class="xs muted">照片無法確認：${x}</div>`).join('')}<div class="xs muted">模型：${r.ai_observation.model_source||'未標示'}</div><div class="xs muted">${r.ai_observation.caveat}</div>`:na(r.ai_observation.why)}</div>
         <div class="c field"><h5>③ 現場確認</h5>${r.field_check.provided?r.field_check.steps.map(x=>`<div class="xs">${String(x.ts).slice(11,16)} ${x.label}</div>`).join(''):na(r.field_check.why)}</div>
       </div></div>`).join(''):'<div class="mxnote">目前沒有未結案的設備工單。</div>'}
     <div class="mxnote">${eq.rule}<br>${eq.state_note}</div></div>`;
