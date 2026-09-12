@@ -1,13 +1,14 @@
 """B 段四項改動的針對性測試。"""
-import sys, json, urllib.request
+import os, sys, json, urllib.request
 import pandas as pd, numpy as np
 sys.path.insert(0, "/Users/chenhongfei/CC/ntpc-youbike/app")
 import planner as PL
 A = PL.ASSUMPTIONS
 FOCUS = ["板橋區", "新莊區", "土城區"]
 
+BASE = os.environ.get("YB_BASE", "http://127.0.0.1:8787")
 def get(u):
-    with urllib.request.urlopen("http://127.0.0.1:8787" + u, timeout=20) as r: return json.loads(r.read().decode())
+    with urllib.request.urlopen(BASE + u, timeout=20) as r: return json.loads(r.read().decode())
 pred = pd.DataFrame(get("/api/stations?adjusted=1")["stations"])
 for c in ("bikes", "spaces", "cap"): pred[c] = pd.to_numeric(pred[c], errors="coerce")
 now = pd.Timestamp(get("/api/state")["clock"]["ts"])

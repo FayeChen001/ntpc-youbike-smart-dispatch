@@ -1,6 +1,6 @@
 """I01 三端閉環：C 送回報 → B 收到同一張工單 → 派查 → 處理 → 驗收，三端狀態一致。"""
-import json, sys, urllib.request, urllib.error
-B = "http://127.0.0.1:8789"
+import json, os, sys, urllib.request, urllib.error
+B = os.environ.get("YB_BASE", "http://127.0.0.1:8789")   # 預設打測試機，不要對共用機亂跑
 def req(m, p, b=None):
     d = json.dumps(b).encode() if b is not None else None
     r = urllib.request.Request(B + p, data=d, method=m, headers={"content-type": "application/json"})

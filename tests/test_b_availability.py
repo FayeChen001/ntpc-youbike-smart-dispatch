@@ -1,6 +1,6 @@
 """服務可用性彙總：不重扣官方數字、不整站判不可用、不聲稱鎖車。需 8789 測試機。"""
-import json, sys, urllib.request, urllib.error
-B = "http://127.0.0.1:8789"
+import json, os, sys, urllib.request, urllib.error
+B = os.environ.get("YB_BASE", "http://127.0.0.1:8789")   # 預設打測試機，不要對共用機亂跑
 def req(m, p, b=None):
     d = json.dumps(b).encode() if b is not None else None
     r = urllib.request.Request(B + p, data=d, method=m, headers={"content-type": "application/json"})

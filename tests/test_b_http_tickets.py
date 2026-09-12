@@ -1,7 +1,7 @@
 """HTTP 整合測試：驗證兩個建單入口真的走同一個服務。跑在臨時的 8789，不動共用的 8787。
 預期值由契約手算，不採信實作輸出。"""
-import json, sys, urllib.request, urllib.error
-B = "http://127.0.0.1:8789"
+import json, os, sys, urllib.request, urllib.error
+B = os.environ.get("YB_BASE", "http://127.0.0.1:8789")   # 預設打測試機，不要對共用機亂跑
 def req(method, path, body=None):
     d = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(B + path, data=d, method=method,

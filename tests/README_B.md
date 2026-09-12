@@ -15,5 +15,13 @@ python3 tests/test_b_http_cycle.py     # 20 項：規劃週期、任務動作、
 python3 tests/test_b_closed_loop.py    # 19 項：C 回報 → B 派查 → 處理 → 驗收
 ```
 
-注意：HTTP 套件會呼叫 `/api/reset`，跑完會清掉回放狀態。**不要對共用的 8787 跑。**
+要對別的 port 跑，設 `YB_BASE`：
+```bash
+YB_BASE=http://127.0.0.1:8787 python3 tests/test_b_http_tickets.py
+```
+
+注意：HTTP 套件會呼叫 `/api/reset`，跑完會清掉回放狀態（告警、任務、意向、工單、獎勵）。
+**對共用的 8787 跑之前一定要先在 chat 講**；跑完請用
+`curl -X POST http://127.0.0.1:8787/api/scenario/commute_am -d '{}' -H 'content-type: application/json'`
+把情境與任務復原。
 `test_b_http_cycle.py` 會自己把時鐘推一步讓伺服器重排任務，不依賴前一支測試留下的狀態。
