@@ -1136,15 +1136,27 @@ def _c_find(rid):
     return None
 
 
+ASSET_STATE_LABEL = {"suspect": "待現場確認", "confirmed_faulty": "已確認故障", "repaired": "已處理",
+                     "verified_ok": "已驗收", "not_applicable": "不適用"}
+SERVICE_STATE_LABEL = {"unknown": "未知", "degraded": "服務受影響", "restored": "服務已恢復"}
+
 def _c_ticket_view(tid):
-    """工單狀態由 B 主線的 STATE['tickets'] 為準，C 只讀不改。"""
+    """工單由 B 主線維護，C 只讀不改。四種狀態分開顯示，不混成一個。"""
     if not tid: return None
     for tk in STATE["tickets"]:
-        if tk["id"] == tid:
-            return {"id": tk["id"], "status": tk["status"], "status_label": TICKET_LABEL.get(tk["status"], tk["status"]),
-                    "asset_type": tk.get("asset_type", "unknown"), "assignee": tk.get("assignee"),
-                    "reports": tk.get("reports", 1), "dedup_key": tk.get("dedup_key"),
-                    "history": tk.get("history", [])[-4:]}
+        if tk["id"] != tid: continue
+        sm = tk.get("saddle_marker") or {}
+        return {"id": tk["id"], "version": tk.get("version", 1),
+                "status": tk["status"], "status_label": TK.FLOW_LABEL.get(tk["status"], tk["status"]),
+                "asset_state": tk.get("asset_state"), "asset_state_label": ASSET_STATE_LABEL.get(tk.get("asset_state")),
+                "service_state": tk.get("service_state"), "service_state_label": SERVICE_STATE_LABEL.get(tk.get("service_state")),
+                "saddle_marker": {"status": sm.get("status", "unknown"), "source": sm.get("source"), "ts": sm.get("ts")},
+                "asset_type": tk.get("asset_type", "unknown"), "assignee": tk.get("assignee"),
+                "crew": tk.get("crew"), "eta": tk.get("eta"),
+                "reports": tk.get("reports", 1), "report_ids": tk.get("report_ids", []),
+                "dedup_key": (TK.ticket_key(tk)[0] if hasattr(TK, "ticket_key") else tk.get("dedup_key")),
+                "history": tk.get("history", [])[-5:],
+                "note": "工單處理、設備驗收、服務恢復、坐墊標記是四件事，不會互相代表。"}
     return {"id": tid, "status": "unknown", "status_label": "工單狀態未知（可能已被重置）"}
 
 
@@ -1292,13 +1304,24 @@ def api_c_report(body: dict):
         if rep["free_text"]: note_bits.append(f"補充：{rep['free_text']}")
         if img and img.get("observations"): note_bits.append("照片觀察：" + "；".join(img["observations"][:3]))
         if img and img.get("uncertainties"): note_bits.append("照片無法確認：" + "；".join(img["uncertainties"][:2]))
+        evidence = [{"kind": "user_choice", "text": p["label"], "certainty": "stated"}]
+        if rep["free_text"]: evidence.append({"kind": "user_text", "text": rep["free_text"], "certainty": "stated"})
+        for o in (img or {}).get("observations", [])[:3]:
+            evidence.append({"kind": "image_observation", "text": o, "certainty": "observed",
+                             "model": (img or {}).get("model_source")})
+        for u in (img or {}).get("uncertainties", [])[:2]:
+            evidence.append({"kind": "image_uncertainty", "text": u, "certainty": "unknown"})
         tk = api_ops_ticket({"sid": sid, "issue": issue, "bike_no": rep["bike_no"] or "", "dock_id": dock_id or "",
                              "error_code": rep["error_code"] or "", "asset_type": rep["triage"]["suspect"],
-                             "source": "user_report", "note": "｜".join(note_bits)})
+                             "source": "user_report", "note": "｜".join(note_bits),
+                             "request_id": rep["request_id"], "report_id": rep["id"],
+                             "evidence": evidence, "certainty": "stated"})
         if isinstance(tk, dict) and tk.get("id"):
-            rep["ticket_id"] = tk["id"]; rep["accepted"] = True; rep["status"] = "routed_repair"
+            rep["ticket_id"] = tk["id"]; rep["ticket_action"] = tk.get("action")
+            rep["accepted"] = True; rep["status"] = "routed_repair"
+            act = {"created": "", "merged": "（合併既有工單）", "idempotent": "（同一次送出，未重建）"}.get(tk.get("action"), "")
             rep["history"].append({"ts": iso(now_ts()), "status": "routed_repair",
-                                   "label": f"{C_STATUS_LABEL['routed_repair']} {tk['id']}" + ("（合併既有工單）" if tk.get("merged") else "")})
+                                   "label": f"{C_STATUS_LABEL['routed_repair']} {tk['id']}{act}"})
         else:
             rep["status"] = "pending_triage"
             rep["history"].append({"ts": iso(now_ts()), "status": "pending_triage", "label": "建單未成功，保留為待診斷"})
@@ -1349,10 +1372,21 @@ def api_c_saddle(rid: str, body: dict):
     CREPORTS["saddle"].append({"report_id": rid, "ticket_id": r.get("ticket_id"), "sid": r["sid"],
                                "bike_no": r.get("bike_no"), "saddle_marker_status": st,
                                "source": "user_report", "ts": iso(now_ts())})
+    # 依 B 的契約 b-1 寫進工單的附加欄位。工單狀態不會因此改變。
+    wrote = None
+    if r.get("ticket_id"):
+        before = _c_ticket_view(r["ticket_id"]) or {}
+        res = api_ops_ticket_saddle(r["ticket_id"], {"status": st, "source": "user_report"})
+        after = _c_ticket_view(r["ticket_id"]) or {}
+        wrote = {"ok": isinstance(res, dict) and not res.get("error"),
+                 "status_before": before.get("status"), "status_after": after.get("status"),
+                 "status_unchanged": before.get("status") == after.get("status"),
+                 "asset_state_unchanged": before.get("asset_state") == after.get("asset_state"),
+                 "ticket_version": after.get("version")}
     return {"report_id": rid, "saddle_marker_status": st, "ticket_id": r.get("ticket_id"),
-            "ticket_unchanged": True,
-            "note": "坐墊標記只是現場提醒，工單狀態不受影響，也不代表車輛已修好或已驗收。",
-            "pending_contract": "B 主線尚未在工單上提供 saddle_marker_status 欄位；在那之前請讀 /api/c/saddle_markers。"}
+            "ticket_unchanged": bool(wrote and wrote["status_unchanged"]) if wrote else True,
+            "written_to_ticket": wrote,
+            "note": "坐墊標記只是現場提醒，工單狀態不受影響，也不代表車輛已修好或已驗收。"}
 
 
 @app.get("/api/c/saddle_markers")
@@ -1456,17 +1490,26 @@ def api_ledger(level: str = None, district: str = None):
     items = d["events"]
     if level: items = [a for a in items if a.get("level") == level]
     if district: items = [a for a in items if a.get("district") == district]
+    # 服務可用性直接呼叫 B 主線的同一支實作，不在政府端另算一套
+    av = api_ops_availability(only_flagged=1)
+    if isinstance(d.get("overview"), dict):
+        d["overview"]["availability"] = {"stations": av["stations"][:20], "count": av["count"],
+                                         "semantics": av["semantics"],
+                                         "source": "GET /api/ops/availability（B 主線，唯讀）"}
     return {**d, "events": items, "owners": EV.OWNERS, "causes": EV.CAUSES}
 
 
 @app.get("/api/ledger/{aid}")
 def api_ledger_get(aid: str):
     EV.refresh(STATE, PRED, current_pred(), now_ts(), iso)
-    for a in STATE["alerts"].values():
-        if a["id"] == aid: return a
-    for a in STATE["alert_log"]:
-        if a["id"] == aid: return a
-    return JSONResponse({"error": "not found"}, 404)
+    ev = _find_event(aid)
+    if ev is None: return JSONResponse({"error": "not found"}, 404)
+    out = dict(ev)
+    if ev.get("sid") is not None and ev["sid"] >= 0:
+        av = api_ops_availability(sid=int(ev["sid"]))
+        out["availability"] = (av["stations"][0] if av["stations"] else None)
+        out["availability_semantics"] = av["semantics"]
+    return out
 
 
 def _find_event(aid):

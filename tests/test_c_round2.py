@@ -1,7 +1,10 @@
 """C 主線第二輪驗收測試。預期值由人工約束推導，不採用實作輸出當答案。"""
 import json, sys, urllib.request, urllib.parse, uuid
 
-B = "http://127.0.0.1:8791"
+import os
+B = os.environ.get("YB_BASE", "http://127.0.0.1:8791")
+# GUARD：本測試會呼叫 /api/reset，會清掉三端共用的回放狀態，禁止打共用的 8787。
+if ":8787" in B: sys.exit("拒絕在共用的 8787 上執行：會清掉 A/B/C 的回放狀態。請改用 YB_BASE 指定測試埠。")
 PASS, FAIL = [], []
 
 def call(method, path, body=None, raw=False):

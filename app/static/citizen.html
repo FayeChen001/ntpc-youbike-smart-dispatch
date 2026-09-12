@@ -639,7 +639,7 @@ function renderAccepted(r){
                              : `<button class="btn" style="margin-top:12px" onclick="renderTrack('${r.id}')">追蹤處理進度</button>`;
   openSheet(`<h3>已受理，編號 ${r.id}</h3><p>${r.problem_label}　${STAGE_TXT[r.stage]||''}${r.idempotent?'　（同一次送出，沒有重複建單）':''}</p>
     ${g.safety_stop?'<div class="safety"><span>⚠️</span><div>請先停止騎乘，把車停在安全的地方。不要騎故障車去送修。</div></div>':''}
-    ${tk&&tk.id?`<div class="guide"><b>維修工單 ${tk.id}</b>　${tk.status_label}<br>
+    ${tk&&tk.id?`<div class="guide"><b>維修工單 ${tk.id}</b>　${tk.status_label}${r.ticket_action==='merged'?'（併入既有工單）':r.ticket_action==='idempotent'?'（同一次送出）':''}<br>
         <span class="xs muted">已進入微笑單車端的處理清單。建單不等於已確認根因，也不代表這台車已被停租。</span></div>`
       :`<div class="guide"><b>已受理，尚未指派維修</b><br><span class="xs muted">${r.triage.text}。${r.triage.route}。</span></div>`}
     ${g.lines&&g.lines.length?`<div class="guide">${g.lines.map(l=>`<div>· ${l}</div>`).join('')}</div>`:''}
@@ -684,11 +684,16 @@ async function renderTrack(rid){
   S.lastReport=r; const tk=r.ticket, sd=r.saddle||{};
   openSheet(`<h3>處理進度　${r.id}</h3><p>${r.problem_label}　${r.station}</p>
     <div class="tline">${(r.history||[]).map(h=>`<div><b>${h.label}</b><br><span style="color:var(--sub);font-size:11px">${h.ts}</span></div>`).join('')}</div>
-    ${tk&&tk.id?`<div class="guide" style="margin-top:10px"><b>工單 ${tk.id}</b>　${tk.status_label}
-      ${tk.assignee?`<br><span class="xs muted">處理單位：${tk.assignee}</span>`:''}
-      ${tk.reports>1?`<br><span class="xs muted">已合併 ${tk.reports} 次回報（同一台車或同一個柱）</span>`:''}
-      <br><span class="xs muted">狀態由微笑單車端維護，本頁不會自行計時或宣稱已修好。</span></div>`:''}
-    ${sd.marker_status&&sd.marker_status!=='unknown'?`<div class="hint" style="padding:6px 0 0">坐墊標記：${{done:'已完成（現場提醒，非維修確認）',skipped:'已略過（不影響工單）',not_applicable:'不適用'}[sd.marker_status]}</div>`:''}
+    ${tk&&tk.id?`<div class="guide" style="margin-top:10px"><b>工單 ${tk.id}</b>　<span class="xs muted">版本 ${tk.version}</span>
+      <table style="margin-top:6px"><tbody>
+        <tr><td style="width:78px;color:var(--sub)">處理進度</td><td><b>${tk.status_label}</b></td></tr>
+        <tr><td style="color:var(--sub)">設備驗收</td><td>${tk.asset_state_label||'—'}</td></tr>
+        <tr><td style="color:var(--sub)">站點服務</td><td>${tk.service_state_label||'—'}</td></tr>
+        <tr><td style="color:var(--sub)">坐墊標記</td><td>${{done:'已反轉（現場提醒）',skipped:'已略過',not_applicable:'不適用',unknown:'未標記'}[(tk.saddle_marker||{}).status||'unknown']}</td></tr>
+      </tbody></table>
+      ${tk.crew||tk.eta?`<div class="xs muted" style="margin-top:4px">${tk.crew?'班組：'+tk.crew:''}${tk.eta?'　預計 '+tk.eta:''}</div>`:''}
+      ${tk.reports>1?`<div class="xs muted">已合併 ${tk.reports} 次回報（同一台車或同一個柱）</div>`:''}
+      <div class="xs muted" style="margin-top:4px">${tk.note||''}狀態由微笑單車端維護，本頁不會自行計時或宣稱已修好。</div></div>`:''}
     <button class="btn sec" style="margin-top:12px" onclick="renderTrack('${rid}')">重新整理</button>
     <button class="btn ghost" onclick="leaveReport('${rid}')">關閉</button>`);
 }

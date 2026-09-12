@@ -1,6 +1,6 @@
 # HANDOFF_C：用戶端第二輪交付
 
-基準 `a1c6dbb`。本輪只動 C 歸屬檔案與 `app/server.py` 檔尾的 C 區塊。測試伺服器用 8791，**沒有重啟共用的 8787**。
+基準 `a1c6dbb`，第二次更新基準 `6b7eba5`（已接上 B 的契約 `b-1`）。本輪只動 C 歸屬檔案與 `app/server.py` 的 C 區塊。測試伺服器用 8791；共用的 8787 由使用者重啟，**我沒有自行重啟**。
 
 ## 一、改了哪些檔案
 
@@ -125,3 +125,57 @@ python3 tests/test_c_round2.py
 - SSE 斷線重連（I03）只驗證了 GET 補狀態與無副作用，**沒有實際切斷連線重現**。
 - 真機觸控與相機、iOS 主畫面安裝未驗證。
 - 模型連線逾時未以真實斷網重現。
+
+
+---
+
+# 第二段（8787 重啟後）：接上 B 契約 b-1、SSE 實測、狀態分離
+
+## 十二、已接上 B 的共同契約
+
+B 發布 `GET /api/ops/contract`（`contract_version: b-1`）之後，C 做了三件接線：
+
+1. **建單帶齊契約欄位**：`request_id`、`report_id`、`evidence[]`、`certainty`、`asset_type`、`dock_id`。
+   按鈕選擇送 `certainty: stated`，照片觀察送 `observed`，照片無法確認的事送 `unknown`。
+   **AI 影像推測不會被寫成已確認原因。**
+2. **坐墊標記直接寫入工單**：改呼叫 `POST /api/ops/tickets/{tid}/saddle`，本地保留鏡像。
+   `/api/c/saddle_markers` 仍可讀，作為 B 唯讀橋接的來源。
+3. **四種狀態分開顯示**：工單處理進度、設備驗收、站點服務、坐墊標記各自一列，不混用同一個欄位。
+
+## 十三、C → B 閉環實測
+
+| 步驟 | 結果 |
+|---|---|
+| C 建報 `C001`（鏈條異常，車號 YB2-77001，柱號 11） | 工單 `R001`，`action: created` |
+| 同 `request_id` 重送 | `idempotent: true`，同一 report、同一 ticket |
+| C 標記坐墊 `done` | 工單狀態 `reported → reported`（未變）、`asset_state` 未變、`version 1 → 2` |
+| 從 B 端讀 `GET /api/ops/tickets/R001` | `saddle_marker: {status: done, source: user_report}`、`report_ids: ["C001"]` |
+| B 推進到 `accepted` 再到 `on_site` | C 追蹤頁顯示「處理進度 現場檢查中／設備驗收 待現場確認／站點服務 未知／坐墊 已反轉」 |
+
+**修復不等於驗收**這一點在畫面上成立：工單已到現場檢查中，設備驗收仍是「待現場確認」。
+
+## 十四、SSE 斷線重連實測（I03）
+
+新增 `tests/test_c_sse.py`。實際開 SSE 連線、收到事件後 `close()` 強制斷線，斷線期間用 API 建立回報，再重連。
+
+| 編號 | 項目 | 結果 |
+|---|---|---|
+| I03-0 | SSE 可建立連線並收到事件 | 通過 |
+| I03a | 重連後 GET 補回斷線期間的事件 | 通過，`C001` 出現在清單 |
+| I03b | 補回的資料含工單與權威狀態 | 通過，`ticket=R001 status=已受理` |
+| I03c | 重連後重送同 `request_id` 不重複建單 | 通過，工單數 1 → 1 |
+| I03d | 重連後能收到斷線後發生的新事件 | 通過，事件序列 `["hello","notify"]` |
+
+前端 `connectEvents` 在連線失敗兩次後會自動改為每四秒輪詢 `/api/state`，這段在上一輪已實作，本輪未另外以斷網重現。
+
+## 十五、測試防呆
+
+`tests/test_c_round2.py` 與 `tests/test_c_sse.py` 會呼叫 `POST /api/reset`，那會清掉三端共用的回放狀態。
+兩個檔案都加了防呆：`YB_BASE` 指向 `:8787` 直接中止並說明原因。已實測會拒絕執行。
+
+## 十六、第二段之後仍未驗證
+
+- 三端同一事件的完整整合驗收（I01）仍需 A、B 同時在場跑一次。C 這側已提供 `report_id ↔ ticket_id` 對應與四狀態顯示。
+- 真機觸控、相機 `capture="environment"`、iOS 加入主畫面仍未實機驗證。
+- 視覺模型的連線層逾時未以真實斷網重現。
+- 前端輪詢降級未以真實斷網重現。
