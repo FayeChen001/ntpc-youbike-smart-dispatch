@@ -11,7 +11,8 @@ pipeline/02_train_eval.py  1–4 月訓練、5 月驗證、6 月一次測試；�
 app/predict.py             全站預測服務（模型缺尺度時退回基準，並標示來源）
 app/planner.py             調度排程（缺口、貪婪組趟、最遲出發、來不及判定）與民眾三方案；假設集中在 ASSUMPTIONS
 app/llm.py                 Amazon Bedrock Converse（Claude）；失敗退回模板並標示
-app/server.py              FastAPI：回放時鐘、SSE 即時事件、告警規則、任務、意向、工單、獎勵、情境、即時 API、活動 API
+app/metrics.py             驗收指標：由觀測快照算服務中斷事件（下界／上界）、告警門檻取捨、流程時效
+app/server.py              FastAPI：回放時鐘、SSE 即時事件、告警規則、任務、意向、工單、獎勵、情境、即時 API、活動 API、驗收指標 API
 app/static/                stage.html（舞台）gov.html（政府端）ops.html（微笑單車調度端）citizen.html（民眾端，手機框）
 data/processed/            obs.parquet、stations.parquet、neighbors_800m.parquet（亦上傳 S3）
 models/                    hgb_h{30,60,120,180}_{reg_bikes,reg_spaces,cls_empty,cls_full}.joblib、context.npz
@@ -44,6 +45,7 @@ AWS 憑證由使用者自行以 `aws configure set --profile hackathon ...` 寫�
 | 三方案總時間（OSRM 公開路網距離換算）與風險罰時 | 活動出席人數（情境參數，非實到人數） |
 | 意向修正（×0.7 轉換率，不重複計算歷史需求） | 調度中心／跨區補給整車（倉儲庫存未提供） |
 | 新北即時 API 現況、文化部活動 API | — |
+| 服務中斷事件數、超標站分鐘、恢復時間上下界、告警門檻取捨 | 流程各段耗時（回放時鐘＋模擬派工狀態） |
 
 ## 不能宣稱的事
 快照空滿率不是失敗旅次；候選鄰站存在不是到站成功率；回放與模擬不是實測成效；雙零與容量矛盾未判定根因；學生不是可保證到位的人力；派車、借還介接、商家合作尚未取得。

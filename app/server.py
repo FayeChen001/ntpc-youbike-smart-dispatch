@@ -16,6 +16,7 @@ import planner as PL
 import llm as LLM
 import weather as WX
 import awsloc as AWSLOC
+import metrics as MX
 
 if not (os.environ.get("AWS_PROFILE") or "").strip():
     os.environ.pop("AWS_PROFILE", None); os.environ.pop("AWS_DEFAULT_PROFILE", None)
@@ -546,6 +547,7 @@ def api_alert_action(aid: str, action: str, body: dict = None):
             elif action == "resolve": a["status"] = "resolved"; a["resolved"] = iso(now_ts()); a["resolve_reason"] = (body or {}).get("reason", "人工結案")
             elif action == "dispatch":
                 a["status"] = "acked"; a["acked"] = a["acked"] or iso(now_ts()); a["route"] = "調度端"
+                a["dispatched"] = a.get("dispatched") or iso(now_ts())
                 notify("ops", f"政府端轉派｜{a['station']}", a["message"], "warn", {"alert_id": aid, "sid": a["sid"]})
             ddb_put("yb_alerts", a); broadcast("alert", a); return a
     return JSONResponse({"error": "not found"}, 404)
@@ -1032,3 +1034,25 @@ def api_model():
 
 @app.post("/api/model/reload")
 def api_model_reload(): PRED._cache.clear(); return {"model_horizons": PRED.reload_models()}
+
+# ------------------------------------------------------------------ 驗收指標
+MET = MX.ServiceMetrics(PRED)
+
+@app.get("/api/metrics/service")
+def api_metrics_service(window: str = "day", kind: str = "empty"):
+    """服務中斷事件：由回放觀測快照真實計算，附觀測下界與可能上界。"""
+    d = MET.compute(window, STATE["clock"]["t_idx"], kind)
+    return {**d, "windows": MX.WINDOWS, "now": iso(now_ts())}
+
+@app.get("/api/metrics/threshold")
+def api_metrics_threshold(horizon: int = 120, kind: str = "empty", duty: float = None):
+    path = os.path.join(ROOT, "reports", "model_eval.json")
+    if not os.path.exists(path): return {"error": "模型評估尚未產出"}
+    rep = json.load(open(path))
+    r = MX.threshold_tradeoff(rep, horizon, kind, duty)
+    return r or {"error": f"沒有 {horizon} 分鐘尺度的評估結果"}
+
+@app.get("/api/metrics/flow")
+def api_metrics_flow():
+    return {**MX.flow_metrics(STATE["alert_log"], STATE["tasks"], iso(now_ts())),
+            "not_measurable": MX.NOT_MEASURABLE, "assumptions": PL.ASSUMPTIONS, "now": iso(now_ts())}
