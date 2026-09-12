@@ -15,6 +15,14 @@ main{flex:1;display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,40
 .alert select.owner{font:inherit;font-size:11px;padding:2px 4px;border:1px solid var(--line);border-radius:6px;max-width:96px}
 .tl{border-left:2px solid var(--line);padding:3px 0 3px 8px;margin-left:3px}
 .tl .pill{font-size:10px}
+.dcard{border:1px solid #d6c9f5;background:#faf8ff;border-radius:10px;padding:9px 10px;margin-top:10px}
+.dcard h4{margin:0 0 6px;font-size:12px;display:flex;align-items:center;gap:6px}
+.opt{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 9px;margin-bottom:6px}
+.opt.sel{border-color:var(--brand);box-shadow:0 0 0 2px #cfe0f7}
+.opt .ol{font-size:12px;font-weight:600}
+.opt .od{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.6}
+.opt.na{background:#f6f8fb;border-style:dashed}
+.dec{background:#eef7f1;border:1px solid #bfe6cf;border-radius:8px;padding:7px 9px;font-size:11px;line-height:1.7;margin-top:6px}
 /* 驗收指標面板 */
 .mx{position:fixed;inset:0;background:var(--bg);z-index:1200;display:none;flex-direction:column}
 .mx.open{display:flex}
@@ -165,6 +173,7 @@ async function openEvent(id){
     <tr><td>已確認不可用</td><td class="mono">${a.availability.known_unusable_bikes} 車${a.availability.known_unusable_docks?` / ${a.availability.known_unusable_docks} 柱`:''}${a.availability.known_unusable_bike_nos.length?`<div class="xs muted">${a.availability.known_unusable_bike_nos.join('、')}</div>`:''}</td></tr>
     <tr><td>疑似異常</td><td class="mono">${a.availability.suspected_tickets.length}${a.availability.suspected_tickets.length?`<div class="xs muted">${a.availability.suspected_tickets.join('、')}</div>`:''}</td></tr></table>
     <div class="xs muted">${a.availability_semantics.official_bikes}。${a.availability_semantics.known_unusable_bikes}。</div></div>`:''}
+  ${a.decision_options?dcard(a):''}
   <div style="margin-top:10px"><div class="row between"><b class="small">處理狀態</b><button class="small" onclick="addNote('${a.id}')">加處理紀錄</button></div>
     <table><tr><td>負責人</td><td>${a.owner||'<b style="color:var(--bad)">未指派</b>'}</td></tr>
     <tr><td>現行 ETA</td><td>${a.eta?`${a.eta.slice(11,16)}<div class="xs muted">${a.eta_source||''}</div>`:`尚無恢復計畫<div class="xs muted">這一站需要的是${a.cover_action==='pickup'?'運出騰位（pickup）':'送車補給（dropoff）'}</div>`}</td></tr>
@@ -340,6 +349,63 @@ function mxRender(){
 }
 ['mx-window','mx-kind','mx-horizon','mx-duty'].forEach(id=>$(id).addEventListener('change', mxLoad));
 document.addEventListener('keydown', e=>{ if(e.key!=='Escape') return; if($('phone').classList.contains('open')) return phoneClose(); if($('ov').classList.contains('open')) return ovClose(); if(MX.open) mxClose(); });
+
+/* ---------------------------------------------- 主管決策卡 */
+let DSEL = {};   // event_id -> option_id
+function dcard(a){
+  const o=a.decision_options, cur=(a.decisions||[]).filter(d=>!d.superseded).slice(-1)[0];
+  const obs=a.observed||{}, av=a.availability, c=a.cause||{}, al=a.alt||{};
+  const sel = DSEL[a.id] || (o.options[0]||{}).id || '';
+  return `<div class="dcard"><h4>主管決策卡 <span class="badge sim">決策留痕</span>
+      <span class="xs muted">事件版本 v${a.version}</span></h4>
+    <table>
+      <tr><td>站名</td><td><b>${a.station}</b> <span class="xs muted">${a.district}</span></td></tr>
+      <tr><td>觀測到多久</td><td class="mono">零值快照跨度 ${obs.span_min??'—'} 分（可能上界 ${obs.upper_min==null?'未知':obs.upper_min+' 分'}）</td></tr>
+      <tr><td>最後資料時間</td><td class="mono">${obs.last_data_ts?obs.last_data_ts.slice(5,16):'未提供'}</td></tr>
+      <tr><td>服務影響</td><td>500 m 內可用替代站 <b>${al.n??'—'}</b>${a.cluster?`・站群 ${a.cluster_n} 站同時無法服務`:''}${av?`・官方可借 ${av.official_bikes??'未提供'}／已確認不可用 ${av.known_unusable_bikes}`:''}
+        <div class="xs muted">替代站是候選資源存在，不等於使用者走得到。</div></td></tr>
+      <tr><td>原因</td><td>${c.confident?`<b>${c.label}</b>（有證據）`:`<b>待查假說：${c.label}</b> <span class="badge grey">證據不足</span>`}
+        <div class="xs muted">${(c.evidence||[]).map(e=>e.text).join('；')}</div></td></tr>
+      <tr><td>目前負責人</td><td>${a.owner||'<b style="color:var(--bad)">未指派</b>'}</td></tr>
+      <tr><td>現行 ETA</td><td>${a.eta?a.eta.slice(11,16)+` <span class="xs muted">${a.eta_source||''}</span>`:'尚無恢復計畫'}</td></tr>
+    </table>
+    ${cur?`<div class="dec"><b>已有決策</b>：${cur.option_label}（${cur.option_source}）<br>
+      理由：${cur.rationale}<br>
+      <span class="xs muted">${cur.ts} 由 ${cur.actor} 決定・事件版本 v${cur.event_version_at_decision}${cur.task_id?`・任務 ${cur.task_id} ${cur.task_version==null?'（營運端未提供版本）':'v'+cur.task_version}`:''}</span></div>`:''}
+    <div style="margin-top:8px"><b class="small">方案（由營運端提供）</b>
+      ${o.options.map(x=>`<div class="opt ${x.id===sel?'sel':''}" onclick="DSEL['${a.id}']='${x.id}';openEvent('${a.id}')">
+        <div class="ol">${x.label} <span class="xs muted">${x.source}</span></div>
+        <div class="od">抵達時間：${x.eta?x.eta.slice(11,16):`<b>未提供</b>${x.eta_missing_reason?`（${x.eta_missing_reason}）`:''}`}
+          ${x.task_id?`・任務 ${x.task_id} ${x.task_version==null?'（版本未提供）':'v'+x.task_version}（${x.task_status}）`:''}${x.cycle?`・cycle ${x.cycle}`:''}
+          ${x.on_time===false?'・<b style="color:var(--warn)">這張任務有站點來不及</b>':''}
+          <br>代價／說明：${x.cost||'營運端未說明'}
+          ${x.affected&&x.affected.length?`<br>同趟受影響站點：${x.affected.join('、')}`:''}</div></div>`).join('')}
+      ${o.unavailable.map(x=>`<div class="opt na"><div class="ol">${x.label} <span class="badge grey">未提供</span></div>
+        <div class="od">需要${x.need}</div></div>`).join('')}
+    </div>
+    <div class="xs muted" style="margin-top:6px">${o.source_rule}${o.contract_gap?`<br><b>契約缺口</b>：${o.contract_gap}`:''}</div>
+    ${o.options.length?`<div style="margin-top:8px">
+      <input id="drat" placeholder="決策理由（必填，會連同版本與時間留存）" style="width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px">
+      <div class="row" style="margin-top:6px">
+        <button class="small primary" onclick="decide('${a.id}',${a.version},false)">送出決策</button>
+        ${cur?`<button class="small" onclick="decide('${a.id}',${a.version},true)">取代現有決策</button>`:''}
+        <span class="xs muted">送出前會以事件版本 v${a.version} 檢查，版本過期會擋下來要你重讀。</span></div></div>`
+      :'<div class="xs muted" style="margin-top:8px">營運端還沒有任何方案，這張卡目前只能做追蹤與協調，不能決策。</div>'}
+  </div>`;
+}
+async function decide(id, version, supersede){
+  const o = (S.ledger.events.find(x=>x.id===id)||{}).decision_options;
+  const optId = DSEL[id] || ((o&&o.options[0])||{}).id;
+  const opt = (o.options||[]).find(x=>x.id===optId);
+  const rat = ($('drat')||{}).value||'';
+  if(!opt) return alert('沒有可選的方案');
+  if(!rat.trim()) return alert('請填決策理由');
+  const r = await fetch(`/api/ledger/${id}/action`,{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({action:'decide', option:opt, note:rat, version, supersede, request_id:'D-'+id+'-'+Date.now()})});
+  const d = await r.json();
+  if(r.status===409){ alert((d.message||'版本或決策衝突')+'\n\n畫面會重新載入最新狀態。'); }
+  await loadAlerts(); openEvent(id);
+}
 
 /* ---------------------------------------------- 全域儀表板 */
 function ovOpen(){ $('ov').classList.add('open'); ovRender(); }

@@ -295,6 +295,11 @@ def refresh(state, pred, pred_df, now_ts, iso):
             a["timeline"].append({"ts": iso(now_ts), "action": "cluster", "actor": "系統",
                                   "note": (f"站群同時失效：{a['station']} 500 公尺內另有 {n - 1} 站同時是 P0／P1，整片借不到"
                                            if n else "站群已不再同時失效")})
+        # 決策方案掛在事件上（只有需要決策的級別才算），端點原樣回傳，不必改共用的 server.py
+        if lvl in ("P0", "P1"):
+            a["decision_options"] = decision_options(state, a)
+        else:
+            a.pop("decision_options", None)
         if prev is None:
             a["timeline"].append({"ts": iso(now_ts), "action": "level", "actor": "系統",
                                   "note": f"分級 {LEVELS[lvl]['label']}" + (f"：{a['escalated']}" if a.get("escalated") else "")})
@@ -353,6 +358,7 @@ ACTIONS = {
     "track": {"label": "列入追蹤", "sets_owner": False},
     "coordinate": {"label": "跨區協調", "sets_owner": False},
     "note": {"label": "處理紀錄", "sets_owner": False},
+    "decide": {"label": "主管決策", "sets_owner": False},
 }
 
 
@@ -366,7 +372,8 @@ def _summary(ev):
     return {"event_id": ev["id"], "version": ev["version"], "level": ev.get("level"),
             "owner": ev.get("owner"), "status": ev.get("status"),
             "acked": ev.get("acked"), "assigned_at": ev.get("assigned_at"),
-            "ops_requested_at": ev.get("ops_requested_at"), "tracked": bool(ev.get("tracked"))}
+            "ops_requested_at": ev.get("ops_requested_at"), "tracked": bool(ev.get("tracked")),
+            "decision": active_decision(ev)}
 
 
 def apply_action(ev, action, payload, now_ts, iso, actor="政府端"):
@@ -436,6 +443,35 @@ def apply_action(ev, action, payload, now_ts, iso, actor="政府端"):
         tl.append({"ts": ts, "action": "coordinate", "actor": actor,
                    "note": (f"跨區協調（{'、'.join(targets) or '未指定行政區'}）" + (f"：{note}" if note else "")
                             + "。這是協調紀錄，不是派車任務。")})
+    elif action == "decide":
+        opt = payload.get("option") or {}
+        if not opt.get("id"):
+            return {"error": "option_required", "message": "要帶 option（從 decision_options 取得），不接受自由輸入的方案"}, 400
+        if not note:
+            return {"error": "rationale_required", "message": "決策必須寫理由，會連同版本與時間一起留存"}, 400
+        prev = active_decision(ev)
+        if prev and not payload.get("supersede"):
+            return {"error": "decision_exists",
+                    "message": "這個事件已經有有效決策，重複決策會造成雙重派工。要改決策請帶 supersede 並說明原因。",
+                    "existing": prev}, 409
+        if prev:
+            prev["superseded"] = True
+            prev["superseded_at"] = ts
+            prev["superseded_reason"] = note
+        rec = {"ts": ts, "actor": actor, "option_id": opt.get("id"), "option_label": opt.get("label"),
+               "option_source": opt.get("source"), "task_id": opt.get("task_id"),
+               "task_version": opt.get("task_version"), "task_status": opt.get("task_status"),
+               "eta": opt.get("eta"), "rationale": note,
+               "event_version_at_decision": ev["version"], "request_id": req, "superseded": False}
+        ev.setdefault("decisions", []).append(rec)
+        tl.append({"ts": ts, "action": "decide", "actor": actor,
+                   "note": (f"決策：{opt.get('label')}（{opt.get('source')}"
+                            + (f"，任務 {opt.get('task_id')} "
+                               + (f"v{opt['task_version']}" if opt.get("task_version") is not None else "（營運端未提供任務版本）")
+                               if opt.get("task_id") else "")
+                            + f"）。理由：{note}"
+                            + ("　（取代先前決策）" if prev else "")
+                            + "　政府端只做決策與協調，派工仍由營運端執行。")})
     elif action == "note":
         if not note:
             return {"error": "note_required"}, 400
@@ -448,6 +484,72 @@ def apply_action(ev, action, payload, now_ts, iso, actor="政府端"):
         if len(ev["applied_requests"]) > 50:
             ev["applied_requests"].pop(next(iter(ev["applied_requests"])))
     return {"ok": True, "idempotent": False, "action": action, "event": _summary(ev)}, 200
+
+
+# ---------------------------------------------------------------- 主管決策卡
+def decision_options(state, ev):
+    """
+    決策方案一律來自營運端（B 主線）。政府端不估算抵達時間、不估算改派代價，
+    因為那等於在政府端再造一套派車邏輯。B 沒提供的欄位就是「未提供」，不補值。
+    """
+    sid = ev.get("sid")
+    kind = "full" if "full" in (ev.get("type") or "") else "empty"
+    tasks = state.get("tasks", [])
+    opts = []
+
+    tk, stop = covering_task(tasks, sid, kind)
+    if tk:
+        opts.append({
+            "id": f"keep:{tk['id']}", "label": "維持現行方案",
+            "source": "營運端既有任務", "provided": True,
+            "task_id": tk["id"], "task_version": tk.get("version"),
+            "task_status": tk.get("status"), "cycle": tk.get("cycle"),
+            "action": ACTION_LABEL[COVER_ACTION[kind]],
+            "eta": str(stop.get("arrives_by")) if stop.get("arrives_by") else None,
+            "on_time": stop.get("on_time"),
+            "cost": tk.get("reason"),
+            "affected": [s_["name"] for s_ in tk.get("stops", []) if s_.get("action") == COVER_ACTION[kind]][:6],
+        })
+
+    cross = [t for t in tasks
+             if t.get("district") == ev.get("district") and t.get("status") == "needs_cross_district"]
+    if cross:
+        c = cross[0]
+        opts.append({
+            "id": f"cross:{c['id']}", "label": "跨區支援",
+            "source": "營運端任務（needs_cross_district）", "provided": True,
+            "task_id": c["id"], "task_version": c.get("version"), "task_status": c.get("status"),
+            "cycle": c.get("cycle"), "action": ACTION_LABEL[COVER_ACTION[kind]],
+            "eta": None, "on_time": None,
+            "cost": c.get("reason"),
+            "eta_missing_reason": "營運端這張任務沒有帶抵達時間；政府端不自行估算。",
+            "affected": [],
+        })
+
+    missing = []
+    if not tk:
+        missing.append({"id": "divert", "label": "就近車隊改道",
+                        "need": "營運端提供：改道後的抵達時間、原任務延後幾分鐘、受影響站點"})
+    if not cross:
+        missing.append({"id": "cross", "label": "跨區支援",
+                        "need": "營運端提供：跨區抵達時間、增加里程、車源來自哪一區"})
+    return {
+        "options": opts,
+        "unavailable": missing,
+        "source_rule": ("方案與代價由營運端提供。政府端不估算抵達時間，也不建立第二套派車任務——"
+                        "沒有真實車隊位置、班表與載量，任何由政府端算出來的 ETA 都是虛構的。"),
+        "contract_gap": ("營運端目前沒有發布改派方案端點（/api/ops/contract 版本 b-1 只涵蓋工單）。"
+                         "在那之前，這張卡只能顯示既有任務，方案比較欄位為未提供。") if missing else None,
+    }
+
+
+def active_decision(ev):
+    """目前仍有效的決策。用來擋重複決策，避免雙重派工。"""
+    ds = ev.get("decisions") or []
+    for d in reversed(ds):
+        if not d.get("superseded"):
+            return d
+    return None
 
 
 # ---------------------------------------------------------------- 全域儀表板
