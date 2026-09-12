@@ -557,6 +557,26 @@ function forecastCard(){
       模型卡的離線指標是在六月測試集上量的，<b>不等於即時推論的準確度</b>。</p></div>`;
 }
 
+function impactCard(im){
+  if(!im) return '';
+  const saved=im.saved_twd;
+  return `<div class="card" style="margin-top:11px">
+    <div class="sm" style="font-weight:600">你們今天一起做到的</div>
+    <div style="display:flex;gap:14px;margin:9px 0 7px;text-align:center">
+      <div style="flex:1"><div class="mono" style="font-size:21px;font-weight:700">${im.bikes_redistributed}</div>
+        <div class="xs dim">輛被分流</div></div>
+      <div style="flex:1"><div class="mono" style="font-size:21px;font-weight:700;color:var(--warn)">${im.incentive_cost_twd}</div>
+        <div class="xs dim">元誘因成本</div></div>
+      <div style="flex:1"><div class="mono" style="font-size:21px;font-weight:700;color:var(--ok)">${im.equivalent_truck_cost_twd}</div>
+        <div class="xs dim">元等值派車</div></div>
+    </div>
+    <div class="xs" style="color:${saved>=0?'var(--ok)':'var(--mute)'};line-height:1.7">
+      相當於 ${im.equivalent_truck_trips} 趟派車${saved>0?`，省下約 <b>${saved}</b> 元`:''}。
+      派車一趟載 ${im.assumptions.truck_capacity} 輛、約 ${im.assumptions.truck_cost_twd} 元。</div>
+    <div class="xs dim" style="margin-top:8px;border-top:1px dashed var(--line);padding-top:7px;line-height:1.7">
+      ${esc(im.caveat)}</div></div>`;
+}
+
 function insightsFor(aud){
   if(!S.ins) return '<p class="sub">產生中…</p>';
   const ins=S.ins.insights.filter(i=>aud.includes(i.audience));
@@ -929,7 +949,8 @@ function citizenView(){
           <div class="xs dim" style="margin-top:6px;line-height:1.8">
             此刻有 <b style="color:var(--warn)">${rw.quest_total}</b> 個加碼任務，
             今日已發出 <b>${rw.issued_today_points}</b> 元。<br>
-            單站每半小時的加碼預算上限＝該站缺口 × 25 元；補滿就自動解除。</div></div>`;
+            單站每半小時的加碼預算上限＝該站缺口 × 25 元；補滿就自動解除。</div></div>
+        ${impactCard(rw.impact)}`;
     }
   }
   const tab=(id,ic,lab)=>`<button class="${S.ptab===id?'on':''}" data-pt="${id}">
@@ -1199,7 +1220,7 @@ async function loadWallet(){
       <span>${i+1}. ${esc(t.team)} <span class="dim">${t.members} 人</span></span>
       <span class="mono">${fmt(t.points)}</span></div>`).join('')
       +`<div style="margin-top:7px;border-top:1px dashed var(--line);padding-top:7px">
-        我的貢獻 <b class="mono" style="color:var(--ok)">${d.me.points}</b> 點（${esc(d.me.team)}）</div>
+        我的貢獻 <b class="mono" style="color:var(--ok)">${d.me.points}</b> 元（${esc(d.me.team)}）</div>
         <div class="dim" style="margin-top:6px">${esc(d.caveat)}</div>`;
   }catch(e){}
 }

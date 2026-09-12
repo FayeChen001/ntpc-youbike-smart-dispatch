@@ -444,7 +444,7 @@ def insights():
                 "level": "mid", "audience": "ops", "title": "兩種站的需求方向剛好相反",
                 "body": (f"用平日每小時淨流量分群，{prof[home]} 個站屬住家端（早上被借空、傍晚回補）、"
                          f"{prof[dest]} 個站屬目的地端（早上被還爆、傍晚被借空）。"
-                         "**同一台車早上該從住家端往目的地端走，傍晚要反過來。**"
+                         "同一台車早上該從住家端往目的地端走，傍晚要反過來。"
                          "這代表早晚各需要一次方向相反的再平衡，不是單向補車。"),
                 "evidence": [f"{k}：{v} 站" for k, v in prof.items()],
                 "action": "把兩類站配成對，早晚各跑一次反向，比各自獨立補車省里程。",
@@ -480,7 +480,7 @@ def insights():
                     "title": f"模型預警：{hz} 分鐘後可能出事的站",
                     "body": (f"模型在官方即時站況上推論，{hz} 分鐘後無位可還機率 ≥30% 的有 {len(full)} 站、"
                              f"無車可借 ≥30% 的有 {len(empty)} 站。"
-                             + ("**落後特徵尚未累積完整，準確度會低於模型卡的離線指標。**"
+                             + ("落後特徵尚未累積完整，準確度會低於模型卡的離線指標。"
                                 if partial else "落後特徵已累積完整。")),
                     "evidence": ([f"{r['name']}（{r['district']}）目前可還 {r['now']:.0f}，"
                                   f"{hz} 分後無位機率 {r['p']}%" for r in full[:3]]
@@ -553,7 +553,7 @@ def ops_board():
                        "清運": sum(1 for c in dispatch if c["need"] == "清運"),
                        "整站無服務": len(offline), "設備查修": len(repair),
                        "結構性": structural},
-            "semantics": ("候選清單依即時站況與歷史同時段風險排序，**不是派車任務**；"
+            "semantics": ("候選清單依即時站況與歷史同時段風險排序，不是派車任務；"
                           "沒有真實車隊位置、班表與載量，本看板不產生 ETA。"
                           "可借與可還同時為 0 的站另列為整站無服務，派車無法解決。")}
 
@@ -966,13 +966,33 @@ def rewards_board(sid: int = None):
     quests.sort(key=lambda q: (-q["multiplier"], -q["deficit"]))
     top = quests[:40]
     budget = sum(q["deficit"] * 25 for q in top)
-    issued = sum(h.get("points", 0) for h in rw.get("history", [])
-                 if str(h.get("ts", "")).startswith(datetime.now(TZ).strftime("%Y-%m-%d")))
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    hist_today = [h for h in rw.get("history", []) if str(h.get("ts", "")).startswith(today)]
+    issued = sum(h.get("points", 0) for h in hist_today)
+    # 分流成效換算。每次分流當作補上 1 輛；派車一趟載 20 輛、約 600 元
+    # （2 人 × 1.27 小時 × 200 元/時 ＋ 油耗折舊，人事費率為情境假設，見 docs/REWARDS.md）。
+    moved = len(hist_today)
+    truck_cap, truck_cost = 20, 600
+    impact = {
+        "claims_today": moved,
+        "bikes_redistributed": moved,
+        "incentive_cost_twd": issued,
+        "equivalent_truck_trips": round(moved / truck_cap, 2),
+        "equivalent_truck_cost_twd": round(moved / truck_cap * truck_cost),
+        "saved_twd": round(moved / truck_cap * truck_cost) - issued,
+        "assumptions": {"truck_capacity": truck_cap, "truck_cost_twd": truck_cost,
+                        "note": ("每次分流以補上 1 輛計；派車成本為情境假設，"
+                                 "人事費率未經實際派工紀錄校準。")},
+        "caveat": ("這是把示範的領取紀錄換算成等值派車成本，不是實測成效。"
+                   "真實的分流轉換率、是否真的騎到目標站、以及是否排擠原本就會發生的旅次，"
+                   "都需要實際試辦才知道。"),
+    }
     return {
         "wallet": _wallet(rw),
         "quests": top, "quest_total": len(quests),
         "budget_cap_twd": budget,
         "issued_today_points": issued,
+        "impact": impact,
         "point_value_twd": 1,
         "rules": {
             "point_value": "1 點 = 1 元（設計上 1:1；示範機制，兌付尚未取得）",
