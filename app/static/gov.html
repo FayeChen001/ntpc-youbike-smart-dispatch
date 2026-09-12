@@ -160,9 +160,14 @@ async function openEvent(id){
     <div class="alert ${c.confident?'info':'warn'}" style="margin-top:4px"><div class="m">${c.label||'待查'}${c.confident===false?' <span class="badge grey">證據不足</span>':''}</div>
     ${(c.evidence||[]).map(e=>`<div class="xs muted" style="margin-top:3px">・${e.text}${e.ref&&e.ref!=='—'?` <span class="pill">${e.ref}</span>`:''}</div>`).join('')}</div></div>
   ${al&&al.has?`<div class="xs muted">替代站（候選資源存在≠使用者走得到）：${al.names.join('、')}</div>`:''}
+  ${a.availability?`<div style="margin-top:10px"><b class="small">服務可用性</b>
+    <table><tr><td>官方可借</td><td class="mono">${a.availability.official_bikes==null?'未提供':a.availability.official_bikes}</td></tr>
+    <tr><td>已確認不可用</td><td class="mono">${a.availability.known_unusable_bikes} 車${a.availability.known_unusable_docks?` / ${a.availability.known_unusable_docks} 柱`:''}${a.availability.known_unusable_bike_nos.length?`<div class="xs muted">${a.availability.known_unusable_bike_nos.join('、')}</div>`:''}</td></tr>
+    <tr><td>疑似異常</td><td class="mono">${a.availability.suspected_tickets.length}${a.availability.suspected_tickets.length?`<div class="xs muted">${a.availability.suspected_tickets.join('、')}</div>`:''}</td></tr></table>
+    <div class="xs muted">${a.availability_semantics.official_bikes}。${a.availability_semantics.known_unusable_bikes}。</div></div>`:''}
   <div style="margin-top:10px"><div class="row between"><b class="small">處理狀態</b><button class="small" onclick="addNote('${a.id}')">加處理紀錄</button></div>
     <table><tr><td>負責人</td><td>${a.owner||'<b style="color:var(--bad)">未指派</b>'}</td></tr>
-    <tr><td>現行 ETA</td><td>${a.eta?`${a.eta.slice(11,16)}<div class="xs muted">${a.eta_source||''}</div>`:'尚無恢復計畫'}</td></tr>
+    <tr><td>現行 ETA</td><td>${a.eta?`${a.eta.slice(11,16)}<div class="xs muted">${a.eta_source||''}</div>`:`尚無恢復計畫<div class="xs muted">這一站需要的是${a.cover_action==='pickup'?'運出騰位（pickup）':'送車補給（dropoff）'}</div>`}</td></tr>
     <tr><td>狀態</td><td>${{open:'開啟中',acked:'已確認',resolved:'已結案'}[a.status]||a.status}</td></tr>
     ${a.escalated?`<tr><td>升級原因</td><td class="xs">${a.escalated}</td></tr>`:''}</table></div>
   <div style="margin-top:10px"><b class="small">事件時間線</b>
@@ -367,7 +372,19 @@ function ovRender(){
       </div><div class="xs muted" style="margin-top:6px">${fr.note}</div></div></div>
     <div class="mxnote" style="margin-top:8px">${sd.not_claimed}</div></div>`;
 
-  h += `<div class="mxsec"><h3>二、設備待查 <span class="badge grey">用戶／AI／現場分開</span><span class="mini">${eq.owner}</span></h3>
+  const av=o.availability;
+  h += `<div class="mxsec"><h3>二、服務可用性 <span class="badge grey">來源：B 主線唯讀端點</span>
+    <span class="mini">${av?av.source:''}</span></h3>
+    ${av&&av.stations.length?`<div class="card"><table><tr><th>站點</th><th>官方可借</th><th>已確認不可用</th><th>疑似異常</th><th>確認時間</th></tr>
+      ${av.stations.map(x=>`<tr class="trow" onclick="ovClose();openStation(${x.sid})"><td>${x.station}<div class="xs muted">${x.district}</div></td>
+        <td class="mono">${x.official_bikes==null?'未提供':x.official_bikes}</td>
+        <td class="mono">${x.known_unusable_bikes} 車${x.known_unusable_docks?` / ${x.known_unusable_docks} 柱`:''}<div class="xs muted">${x.known_unusable_bike_nos.join('、')||''}</div></td>
+        <td class="mono">${x.suspected_tickets.length}<div class="xs muted">${x.suspected_tickets.join('、')||''}</div></td>
+        <td class="xs mono">${x.confirmed_at?x.confirmed_at.slice(11,16):'—'}</td></tr>`).join('')}</table>
+      <div class="mxnote" style="margin-top:8px">${Object.entries(av.semantics).map(([k,v])=>`<b>${k}</b>：${v}`).join('<br>')}</div></div>`
+      :'<div class="mxnote">目前沒有被標記的站。這一區只列出有未結案工單或被建議查核的站。</div>'}
+    </div>`;
+  h += `<div class="mxsec"><h3>三、設備待查 <span class="badge grey">用戶／AI／現場分開</span><span class="mini">${eq.owner}</span></h3>
     <div class="kpis" style="padding:0;margin-bottom:8px">
       ${kpi(eq.open_tickets,'未結案工單','')}
       ${kpi(eq.without_asset_id,'無車號也無柱號','只能關聯，不能合併成同一設備','var(--warn)')}
@@ -389,16 +406,23 @@ function ovRender(){
       </div></div>`).join(''):'<div class="mxnote">目前沒有未結案的設備工單。</div>'}
     <div class="mxnote">${eq.rule}<br>${eq.state_note}</div></div>`;
 
-  h += `<div class="mxsec"><h3>三、人車任務與未覆蓋缺口 <span class="badge sim">模擬派工狀態</span></h3>
+  h += `<div class="mxsec"><h3>四、人車任務與未覆蓋缺口 <span class="badge sim">模擬派工狀態</span></h3>
     <div class="mxcols"><div class="card"><b class="small">任務狀態</b>
       <table>${Object.entries(tb.by_status).map(([k,v])=>`<tr><td>${k}</td><td class="mono">${v}</td></tr>`).join('')}</table>
       <div class="xs muted" style="margin-top:6px">排程涵蓋 ${tb.planned_districts.join('、')||'無'}。${tb.owner}</div></div>
+      <div class="card"><b class="small">逐站期限與資源帳</b>
+      <div class="kpis" style="padding:0;grid-template-columns:1fr 1fr">
+        ${kpi(tb.stop_deadlines.on_time,'準時送達站','B 主線逐站判定')}
+        ${kpi(tb.stop_deadlines.late,'來不及的站','', tb.stop_deadlines.late?'var(--warn)':'')}
+      </div>
+      <div class="xs muted" style="margin-top:6px">${tb.stop_deadlines.note}<br>${tb.coverage_rule}</div>
+      ${Object.keys(tb.by_reservation).length?`<div class="xs muted" style="margin-top:6px">資源帳狀態：${Object.entries(tb.by_reservation).map(([k,v])=>`${k} ${v}`).join('・')}${tb.cycles.length?`・cycle ${tb.cycles.join('、')}`:''}</div>`:''}</div>
       <div class="card"><b class="small">未覆蓋缺口（${tb.uncovered_count}）</b>
       <table><tr><th>行政區</th><th>尺度</th><th>缺口</th><th>狀態</th></tr>
       ${tb.uncovered.map(g=>`<tr><td>${g.district||'—'}</td><td class="mono">${g.horizon||'—'}</td><td class="mono">${g.deficit??'未提供'}</td><td class="xs">${g.status}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">無</td></tr>'}</table></div></div>
     <div class="mxnote" style="margin-top:8px"><b>契約狀態</b>：${tb.contract_note}</div></div>`;
 
-  h += `<div class="mxsec"><h3>四、責任與處理進度</h3><div class="card">
+  h += `<div class="mxsec"><h3>五、責任與處理進度</h3><div class="card">
     <div class="kpis" style="padding:0">
       ${kpi(d.counts.P0||0,'P0','','var(--bad)')}${kpi(d.counts.P1||0,'P1','','var(--warn)')}
       ${kpi(d.unowned_p01,'P0/P1 未指派負責人','', d.unowned_p01?'var(--bad)':'')}

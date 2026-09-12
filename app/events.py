@@ -101,14 +101,24 @@ def observed_run(ctx, bins, t_idx, sid, kind):
 
 
 # ---------------------------------------------------------------- 覆蓋這一站的任務
-def covering_task(tasks, sid):
-    """找出目前有哪一張任務要送車到這一站。回傳 (task, stop) 或 (None, None)。"""
+# 缺車要靠「送車到這一站」（dropoff），缺位要靠「從這一站運出」（pickup）。
+# 用同一個動作判斷兩種事件，會讓所有缺位事件都被誤判成「沒排到任務」而升級。
+COVER_ACTION = {"empty": "dropoff", "full": "pickup"}
+ACTION_LABEL = {"dropoff": "送車補給", "pickup": "運出騰位"}
+
+
+def covering_task(tasks, sid, kind="empty"):
+    """
+    找出目前有哪一張任務會處理這一站的這一種缺口。回傳 (task, stop) 或 (None, None)。
+    kind="empty" 找 dropoff；kind="full" 找 pickup。
+    """
+    want = COVER_ACTION.get(kind, "dropoff")
     best = (None, None)
     for tk in tasks:
         if tk.get("status") not in ("planned", "dispatched", "en_route", "proposed", "too_late"):
             continue
         for s in tk.get("stops", []):
-            if s.get("action") == "dropoff" and s.get("sid") == sid:
+            if s.get("action") == want and s.get("sid") == sid:
                 if best[0] is None or LEVEL_ORDER.get(tk["status"], 9) < 9:
                     best = (tk, s)
     return best
@@ -140,6 +150,8 @@ def infer_cause(ev, state, now_ts):
     sid = ev.get("sid")
     tasks = state["tasks"]
     obs = ev.get("observed") or {}
+    kind = "full" if "full" in (ev.get("type") or "") else "empty"
+    act = ACTION_LABEL[COVER_ACTION[kind]]
     evidence = []
 
     # 1. 資料過期：最後一筆觀測距離現在超過一個分箱
@@ -166,7 +178,7 @@ def infer_cause(ev, state, now_ts):
                     "evidence": [{"kind": "scenario", "ref": sc["title"], "text": f"{sc['title']} {end.strftime('%H:%M')} 散場，情境估 {sc['riders_out']} 人借車（出席人數為情境參數）"}]}
 
     # 4. 任務面
-    tk, stop = covering_task(tasks, sid)
+    tk, stop = covering_task(tasks, sid, kind)
     if tk is None:
         cross = [t for t in district_task_state(tasks, ev.get("district")) if t.get("status") == "needs_cross_district"]
         if cross:
@@ -174,7 +186,7 @@ def infer_cause(ev, state, now_ts):
                     "evidence": [{"kind": "task", "ref": cross[0]["id"], "text": cross[0].get("reason", "區內無可供給站")}]}
         return {"code": "no_task", "label": CAUSES["no_task"], "confident": True,
                 "evidence": [{"kind": "task", "ref": "—",
-                              "text": "目前排程中沒有任何一張任務要送車到這一站。"
+                              "text": f"目前排程中沒有任何一張任務要為這一站{act}。"
                                       "本系統沒有巡查或人員定位紀錄，這只代表排程沒有涵蓋，"
                                       "不能據此推論沒有人到過現場。"}]}
     if tk["status"] == "too_late":
@@ -182,7 +194,7 @@ def infer_cause(ev, state, now_ts):
                 "evidence": [{"kind": "task", "ref": tk["id"], "text": tk.get("reason", "決策到抵達的時間趕不上目標時間")}]}
     if tk["status"] in ("dispatched", "en_route"):
         return {"code": "en_route", "label": CAUSES["en_route"], "confident": True,
-                "evidence": [{"kind": "task", "ref": tk["id"], "text": f"{tk['id']} 已出車（模擬狀態），預計 {str(stop.get('arrives_by', ''))[11:16]} 抵達本站"}]}
+                "evidence": [{"kind": "task", "ref": tk["id"], "text": f"{tk['id']} 已出車（模擬狀態），預計 {str(stop.get('arrives_by', ''))[11:16]} 抵達本站{act}"}]}
     return {"code": "unknown", "label": CAUSES["unknown"], "confident": False,
             "evidence": [{"kind": "none", "ref": "—", "text": "只有庫存快照，無法證明是需求、人車、供給還是設備造成；需要任務、GPS、設備與借還紀錄才能判定"}]}
 
@@ -225,13 +237,15 @@ def refresh(state, pred, pred_df, now_ts, iso):
         kind = "empty" if "empty" in a["type"] else "full"
         a["observed"] = observed_run(ctx, bins, t_idx, a["sid"], kind) if a["type"] in ONGOING_TYPES else None
 
-        tk, stop = covering_task(state["tasks"], a["sid"])
+        tk, stop = covering_task(state["tasks"], a["sid"], kind)
         if tk and stop and stop.get("arrives_by"):
             a["eta"] = str(stop["arrives_by"])
-            a["eta_source"] = f"{tk['id']}（{tk['status']}，模擬派工狀態）"
+            a["eta_source"] = f"{tk['id']}（{tk['status']}，{ACTION_LABEL[COVER_ACTION[kind]]}，模擬派工狀態）"
             a["covered_by"] = tk["id"]
+            a["cover_action"] = COVER_ACTION[kind]
         else:
             a["eta"] = a["eta_source"] = a["covered_by"] = None
+            a["cover_action"] = COVER_ACTION[kind]
 
         a["cause"] = infer_cause(a, state, now_ts)
         a["alt"] = alternatives(pred_df, pred.neighbors, a["sid"], kind) if a["type"] in ONGOING_TYPES else None
@@ -592,27 +606,53 @@ def equipment_board(state):
 
 
 def task_board(state):
-    """人車任務摘要與未覆蓋缺口。只讀 B 主線的任務，不建立也不修改。"""
+    """
+    人車任務摘要與未覆蓋缺口。只讀 B 主線的任務，不建立也不修改。
+    欄位對齊 B 主線實際輸出（cycle／reservation_state／late_stops／on_time_stops／tightest_due_min）。
+    """
     tasks = state.get("tasks", [])
-    by_status = {}
+    by_status, by_reservation = {}, {}
+    late_total = ontime_total = drop_total = 0
     for t in tasks:
         by_status[t.get("status", "unknown")] = by_status.get(t.get("status", "unknown"), 0) + 1
+        rs = t.get("reservation_state")
+        if rs:
+            by_reservation[rs] = by_reservation.get(rs, 0) + 1
+        late = t.get("late_stops")
+        ont = t.get("on_time_stops")
+        if isinstance(late, list):
+            late_total += len(late)
+        elif isinstance(late, int):
+            late_total += late
+        if isinstance(ont, list):
+            ontime_total += len(ont)
+        elif isinstance(ont, int):
+            ontime_total += ont
+        drop_total += sum(1 for x in t.get("stops", []) if x.get("action") == "dropoff")
+
     gaps = [{"district": t.get("district"), "horizon": t.get("horizon"),
-             "deficit": t.get("deficit_total"), "reason": t.get("reason"), "status": t.get("status")}
+             "deficit": t.get("deficit_total"), "reason": t.get("reason"), "status": t.get("status"),
+             "cycle": t.get("cycle")}
             for t in tasks if t.get("status") in ("gap_summary", "needs_cross_district", "minor_gap", "too_late")]
     active = [t for t in tasks if t.get("status") in ("planned", "dispatched", "en_route")]
-    missing = [k for k in ("version", "cycle_id", "event_id", "operator_owner", "uncovered_gap")
+    missing = [k for k in ("version", "event_id", "operator_owner")
                if not any(k in t for t in tasks)] if tasks else []
     return {
         "by_status": by_status,
+        "by_reservation": by_reservation,
         "active": len(active),
+        "cycles": sorted({str(t["cycle"]) for t in tasks if t.get("cycle") is not None}),
+        "stop_deadlines": {"dropoff_stops": drop_total, "on_time": ontime_total, "late": late_total,
+                           "note": ("逐站期限由 B 主線逐站判定。只要有一站來不及，整趟就不能標成全部準時。"
+                                    "這裡顯示的是 B 給的逐站結果，政府端不重算。")},
         "uncovered": gaps[:20],
         "uncovered_count": len(gaps),
         "planned_districts": sorted({t["district"] for t in tasks if t.get("district")}),
         "contract_missing": missing,
         "contract_note": ("以下欄位尚未由 B 主線提供，政府端顯示為未提供，不自行推算："
-                          + "、".join(missing)) if missing else "B 主線已提供所需欄位。",
+                          + "、".join(missing)) if missing else "B 主線已提供政府端需要的任務欄位。",
         "owner": "任務由營運端建立與調整。政府端可要求處理與跨區協調，但不建立第二套派車任務。",
+        "coverage_rule": "缺車看送車（dropoff）任務，缺位看運出（pickup）任務，兩者不互相認定。",
     }
 
 
