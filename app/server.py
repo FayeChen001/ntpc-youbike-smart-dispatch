@@ -17,6 +17,8 @@ import llm as LLM
 import weather as WX
 import awsloc as AWSLOC
 
+if not (os.environ.get("AWS_PROFILE") or "").strip():
+    os.environ.pop("AWS_PROFILE", None); os.environ.pop("AWS_DEFAULT_PROFILE", None)
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATIC = os.path.join(ROOT, "app", "static")
 app = FastAPI(title="新北 YouBike 雙端協同服務")
@@ -84,7 +86,7 @@ def ddb_put(table, item):
         global _ddb
         try:
             if _ddb is None:
-                import boto3; _ddb = boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "hackathon")).resource("dynamodb", region_name="us-west-2")
+                import boto3; _ddb = AWSLOC.session().resource("dynamodb", region_name="us-west-2")
             _ddb.Table(table).put_item(Item={"pk": str(item.get("id")), "data": json.dumps(item, ensure_ascii=False, default=str), "updated": iso(now_ts())})
             STATE["cloud"]["dynamodb"] = "ok"; STATE["cloud"]["writes"] += 1
         except Exception as e:
@@ -378,7 +380,7 @@ def api_athena(q: str = "district_empty"):
     if q in ATHENA["cache"]: return ATHENA["cache"][q]
     try:
         import boto3
-        at = boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "hackathon")).client("athena", region_name="us-west-2")
+        at = AWSLOC.session().client("athena", region_name="us-west-2")
         t0 = time.time()
         qid = at.start_query_execution(QueryString=ATHENA_QUERIES[q]["sql"],
                                        QueryExecutionContext={"Database": ATHENA["db"]},
@@ -716,7 +718,7 @@ def api_search_place(q: str):
     # 再用 Amazon Location Places 搜地標與地址
     try:
         import boto3
-        gp = boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "hackathon")).client("geo-places", region_name="us-west-2")
+        gp = AWSLOC.session().client("geo-places", region_name="us-west-2")
         rr = gp.suggest(QueryText=q, BiasPosition=[121.4723, 25.0262], MaxResults=6, Language="zh-Hant",
                         Filter={"IncludeCountries": ["TWN"]}, AdditionalFeatures=["Core"])
         AWSLOC.STATUS["places"] += 1
@@ -991,7 +993,7 @@ def api_culture():
 def api_model():
     path = os.path.join(ROOT, "reports", "model_eval.json")
     rep = json.load(open(path)) if os.path.exists(path) else {"status": "training"}
-    audit = json.load(open("/Users/chenhongfei/Desktop/Claude_YouBike專案交接包/資料稽核/data_audit.json"))
+    audit = json.load(open(os.path.join(ROOT, "reports", "data_audit.json")))
     ingest = json.load(open(os.path.join(ROOT, "data/processed/ingest_log.json")))
     return {"eval": rep, "model_origin": PRED.model_origin, "sagemaker_metrics": getattr(PRED, "sm_metrics", None), "audit": {k: audit[k] for k in ["raw_rows", "valid_rows", "invalid_counts", "both_zero", "canonical_stations", "observation_empty_pct", "observation_full_pct", "both_zero_excluded_empty_pct", "both_zero_excluded_full_pct", "june_persistence_baseline"]},
             "ingest": ingest, "model_horizons": PRED.model_horizons}

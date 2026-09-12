@@ -20,10 +20,31 @@ const Toasts = {
   show(title, body, kind='info', meta='', ttl=9000){ this.init(); const t = el('div',{class:'toast '+kind}); t.innerHTML = `<div class="t">${title}</div><div class="b">${body||''}</div>${meta?`<div class="m">${meta}</div>`:''}`; this.box.prepend(t); while(this.box.children.length>5) this.box.lastChild.remove(); setTimeout(()=>t.remove(), ttl); return t; }
 };
 
-/* SSE */
+/* SSE，若連不上（例如經過 CDN 被緩衝）自動改成輪詢 */
 function connectEvents(handlers){
-  let es; function open(){ es = new EventSource('/api/events'); es.onmessage = (m)=>{ try{ const ev = JSON.parse(m.data); (handlers[ev.type]||handlers['*']||(()=>{}))(ev.payload, ev); if(handlers.any) handlers.any(ev); }catch(e){ console.warn(e);} }; es.onerror = ()=>{ es.close(); setTimeout(open, 2000); }; }
-  open(); return ()=>es&&es.close();
+  let es, fails = 0, polling = null, lastTs = null, closed = false;
+  const fire = (ev)=>{ try{ (handlers[ev.type]||handlers['*']||(()=>{}))(ev.payload, ev); if(handlers.any) handlers.any(ev); }catch(e){ console.warn(e); } };
+  function startPolling(){
+    if(polling) return;
+    console.info('即時事件改用輪詢');
+    polling = setInterval(async ()=>{
+      if(closed) return;
+      try{ const st = await API.get('/api/state');
+        if(st.clock.ts !== lastTs){ lastTs = st.clock.ts; fire({type:'tick', payload:{clock:st.clock, kpi:st.kpi}}); }
+      }catch(e){}
+    }, 4000);
+  }
+  function open(){
+    if(closed) return;
+    try{ es = new EventSource('/api/events'); }catch(e){ startPolling(); return; }
+    let got = false;
+    const guard = setTimeout(()=>{ if(!got){ try{es.close();}catch(e){} fails++; if(fails>=2) startPolling(); else open(); } }, 8000);
+    es.onopen = ()=>{ got = true; clearTimeout(guard); fails = 0; if(polling){ clearInterval(polling); polling = null; } };
+    es.onmessage = (m)=>{ got = true; clearTimeout(guard); try{ const ev = JSON.parse(m.data); if(ev.payload&&ev.payload.clock) lastTs = ev.payload.clock.ts; fire(ev); }catch(e){ console.warn(e); } };
+    es.onerror = ()=>{ try{es.close();}catch(e){} if(closed) return; fails++; if(fails>=3){ startPolling(); } else setTimeout(open, 2000); };
+  }
+  open();
+  return ()=>{ closed = true; if(es) try{es.close();}catch(e){} if(polling) clearInterval(polling); };
 }
 
 /* 地圖 */

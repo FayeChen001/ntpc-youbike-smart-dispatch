@@ -15,12 +15,19 @@ MODE = {"walk": "Pedestrian", "ride": "Scooter", "drive": "Car"}   # Scooter 作
 _cli = {}; _lock = threading.Lock(); _cache = {}; _pool = ThreadPoolExecutor(max_workers=6)
 STATUS = {"routes": 0, "places": 0, "tiles": 0, "static": 0, "errors": 0, "last_error": None, "enabled": True}
 
+def session():
+    """本機用具名 profile，EC2 上走執行個體角色。空字串的 AWS_PROFILE 會讓 botocore 找不到設定檔，先清掉。"""
+    import boto3
+    prof = (os.environ.get("AWS_PROFILE") or "").strip()
+    if not prof:
+        os.environ.pop("AWS_PROFILE", None); os.environ.pop("AWS_DEFAULT_PROFILE", None)
+        return boto3.Session()
+    return boto3.Session(profile_name=prof)
+
 def client(svc):
     with _lock:
         if svc not in _cli:
-            import boto3
-            sess = boto3.Session(profile_name=PROFILE) if PROFILE else boto3.Session()
-            _cli[svc] = sess.client(svc, region_name=REGION)
+            _cli[svc] = session().client(svc, region_name=REGION)
         return _cli[svc]
 
 def route(a, b, mode="walk"):

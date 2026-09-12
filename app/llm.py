@@ -18,9 +18,10 @@ def _get_client():
     global _client
     with _lock:
         if _client is None:
-            import boto3
-            sess = boto3.Session(profile_name=PROFILE) if PROFILE else boto3.Session()
-            _client = sess.client("bedrock-runtime", region_name=REGION)
+            import sys as _s, os as _o
+            _s.path.insert(0, _o.path.dirname(__file__))
+            from awsloc import session as _sess
+            _client = _sess().client("bedrock-runtime", region_name=REGION)
         return _client
 
 SYSTEM = ("你是新北市 YouBike 雙端協同服務的文字助理。只能改寫、摘要、說明「已提供的數字與事實」，"

@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-title" content="YouBike 生活圈">
 <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
 <style>
-:root{--ink:#16202c;--sub:#7b8794}
+:root{--ink:#16202c;--sub:#7b8794;--line2:#e8ecf1;--brandg:linear-gradient(135deg,#0f5fa8,#1478c9)}
 body{background:#fff;max-width:430px;margin:0 auto;height:100vh;display:flex;flex-direction:column;overflow:hidden;color:var(--ink)}
 .screen{display:none;flex:1;min-height:0;flex-direction:column}.screen.on{display:flex}
 .scroll{flex:1;overflow:auto;-webkit-overflow-scrolling:touch}
@@ -16,24 +16,33 @@ body{background:#fff;max-width:430px;margin:0 auto;height:100vh;display:flex;fle
 .top .wx{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--sub)}
 .top .wx b{color:var(--ink);font-weight:600}
 .top .t{margin-left:auto;font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
-h1.big{font-size:26px;margin:2px 18px 2px;letter-spacing:-.4px;line-height:1.25}
-.sub{margin:0 18px 14px;color:var(--sub);font-size:13px}
+h1.big{font-size:25px;margin:2px 18px 3px;letter-spacing:-.5px;line-height:1.22;font-weight:800;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sub{margin:0 18px 14px;color:var(--sub);font-size:12.5px}
+.top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid transparent;transition:border-color .2s}
+.top.stuck{border-bottom-color:var(--line2)}
 /* 卡片 */
 .pad{padding:0 18px}
-.main-card{border:1px solid #e3e8ef;border-radius:18px;padding:16px;box-shadow:0 2px 10px rgba(20,30,50,.05);margin-bottom:10px;background:#fff}
-.main-card.pri{border-color:#0f5fa8;box-shadow:0 4px 18px rgba(15,95,168,.14)}
+.main-card{border:1px solid var(--line2);border-radius:18px;padding:16px;box-shadow:0 1px 3px rgba(20,30,50,.04),0 8px 24px rgba(20,30,50,.05);margin-bottom:10px;background:#fff}
+.main-card.pri{border-color:#cfe0f5;box-shadow:0 2px 6px rgba(15,95,168,.08),0 14px 34px rgba(15,95,168,.13)}
+.main-card.pri::before{content:'';display:block;height:3px;width:38px;border-radius:2px;background:var(--brandg);margin-bottom:12px}
 .tag{display:inline-block;font-size:11px;padding:3px 9px;border-radius:999px;background:#eef4fb;color:#14559b;font-weight:600}
 .tag.g{background:#e8f7ef;color:#15683a}.tag.o{background:#fff3e0;color:#8a5400}.tag.r{background:#fdeaea;color:#a12626}.tag.p{background:#f0ebff;color:#4d33b8}.tag.n{background:#f2f4f7;color:#5c6775}
 .eta{display:flex;align-items:baseline;gap:8px;margin:10px 0 2px}
-.eta .n{font-size:38px;font-weight:800;letter-spacing:-1.5px;line-height:1}
+.eta .n{font-size:40px;font-weight:800;letter-spacing:-2px;line-height:1;background:var(--brandg);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .eta .u{font-size:14px;color:var(--sub)}.eta .arr{margin-left:auto;font-size:13px;color:var(--sub)}
 .steps{margin-top:12px;border-top:1px solid #eef1f5;padding-top:10px}
 .step{display:flex;gap:10px;align-items:flex-start;padding:7px 0}
-.step .ic{width:26px;height:26px;border-radius:50%;background:#f2f5f9;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.step{position:relative}
+.step .ic{width:28px;height:28px;border-radius:50%;background:#f2f5f9;display:flex;align-items:center;justify-content:center;font-size:14px;flex:none;z-index:1}
+.steps .step:not(:last-child)::after{content:'';position:absolute;left:13.5px;top:33px;bottom:-2px;width:1.5px;background:linear-gradient(#dfe5ec,#eef1f5)}
 .step .tx{flex:1;font-size:13px;line-height:1.5}.step .tx b{font-weight:600}
 .step .st{font-size:11px;color:var(--sub);margin-top:1px}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle}
-.btn{display:block;width:100%;box-sizing:border-box;border:none;border-radius:14px;padding:15px;font-size:16px;font-weight:700;background:#0f5fa8;color:#fff;cursor:pointer}
+.btn{display:block;width:100%;box-sizing:border-box;border:none;border-radius:14px;padding:15px;font-size:16px;font-weight:700;background:var(--brandg);color:#fff;cursor:pointer;
+  box-shadow:0 6px 18px rgba(15,95,168,.26);transition:transform .12s,box-shadow .12s}
+.btn:active{transform:translateY(1px);box-shadow:0 3px 10px rgba(15,95,168,.22)}
+.btn.sec,.btn.warn,.btn.ghost{box-shadow:none}
 .btn:active{transform:scale(.99)}.btn.sec{background:#f2f5f9;color:#2b3542}.btn.warn{background:#fff3e0;color:#8a5400}.btn.big{padding:18px;font-size:17px;border-radius:16px}
 .btn.ghost{background:transparent;color:var(--sub);font-weight:500;font-size:13px;padding:10px}
 .alts{margin-top:4px}
@@ -78,18 +87,23 @@ label.fl{display:block;font-size:12px;color:var(--sub);margin:14px 0 6px;font-we
 /* 存摺 */
 .jar{text-align:center;padding:20px 18px 6px}
 .jar .lb{font-size:12px;color:var(--sub)}
-.jar .v{font-size:50px;font-weight:800;letter-spacing:-2.5px;line-height:1;margin:4px 0}
+.jar .v{font-size:52px;font-weight:800;letter-spacing:-3px;line-height:1;margin:5px 0;background:var(--brandg);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .jar .v small{font-size:17px;font-weight:600;letter-spacing:0;margin-left:3px;color:var(--sub)}
 .grid4{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;padding:12px 18px}
-.mini{border:1px solid #e8ecf1;border-radius:14px;padding:12px}
-.mini .l{font-size:11px;color:var(--sub)}.mini .v{font-size:21px;font-weight:700;margin-top:2px}.mini .v small{font-size:12px;font-weight:500;color:var(--sub)}
+.mini{border:1px solid var(--line2);border-radius:14px;padding:12px 13px;background:#fff;box-shadow:0 1px 3px rgba(20,30,50,.03)}
+.mini .l{font-size:11px;color:var(--sub)}.mini .v{font-size:22px;font-weight:800;margin-top:3px;letter-spacing:-.5px}.mini .v small{font-size:12px;font-weight:500;color:var(--sub)}
 .ms{padding:4px 18px 0}
 .msr{margin-bottom:13px}.msr .hd{display:flex;font-size:12.5px;margin-bottom:5px}.msr .hd .r{margin-left:auto;color:var(--sub);font-size:11.5px}
 .bar{height:8px;background:#eef1f5;border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#0aa47a,#0f5fa8);border-radius:4px}
 .stamps{display:flex;flex-wrap:wrap;gap:11px;padding:6px 18px 0}
 .stp{width:70px;text-align:center;font-size:10px;color:var(--sub)}
-.stp i{display:block;width:56px;height:56px;border-radius:50%;border:2px dashed #0f5fa8;background:radial-gradient(#fff,#eef4fb);display:flex;align-items:center;justify-content:center;font-size:23px;font-style:normal;margin:0 auto 4px}
-.stp.lock i{border-color:#dde2e8;background:#f7f8fa;filter:grayscale(1);opacity:.55}
+.stp i{display:block;width:58px;height:58px;border-radius:50%;border:2px solid transparent;
+  background:linear-gradient(#fff,#eaf3fc) padding-box, var(--brandg) border-box;
+  display:flex;align-items:center;justify-content:center;font-size:24px;font-style:normal;margin:0 auto 5px;
+  box-shadow:0 3px 10px rgba(15,95,168,.16)}
+.stp{font-weight:600;color:#4a5665}
+.stp.lock i{background:#f5f7f9;border:2px dashed #dde2e8;box-shadow:none;filter:grayscale(1);opacity:.45}
+.stp.lock{font-weight:500;color:var(--sub)}
 .days{display:flex;gap:3px;align-items:flex-end;height:46px;padding:0 18px}
 .days i{flex:1;background:#cfe0f2;border-radius:2px 2px 0 0;min-height:3px}.days i.hi{background:#0f5fa8}
 /* 我的 */
@@ -127,15 +141,22 @@ nav button .bdg{position:absolute;top:5px;right:calc(50% - 20px);background:#d64
 .fromline .edit{color:#0f5fa8;cursor:pointer}
 /* 方案切換：顯眼的三段式 */
 .seg{display:flex;gap:6px;margin:0 18px 10px}
-.seg button{flex:1;border:1.5px solid #e2e7ee;background:#fff;border-radius:13px;padding:10px 4px;text-align:center;cursor:pointer;line-height:1.25}
+.seg button{flex:1;border:1.5px solid var(--line2);background:#fff;border-radius:14px;padding:11px 4px 10px;text-align:center;cursor:pointer;line-height:1.25;
+  transition:transform .12s,border-color .12s,background .12s;position:relative}
+.seg button:active{transform:scale(.97)}
 .seg button .e{display:block;font-size:17px;margin-bottom:2px}
 .seg button .t{font-size:12px;font-weight:700;color:var(--ink)}
 .seg button .m{font-size:10.5px;color:var(--sub);margin-top:1px}
-.seg button.on{border-color:#0f5fa8;background:#0f5fa8}
+.seg button.on{border-color:transparent;background:var(--brandg);box-shadow:0 6px 16px rgba(15,95,168,.28)}
 .seg button.on .t,.seg button.on .m{color:#fff}
 .seg button.on .m{opacity:.85}
-.seg button:disabled{opacity:.4}
+.seg button:disabled{opacity:.38;cursor:default}
+.seg button .same{position:absolute;top:5px;right:7px;font-size:9px;color:var(--sub);background:#f2f4f7;border-radius:999px;padding:1px 5px}
+.seg button.on .same{color:#fff;background:rgba(255,255,255,.22)}
 .hint{font-size:11px;color:var(--sub);line-height:1.6;padding:10px 18px 20px}
+.sk{background:linear-gradient(90deg,#eef1f5 25%,#f6f8fa 37%,#eef1f5 63%);background-size:400% 100%;animation:shim 1.3s infinite;border-radius:8px}
+@keyframes shim{0%{background-position:100% 50%}100%{background-position:0 50%}}
+.sk-line{height:12px;margin-bottom:9px}.sk-big{height:38px;width:45%;margin-bottom:14px}
 .sheet{position:fixed;left:0;right:0;bottom:0;max-width:430px;margin:0 auto;background:#fff;border-radius:20px 20px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.18);z-index:900;transform:translateY(101%);transition:.25s;padding:18px 18px calc(18px + env(safe-area-inset-bottom))}
 .sheet.on{transform:none}.sheet h3{margin:0 0 4px;font-size:18px}.sheet p{margin:0 0 14px;color:var(--sub);font-size:13px}
 .backdrop{position:fixed;inset:0;background:rgba(10,18,28,.35);z-index:850;display:none}.backdrop.on{display:block}
@@ -151,7 +172,7 @@ nav button .bdg{position:absolute;top:5px;right:calc(50% - 20px);background:#d64
 
 <!-- 現在 -->
 <section class="screen" id="s-home">
-  <div class="top"><div class="wx" id="wx">—</div><div class="t" id="clock">—</div><span class="bell" id="bell" onclick="openNotifs()">🔔<b id="bell-n" style="display:none">0</b></span></div>
+  <div class="top" id="top-bar"><div class="wx" id="wx">—</div><div class="t" id="clock">—</div><span class="bell" id="bell" onclick="openNotifs()">🔔<b id="bell-n" style="display:none">0</b></span></div>
   <div class="scroll">
     <div id="notices"></div>
     <h1 class="big" id="greet">早安</h1><p class="sub" id="greet2"></p>
@@ -307,7 +328,8 @@ async function refreshHome(){
   $('greet').textContent = `去 ${S.dest.title.replace(' 一帶','')}`;
   $('greet2').textContent = `${S.departTime} 出發・${S.origin.title} → ${S.dest.title}`;
   renderChips(); renderFromLine();
-  $('seg').innerHTML=''; $('home-body').innerHTML='<div class="main-card"><div class="muted small">正在比較借還組合與到站風險…</div></div>';
+  $('seg').innerHTML=['fast','reliable','reward'].map(()=>'<button disabled><span class="sk" style="display:block;height:38px;border-radius:9px"></span></button>').join('');
+  $('home-body').innerHTML='<div class="main-card"><div class="sk sk-big"></div><div class="sk sk-line" style="width:88%"></div><div class="sk sk-line" style="width:76%"></div><div class="sk sk-line" style="width:60%"></div><div class="sk" style="height:48px;margin-top:14px"></div></div>';
   const [plan,near]=await Promise.all([
     API.post('/api/plan',{origin:[S.origin.lat,S.origin.lon],dest:[S.dest.lat,S.dest.lon],depart_ts:`${date} ${S.departTime}`,preference:S.profile.preference}),
     API.get(`/api/nearby?lat=${S.origin.lat}&lon=${S.origin.lon}&r=900`)]);
@@ -322,7 +344,9 @@ function renderHome(){
   $('seg').innerHTML=['fast','reliable','reward'].map(k=>{
     const i=r.options.findIndex(o=>o.kind===k||(o.also||[]).includes(KIND[k].t)||(o.also||[]).includes({fast:'最快抵達',reliable:'借還較穩',reward:'順路集點'}[k]));
     const o=i>=0?r.options[i]:null;
+    const dup = o && r.options.filter(x=>x===o).length>=1 && (o.also||[]).length>0 && o.kind!==k;
     return `<button class="${i===S.sel?'on':''}" ${o?'':'disabled'} onclick="S.sel=${i};renderHome()">
+      ${dup?'<span class="same">同一條</span>':''}
       <span class="e">${KIND[k].e}</span><span class="t">${KIND[k].t}</span>
       <span class="m">${o?`${Math.round(o.total_min)} 分${o.points?`・+${o.points}`:''}`:'無'}</span></button>`; }).join('');
   const o=r.options[S.sel]; const ev=(n&&n.events&&n.events[0])||null;
@@ -335,11 +359,14 @@ function renderHome(){
   html+=`<div class="main-card pri">
     <div class="eta"><span class="n">${Math.round(o.total_min)}</span><span class="u">分鐘</span><span class="arr">${hhmm(o.eta)} 抵達</span></div>
     <div class="steps">
-      <div class="step"><div class="ic">🚶</div><div class="tx"><b>走 ${o.legs[0].minutes} 分</b>到 ${o.borrow.name}<div class="st">${riskDot(o.borrow.p_empty)}到站時預估 ${o.borrow.expected_bikes} 輛可借（現在 ${o.borrow.bikes_now??'–'} 輛）</div></div></div>
+      <div class="step"><div class="ic">🚶</div><div class="tx"><b>${o.legs[0].minutes>=0.5?`走 ${o.legs[0].minutes} 分`:'就在旁邊'}</b>到 ${o.borrow.name}<div class="st">${riskDot(o.borrow.p_empty)}到站時預估 ${o.borrow.expected_bikes} 輛可借（現在 ${o.borrow.bikes_now??'–'} 輛）</div></div></div>
       <div class="step"><div class="ic">🚲</div><div class="tx"><b>騎 ${o.legs[1].minutes} 分</b>（${(o.legs[1].dist_m/1000).toFixed(1)} 公里）到 ${o.return.name}<div class="st">${riskDot(o.return.p_full)}到站時預估 ${o.return.expected_spaces} 個空位可還</div></div></div>
-      <div class="step"><div class="ic">🚶</div><div class="tx"><b>走 ${o.legs[2].minutes} 分</b>到 ${S.dest.title.replace(' 一帶','')}</div></div>
+      ${o.legs[2].minutes>=0.5?`<div class="step"><div class="ic">🚶</div><div class="tx"><b>走 ${o.legs[2].minutes} 分</b>到 ${S.dest.title.replace(' 一帶','')}</div></div>`
+        :`<div class="step"><div class="ic">🎯</div><div class="tx"><b>還車站就是目的地</b><div class="st">不用再走</div></div></div>`}
     </div>
-    ${o.points?`<div style="margin-top:10px"><span class="tag o">完成可得 ${o.points} 點</span></div>`:''}
+    ${(o.also&&o.also.length)?`<div style="margin-top:9px"><span class="tag n">這條同時是 ${[KIND[o.kind].t].concat(o.also.map(a=>({'最快抵達':'最快','借還較穩':'最穩','順路集點':'集點','集點最多':'集點'}[a]||a))).join(' 與 ')}</span></div>`:''}
+    ${o.points?`<div style="margin-top:9px;display:flex;align-items:center;gap:7px;background:linear-gradient(90deg,#fff8e9,#fffdf7);border:1px solid #f3e2b8;border-radius:11px;padding:9px 11px">
+      <span style="font-size:17px">🏅</span><div style="font-size:12.5px;line-height:1.4"><b>完成可得 ${o.points} 點</b><br><span style="color:var(--sub);font-size:11px">還到預測會缺車的站，幫忙分流</span></div></div>`:''}
     <div id="reason" style="font-size:12px;color:#41505f;background:#f7f9fc;border-radius:10px;padding:9px;margin-top:10px">${o.reason||''}</div>
     <button class="btn big" style="margin-top:12px" onclick="startTrip()">出發</button></div>`;
   if(n){ const a=n.area;
@@ -546,5 +573,6 @@ async function boot(reload){
   if(p.pref_prompt) openSheet(`<h3>要把預設換成「${p.pref_prompt.label}」嗎？</h3><p>你連續兩次都挑了這個方案。</p>
     <button class="btn" onclick="setPref('${p.pref_prompt.kind}')">好，換成這個</button><button class="btn ghost" onclick="closeSheet()">維持現在的</button>`);
 }
+document.querySelectorAll('.scroll').forEach(el=>el.addEventListener('scroll',()=>{ $('top-bar') && $('top-bar').classList.toggle('stuck', el.scrollTop>4); }));
 boot();
 </script></body></html>
