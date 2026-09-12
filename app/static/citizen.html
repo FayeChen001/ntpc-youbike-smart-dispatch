@@ -834,8 +834,74 @@ async function installApp(){
    <button class="btn" style="margin-top:12px" onclick="closeSheet()">知道了</button>`); }
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
 
-/* ================= 事件 ================= */
-connectEvents({
+/* ================= 事件 =================
+   共用的 connectEvents() 連三次失敗就永久改成每四秒輪詢 /api/state，之後不再試 SSE。
+   那只補得回時鐘，補不回 notify／c_report／trip／wallet：伺服器回來之後頁面看起來還活著，
+   通知卻再也不會出現，要重新整理才會恢復。2026-09-12 真實斷線實測到這個行為。
+   common.js 是三端共用檔，規則只准新增不准改既有函式，所以在 C 自己的頁面包一層：
+   輪詢當過渡，背景持續重試 SSE，接回來就停掉輪詢並補一次狀態。A／B 不受影響。 */
+function connectEventsC(handlers){
+  // gen：每次 open() 拿一個新編號。斷線期間會累積好幾次嘗試，舊那次的 8 秒 guard 或
+  // onerror 可能晚於新連線才觸發，把已經健康的連線誤判成斷線（實測過這個誤判）。
+  // 編號對不上就整個略過，避免舊事件污染新狀態。
+  let es=null, polling=null, retry=null, closed=false, lastTs=null, mode='init', gen=0;
+  const fire=(ev)=>{ try{ (handlers[ev.type]||(()=>{}))(ev.payload, ev); }catch(e){ console.warn(e); } };
+  function stopPolling(){ if(polling){ clearInterval(polling); polling=null; } }
+  function startPolling(){
+    if(polling||closed) return;
+    console.info('即時事件改用輪詢（背景仍在重試 SSE）'); mode='polling';
+    polling=setInterval(async()=>{
+      if(closed) return;
+      try{ const st=await API.get('/api/state');
+        if(st.clock.ts!==lastTs){ lastTs=st.clock.ts; fire({type:'tick', payload:{clock:st.clock, kpi:st.kpi}}); }
+      }catch(e){}
+    }, 4000);
+  }
+  function scheduleRetry(){
+    if(closed||retry) return;
+    retry=setTimeout(()=>{ retry=null; open(); }, 5000);   // 不放棄，持續重試
+  }
+  function open(){
+    if(closed) return;
+    if(es && es.readyState===1){ mode='sse'; stopPolling(); return; }   // 已經接上就不要再開第二條
+    if(es) try{ es.close(); }catch(e){}
+    const my=++gen;
+    let es2; try{ es2=new EventSource('/api/events'); }catch(e){ mode='polling'; startPolling(); scheduleRetry(); return; }
+    es=es2; let got=false;
+    // onopen 與 onmessage 的先後在各家瀏覽器不保證（實測遇過 hello 先到、onopen 後到），
+    // 兩邊都走同一支 markConnected，否則會發生「SSE 已接上但輪詢沒停」。
+    const guard=setTimeout(()=>{ if(my!==gen||closed) return;
+      if(!got){ try{es2.close();}catch(e){} mode='polling'; startPolling(); scheduleRetry(); } }, 8000);
+    const markConnected=()=>{
+      if(my!==gen||closed) return;
+      got=true; clearTimeout(guard);
+      if(retry){ clearTimeout(retry); retry=null; }                      // 接上了就取消待辦的重試
+      if(mode!=='sse'){ const was=mode; mode='sse'; stopPolling();
+        if(was==='polling'){ console.info('SSE 已重新接上，停止輪詢'); refreshAfterReconnect(); } }
+    };
+    es2.onopen=markConnected;
+    es2.onmessage=(m)=>{ markConnected();
+      try{ const ev=JSON.parse(m.data); if(ev.payload&&ev.payload.clock) lastTs=ev.payload.clock.ts; fire(ev); }catch(e){ console.warn(e); } };
+    es2.onerror=()=>{ try{es2.close();}catch(e){} if(closed||my!==gen) return;
+      mode='polling'; startPolling(); scheduleRetry(); };
+  }
+  // 重連之後用 GET 補回權威狀態，不假設斷線期間沒發生事情。
+  async function refreshAfterReconnect(){
+    try{ const st=await API.get('/api/state'); lastTs=st.clock.ts;
+      fire({type:'tick', payload:{clock:st.clock, kpi:st.kpi}});
+      if(S.screen==='wallet') loadWallet();
+      // 追蹤進度的面板正開著才重新拉：用 GET 取回工單權威狀態，不主動彈出使用者沒開的面板。
+      const sheetOpen=$('sheet').classList.contains('on');
+      if(sheetOpen && S.lastReport && S.lastReport.id && $('sheet').innerHTML.indexOf(S.lastReport.id)>=0){
+        renderTrack(S.lastReport.id);
+      }
+    }catch(e){}
+  }
+  open();
+  return ()=>{ closed=true; stopPolling(); if(retry) clearTimeout(retry); if(es) try{es.close();}catch(e){} };
+}
+
+connectEventsC({
   tick:(p)=>{ S.clock=p.clock; $('clock').textContent='回放 '+p.clock.ts.slice(5); },
   notify:(n)=>{ if(n.channel!=='citizen') return; pushNotice(n);
     if(n.kind==='reminder'&&n.extra&&n.extra.plan&&S.screen==='home'){ S.plan=n.extra.plan; S.wx=n.extra.plan.weather; S.sel=0; renderWx(); renderHome(); } },
