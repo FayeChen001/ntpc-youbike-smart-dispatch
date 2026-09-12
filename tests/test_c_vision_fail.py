@@ -10,6 +10,9 @@
   V2  VISION_TIMEOUT_S=20  → join(23s) 等得夠久，botocore 自己拋 ConnectTimeoutError
                              → 走「模型呼叫失敗」的例外降級
 
+V4 再補上「讀取逾時」：連線層是通的，卡住的是回應。本機開一個 TCP listener，
+完成三次握手、收下請求，但永遠不回任何位元組。這是 read timeout，不是 connect timeout。
+
 接著把降級結果照前端的流程送進 /api/c/report，驗證模型掛掉不會擋住人工通報。
 
 用法：YB_BASE=http://127.0.0.1:8791 python3 tests/test_c_vision_fail.py
@@ -65,6 +68,39 @@ r["_status"] = R.STATUS
 print("@@JSON@@" + json.dumps(r, ensure_ascii=False))
 '''
 
+# 讀取逾時用的探針：自己在本機開一個「接受連線但永不回應」的 peer。
+PROBE_READ = r'''
+import os, socket, sys, threading, time, json, zlib, struct
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", 0)); srv.listen(8)
+PORT = srv.getsockname()[1]
+held = []
+def accept_and_hang():
+    while True:
+        try:
+            c, _ = srv.accept(); held.append(c)   # 握手完成、收下請求，然後什麼都不回
+        except OSError:
+            return
+threading.Thread(target=accept_and_hang, daemon=True).start()
+os.environ["AWS_ENDPOINT_URL_BEDROCK_RUNTIME"] = "http://127.0.0.1:%d" % PORT
+os.environ["VISION_TIMEOUT_S"] = sys.argv[1]
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(sys.argv[2])), "app"))
+import report_image as R
+def png(w, h, fn):
+    raw = b"".join(b"\x00" + b"".join(bytes(fn(x, y)) for x in range(w)) for y in range(h))
+    def ch(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + ch(b"IDAT", zlib.compress(raw, 9)) + ch(b"IEND", b""))
+img = png(420, 320, lambda x, y: (110 + (x % 4), 120, 130))
+t0 = time.time()
+r = R.analyze(img, "煞車好像沒力")
+r["_elapsed_s"] = round(time.time() - t0, 1)
+r["_status"] = R.STATUS
+r["_accepted_conns"] = len(held)          # >0 代表連線真的建立過，卡住的是回應不是連線
+print("@@JSON@@" + json.dumps(r, ensure_ascii=False))
+'''
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -74,6 +110,22 @@ def probe(timeout_s, endpoint=BLACKHOLE):
         path = f.name
     try:
         out = subprocess.run([sys.executable, path, endpoint, str(timeout_s), os.path.join(ROOT, "x")],
+                             capture_output=True, text=True, timeout=180, cwd=ROOT)
+        line = [l for l in out.stdout.splitlines() if l.startswith("@@JSON@@")]
+        if not line:
+            print(out.stdout[-800:], out.stderr[-800:])
+            return None
+        return json.loads(line[0][len("@@JSON@@"):])
+    finally:
+        os.unlink(path)
+
+
+def probe_read(timeout_s):
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
+        f.write(PROBE_READ)
+        path = f.name
+    try:
+        out = subprocess.run([sys.executable, path, str(timeout_s), os.path.join(ROOT, "x")],
                              capture_output=True, text=True, timeout=180, cwd=ROOT)
         line = [l for l in out.stdout.splitlines() if l.startswith("@@JSON@@")]
         if not line:
@@ -115,6 +167,33 @@ if r2:
     check("V2d 呼叫失敗標為需人工判讀", r2.get("requires_manual_review") is True)
     check("V2e 呼叫失敗不得出現「正常／安全」字樣",
           not any(w in json.dumps(r2, ensure_ascii=False) for w in FORBIDDEN))
+
+print("\n[V4] 讀取逾時：連線通了但回應永遠不來（本機掛住的 TCP peer）")
+# 兩種設定會落在不同的降級分支，兩條都要驗：
+#   VISION_TIMEOUT_S=1 → botocore 的 read_timeout 先到，拋真的 ReadTimeoutError
+#   VISION_TIMEOUT_S=3 → botocore 會重試，總耗時超過模組自己的 join，走模組的逾時看門狗
+r4a = probe_read(1)
+check("V4-0 有拿到降級結果（短逾時）", r4a is not None)
+if r4a:
+    check("V4a 連線真的建立過，卡住的是回應不是連線", (r4a.get("_accepted_conns") or 0) >= 1,
+          f"已接受連線數={r4a.get('_accepted_conns')}")
+    check("V4b 降級理由是真的 ReadTimeoutError，不是連線錯誤",
+          "ReadTimeout" in (r4a.get("degraded_reason") or ""), (r4a.get("degraded_reason") or "")[:80])
+    check("V4c 讀取逾時不產生任何觀察", r4a.get("observations") == [])
+    check("V4d 讀取逾時標為需人工判讀", r4a.get("requires_manual_review") is True)
+    check("V4e 讀取逾時不冒充有模型來源", r4a.get("model_source") is None)
+    check("V4f 讀取逾時不得出現「正常／安全」字樣",
+          not any(w in json.dumps(r4a, ensure_ascii=False) for w in FORBIDDEN))
+
+r4b = probe_read(3)
+check("V4-1 有拿到降級結果（長逾時）", r4b is not None)
+if r4b:
+    check("V4g 模組自己的看門狗會兜住沒被例外攔下的情況",
+          "未回應" in (r4b.get("degraded_reason") or ""), (r4b.get("degraded_reason") or ""))
+    check("V4h 看門狗觸發時間約等於 VISION_TIMEOUT_S + 3",
+          5.0 <= (r4b.get("_elapsed_s") or 0) <= 8.0, f"{r4b.get('_elapsed_s')}s（預期約 6 秒）")
+    check("V4i 看門狗路徑同樣不產生觀察、標人工判讀",
+          r4b.get("observations") == [] and r4b.get("requires_manual_review") is True)
 
 print(f"\n[V3] 模型掛掉不擋人工通報（把降級結果照前端流程送進 /api/c/report）")
 s, _ = call("POST", "/api/reset")

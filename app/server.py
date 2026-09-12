@@ -1331,14 +1331,25 @@ def api_c_report(body: dict):
     elif rep["triage"]["suspect"] == "service":
         rep["accepted"] = True; rep["status"] = "routed_ops"
         rep["history"].append({"ts": iso(now_ts()), "status": "routed_ops", "label": C_STATUS_LABEL["routed_ops"]})
+        # 帶上使用者提供的結構化識別，B 的待查清單不必再回頭查 C 才知道是哪根柱子。
+        # 這些是自述值，沒有就是 null，不用空字串冒充。
         notify("ops", f"民眾回報借不到／還不了｜{rep['station']}",
-               f"{p['label']}。車柱／車機／鎖具／交易待查，未判定車輛故障。", "warn",
-               {"sid": sid, "report_id": rep["id"], "role": "ops"})
+               f"{p['label']}。車柱／車機／鎖具／交易待查，未判定車輛故障。"
+               + (f"　柱號 {dock_id}" if dock_id else "")
+               + (f"　錯誤碼 {rep['error_code']}" if rep["error_code"] else ""), "warn",
+               {"sid": sid, "report_id": rep["id"], "role": "ops", "problem": problem,
+                "dock_id": dock_id, "bike_no": rep["bike_no"], "error_code": rep["error_code"],
+                "txn_state": rep["txn_state"], "certainty": "stated",
+                "note": "使用者自述，未經現場確認；未判定車輛故障"})
     else:
         rep["accepted"] = True; rep["status"] = "pending_triage"
         rep["history"].append({"ts": iso(now_ts()), "status": "pending_triage", "label": C_STATUS_LABEL["pending_triage"]})
-        notify("ops", f"待診斷回報｜{rep['station']}", f"{p['label']}。證據不足，尚未指派維修。", "info",
-               {"sid": sid, "report_id": rep["id"], "role": "ops"})
+        notify("ops", f"待診斷回報｜{rep['station']}", f"{p['label']}。證據不足，尚未指派維修。"
+               + (f"　柱號 {dock_id}" if dock_id else ""), "info",
+               {"sid": sid, "report_id": rep["id"], "role": "ops", "problem": problem,
+                "dock_id": dock_id, "bike_no": rep["bike_no"], "error_code": rep["error_code"],
+                "certainty": "unknown",
+                "note": "證據不足，尚未指派維修；不得當成已確認故障"})
 
     rep["saddle"] = _c_saddle(problem, rep["stage"], rep["txn_state"], rep["saddle_broken"])
     rep["saddle"]["marker_status"] = "not_applicable" if not rep["saddle"]["applicable"] else "unknown"
