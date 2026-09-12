@@ -145,7 +145,10 @@ _, p_ok = call("POST", "/api/plan", {"origin": [25.02672, 121.46479], "dest": [2
                                      "depart_ts": "2026-06-16 08:00", "arrive_by": "09:00"})
 o0 = p_ok["options"][0]
 import datetime as _dt
-eta = _dt.datetime.strptime(o0["eta"][:16], "%Y-%m-%d %H:%M")
+# eta 帶秒（例如 2026-06-16 08:10:36）。原本只取到分鐘，等於丟掉最多 59 秒，
+# 而下面的容差只有 0.6 分鐘，秒數一大就必然失敗——那是測試的問題，不是實作的。
+# 改用完整時間戳比對，反而更嚴格。
+eta = _dt.datetime.strptime(o0["eta"][:19], "%Y-%m-%d %H:%M:%S")
 dl = _dt.datetime.strptime("2026-06-16 09:00", "%Y-%m-%d %H:%M")
 expect_slack = round((dl - eta).total_seconds() / 60, 1)
 check("N06a", "餘裕＝期限減抵達時間（獨立換算比對）", abs(o0["slack_min"] - expect_slack) < 0.6,

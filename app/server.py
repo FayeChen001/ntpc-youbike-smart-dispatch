@@ -352,7 +352,13 @@ def _warm_routes():
 
 # ------------------------------------------------------------------ 頁面
 @app.get("/", response_class=HTMLResponse)
-def entry(): return FileResponse(os.path.join(STATIC, "index.html"))
+def entry():
+    """根網址走 v2 一站式；既有的角色選單移到 /replay，舊的三端路由都沒動。"""
+    return FileResponse(os.path.join(STATIC, "v2.html"))
+
+
+@app.get("/replay", response_class=HTMLResponse)
+def replay_entry(): return FileResponse(os.path.join(STATIC, "index.html"))
 @app.get("/stage", response_class=HTMLResponse)
 def stage(): return FileResponse(os.path.join(STATIC, "stage.html"))
 @app.get("/gov", response_class=HTMLResponse)
