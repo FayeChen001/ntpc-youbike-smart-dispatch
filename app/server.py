@@ -113,6 +113,16 @@ def scenario_delta_for(horizon):
 
 # ------------------------------------------------------------------ 告警規則
 SEV = {"high": 3, "warn": 2, "info": 1}
+def _zero_run(M, t, sid, max_back=12):
+    """回傳（連續為零的觀測筆數, 首尾相距分鐘）。缺測即中斷，不視為延續。
+    半小時快照只能說明取樣當下的狀態，不能證明取樣之間沒有恢復。"""
+    n = 0
+    for k in range(t, max(-1, t - max_back), -1):
+        v = M[k, sid]
+        if np.isnan(v) or v != 0: break
+        n += 1
+    return n, (n - 1) * 30
+
 def evaluate_alerts(p):
     t = STATE["clock"]["t_idx"]; B = PRED.ctx.B; S = PRED.ctx.S
     cands = []
@@ -122,11 +132,13 @@ def evaluate_alerts(p):
         elif st == "both_zero": cands.append((sid, "both_zero", "info", f"{r.name}：可借與可還同時為 0，狀態待查、不直接派車", 0.0))
         elif st == "cap_conflict": cands.append((sid, "cap_conflict", "info", f"{r.name}：可借＋可還超過總車柱，容量版本待確認", 0.0))
         elif st == "empty":
-            prev = B[max(0, t-2):t, sid]
-            if len(prev) == 2 and np.all(prev == 0): cands.append((sid, "persistent_empty", "high", f"{r.name}：已連續 90 分鐘以上無車可借", 1.0))
+            n_obs, span = _zero_run(B, t, sid)
+            if n_obs >= 3: cands.append((sid, "persistent_empty", "high",
+                f"{r.name}：最近 {n_obs} 次觀測（跨 {span} 分鐘）都是零車。快照之間是否曾短暫有車無法由此資料判定。", 1.0))
         elif st == "full":
-            prev = S[max(0, t-2):t, sid]
-            if len(prev) == 2 and np.all(prev == 0): cands.append((sid, "persistent_full", "high", f"{r.name}：已連續 90 分鐘以上無位可還", 1.0))
+            n_obs, span = _zero_run(S, t, sid)
+            if n_obs >= 3: cands.append((sid, "persistent_full", "high",
+                f"{r.name}：最近 {n_obs} 次觀測（跨 {span} 分鐘）都是零空位。快照之間是否曾短暫有位無法由此資料判定。", 1.0))
         if st == "normal":
             if r.pe_60 >= 0.6 and r.bikes > 0: cands.append((sid, "forecast_empty_60", "high", f"{r.name}：現有 {int(r.bikes)} 輛，60 分鐘後零車機率 {r.pe_60:.0%}", float(r.pe_60)))
             elif r.pe_120 >= 0.5 and r.bikes > 2: cands.append((sid, "forecast_empty_120", "warn", f"{r.name}：現有 {int(r.bikes)} 輛，120 分鐘後零車機率 {r.pe_120:.0%}，可提前安排", float(r.pe_120)))
@@ -140,11 +152,14 @@ def evaluate_alerts(p):
         key = f"{sid}:{typ}"; active_keys.add(key)
         if key in STATE["alerts"] and STATE["alerts"][key]["status"] != "resolved": continue
         if typ in ("stale_flat", "both_zero", "cap_conflict") and any(a["key"] == key and a["opened"][:10] == iso(now_ts())[:10] for a in STATE["alert_log"][-300:]): continue
-        if len(new) >= 8: suppressed += 1; continue
+        quiet = len(new) >= 8 and sev != "high"          # 高風險一律通知，不被節流吞掉
         a = {"id": uuid.uuid4().hex[:8], "key": key, "sid": int(sid), "station": p.loc[p.sid == sid, "name"].iloc[0], "district": p.loc[p.sid == sid, "district"].iloc[0],
              "type": typ, "severity": sev, "message": msg, "score": round(score, 2), "status": "open", "opened": iso(now_ts()), "acked": None, "resolved": None,
+             "notified": not quiet,
              "route": "待查清單" if typ in ("stale_flat", "both_zero", "cap_conflict") else ("調度端" if "persistent" in typ or "_60" in typ else "提前排程")}
-        STATE["alerts"][key] = a; STATE["alert_log"].append(a); new.append(a); ddb_put("yb_alerts", a)
+        STATE["alerts"][key] = a; STATE["alert_log"].append(a); ddb_put("yb_alerts", a)   # 先建檔，永遠不丟事件
+        if quiet: suppressed += 1
+        else: new.append(a)
     # 自動解除：條件消失
     for key, a in STATE["alerts"].items():
         if a["status"] != "resolved" and key not in active_keys and a["type"] not in ("stale_flat", "both_zero", "cap_conflict"):
@@ -159,7 +174,7 @@ def evaluate_alerts(p):
                      "score": 0.9, "status": "open", "opened": iso(now_ts()), "acked": None, "resolved": None, "route": "提前排程"}
                 STATE["alerts"][key] = a; STATE["alert_log"].append(a); new.append(a)
     for a in new: broadcast("alert", a)
-    if suppressed: broadcast("alert_digest", {"suppressed": suppressed, "message": f"另有 {suppressed} 站達到告警門檻，已併入清單不逐則通知"})
+    if suppressed: broadcast("alert_digest", {"suppressed": suppressed, "message": f"另有 {suppressed} 站已建檔於告警清單，本步不逐則跳通知（高風險不受節流）"})
     return new
 
 # ------------------------------------------------------------------ 調度任務

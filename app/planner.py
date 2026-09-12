@@ -218,22 +218,37 @@ def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, ex
                 stops.append({"sid": int(r.sid), "name": r["name"], "lat": float(r.lat), "lon": float(r.lon), "action": "dropoff", "qty": q,
                               "now_bikes": None if np.isnan(r.bikes) else int(r.bikes), "pred_bikes": round(float(r.pb_adj), 1), "cap": int(r.cap),
                               "p_empty": round(float(r.pe_h), 2), "reason": f"預測 {horizon} 分鐘後零車機率 {r.pe_h:.0%}，低於目標庫存 {int(r.min_stock)} 輛"})
-                load -= q; covered += q; pos = (float(r.lat), float(r.lon)); deficits = deficits.drop(deficits.index[i])
+                load -= q; covered += q; pos = (float(r.lat), float(r.lon))
+                remain = float(r.need_in) - q
+                if remain >= 1:      # 只補到一部分時保留殘量，不可把整站從缺口清單移除
+                    deficits.iloc[i, deficits.columns.get_loc("need_in")] = remain
+                else:
+                    deficits = deficits.drop(deficits.index[i])
             # 時間估算
             t = 0.0; prev = depot; legs = []
             for s_ in stops:
                 dm = float(hav(prev[0], prev[1], s_["lat"], s_["lon"])) * A["road_detour"]
                 tm = dm / 1000 / A["truck_speed_kmh"] * 60 + A["handling_fixed_min"] + A["handling_per_bike_min"] * s_["qty"]
                 t += tm; s_["eta_min_from_depart"] = round(t); legs.append(round(dm)); prev = (s_["lat"], s_["lon"])
-            first_drop = next((s_["eta_min_from_depart"] for s_ in stops if s_["action"] == "dropoff"), t)
+            drops = [s_ for s_ in stops if s_["action"] == "dropoff"]
+            first_drop = drops[0]["eta_min_from_depart"] if drops else t
+            last_drop = drops[-1]["eta_min_from_depart"] if drops else t
             depart_by = target_ts - pd.Timedelta(minutes=first_drop)
             earliest_arrival = now_ts + pd.Timedelta(minutes=A["lead_time_min"]) + pd.Timedelta(minutes=first_drop)
-            feasible = earliest_arrival <= target_ts
+            # 每個送站都要各自趕得上目標時間，不是只看第一個
+            ready = now_ts + pd.Timedelta(minutes=A["lead_time_min"])
+            late = [s_["name"] for s_ in drops if ready + pd.Timedelta(minutes=s_["eta_min_from_depart"]) > target_ts]
+            for s_ in drops:
+                s_["arrives_by"] = str(ready + pd.Timedelta(minutes=s_["eta_min_from_depart"]))
+                s_["on_time"] = ready + pd.Timedelta(minutes=s_["eta_min_from_depart"]) <= target_ts
+            feasible = len(late) == 0
             tasks.append({"district": dist_name, "horizon": horizon, "trip": trip_no, "stops": stops, "route_minutes": round(t), "route_km": round(sum(legs) / 1000, 1),
                           "load": int(sum(s_["qty"] for s_ in stops if s_["action"] == "pickup")),
                           "target_ts": str(target_ts), "depart_by": str(min(depart_by, target_ts)), "earliest_arrival": str(earliest_arrival),
                           "status": "planned" if feasible else "too_late",
-                          "reason": ("提前 %d 分鐘安排，可在目標時間前抵達" % horizon) if feasible else "決策到抵達至少 60 分鐘，來不及在目標時間前完成；改以在勤資源與民眾分流因應",
+                          "late_stops": late, "last_drop_min": last_drop,
+                          "reason": ("提前 %d 分鐘安排，%d 個送車站都能在目標時間前抵達" % (horizon, len(drops))) if feasible
+                                    else ("決策到抵達至少 %d 分鐘，%s 等 %d 站趕不上目標時間；改以在勤資源與民眾分流因應" % (A["lead_time_min"], "、".join(late[:2]), len(late))),
                           "depot": depot, "event_related": any(s_["sid"] in event_sids for s_ in stops)})
         remaining = max(0.0, district_deficit - covered)
         if remaining > 0 or covered > 0:
