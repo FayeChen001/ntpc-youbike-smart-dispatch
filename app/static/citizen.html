@@ -509,7 +509,7 @@ function startLeg(){ const l=S.legs[S.legIdx]; const nb=$('mapnav');
   meMarker=L.circleMarker(l.geometry[0],{radius:8,color:'#fff',weight:3,fillColor:'#1d6ff2',fillOpacity:1}).addTo(mapNav); navLayers.push(meMarker);
   mapNav.fitBounds(line.getBounds().pad(.18));
   $('nav-phase').textContent=['前往借車站','騎乘中','前往目的地'][S.legIdx];
-  $('nav-target').textContent=l.to; $('nav-extra').innerHTML = S.legIdx===1? `<button class="x" onclick="reportDuringRide()">騎乘有狀況</button>`:'';
+  $('nav-target').textContent=l.to; $('nav-extra').innerHTML = S.legIdx===1? `<button class="x" onclick="reportDuringRide()">通報問題</button>`:'';
   S.navProg=0; renderNav(); playNav(); }
 function playNav(){ clearInterval(S.navTimer); const l=S.legs[S.legIdx]; const dur=9000,tick=120;
   S.navTimer=setInterval(()=>{ S.navProg=Math.min(1,S.navProg+tick/dur);
@@ -543,7 +543,7 @@ function borrowScreen(){ const o=S.trip.option;
   $('nav-phase').textContent='借車'; $('nav-target').textContent=o.borrow.name; $('nav-extra').innerHTML='';
   $('nav-card').innerHTML=`<div class="navins"><div class="ar">🚲</div><div class="tx"><b>到了 ${o.borrow.name}</b><span>現場可借 ${o.borrow.bikes_now??'–'} 輛・系統指派車號 ${S.trip.bike_no}</span></div></div>
     <button class="btn big" onclick="borrowed()">借這台，開始騎乘</button>
-    <button class="btn warn" style="margin-top:9px" onclick="openReport('before_borrow')">借不到？回報狀況</button>
+    <button class="btn warn" style="margin-top:9px" onclick="openReport('before_borrow')">通報問題（借不到／車況異常）</button>
     <div class="hint" style="padding:9px 0 0">借車前先檢查煞車、輪胎與坐墊。回報後系統會幫你換下一台，故障車也會提早退出流通。</div>`; }
 async function borrowed(){ await API.post('/api/trip/phase',{phase:'riding'}); S.legIdx=1; startLeg(); }
 function reportDuringRide(){ pauseNav(); openReport('riding'); }
@@ -551,97 +551,165 @@ function returnScreen(){ const o=S.trip.option;
   $('nav-phase').textContent='還車'; $('nav-target').textContent=o.return.name; $('nav-extra').innerHTML='';
   $('nav-card').innerHTML=`<div class="navins"><div class="ar">🅿️</div><div class="tx"><b>到了 ${o.return.name}</b><span>目前 ${o.return.spaces_now??'–'} 個空位・車號 ${S.trip.bike_no}</span></div></div>
     <button class="btn big" onclick="finishTrip()">完成還車</button>
-    <button class="btn warn" style="margin-top:9px" onclick="openReport('after_return')">還不了？或車況要回報</button>`; }
-/* ---------- 借不到 ≠ 車壞掉：先問看得到的症狀，不強迫選根因 ---------- */
-const STAGE_TITLE={before_borrow:{t:'借不到車？',p:'先告訴我們你看到什麼，不用猜是哪裡壞了。'},
-                   riding:{t:'騎乘中有狀況？',p:'先停到安全的地方再操作。'},
-                   after_return:{t:'還不了車？',p:'先告訴我們現場的狀況。'},
-                   passing:{t:'看到有問題的設備？',p:'你不是租借人，回報不會影響你的費用。'}};
+    <button class="btn warn" style="margin-top:9px" onclick="openReport('after_return')">通報問題（還不了／車況異常）</button>`; }
+/* ---------- 通報問題：按鈕直接送出；不確定才用照片輔助；受理後才顯示工單與坐墊提醒 ---------- */
+const STAGE_TXT={before_borrow:'借車前',riding:'騎乘中',after_return:'還車時',passing:'路過看到'};
 function openReport(stage, sid){
-  S.rep={stage, sid: sid ?? (stage==='after_return'? S.trip.option.return.sid : S.trip? S.trip.option.borrow.sid : null),
-         symptoms:[], txn_state:null, bike_no:(S.trip&&stage!=='passing')?S.trip.bike_no:'', dock_no:'', error_code:'', step:0};
+  S.rep={stage, sid: sid ?? (stage==='after_return'? (S.trip&&S.trip.option.return.sid) : (S.trip? S.trip.option.borrow.sid : null)),
+         problem:null, free_text:'', bike_no:(S.trip&&stage!=='passing')?S.trip.bike_no:'', dock_id:'',
+         saddle_broken:false, image:null, image_confirmed:false, busy:false,
+         request_id:'c-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7)};
   renderReport();
 }
-function needTxn(){ return S.rep.symptoms.some(k=>(S.symptoms.find(x=>x.key===k)||{}).asks_txn); }
-function needCode(){ return S.rep.symptoms.some(k=>(S.symptoms.find(x=>x.key===k)||{}).asks_code); }
-function unsafePicked(){ return S.rep.symptoms.some(k=>(S.symptoms.find(x=>x.key===k)||{}).unsafe); }
-function repSteps(){ return needTxn()? ['sym','txn','detail'] : ['sym','detail']; }
-function toggleSym(k){ const a=S.rep.symptoms; const i=a.indexOf(k); i<0? a.push(k):a.splice(i,1); renderReport(); }
+function pickProblem(k){ S.rep.problem=k; if(k!=='unsure'&&!S.rep.image) S.rep.showPhoto=false; renderReport(); }
 function renderReport(){
-  const st=STAGE_TITLE[S.rep.stage]; const steps=repSteps(); const cur=steps[S.rep.step];
-  const bar=`<div class="stepbar">${steps.map((_,i)=>`<i class="${i<=S.rep.step?'on':''}"></i>`).join('')}</div>`;
-  let body='';
-  if(cur==='sym'){
-    body=`<div class="symp">${S.symptoms.map(x=>`<div class="sy ${S.rep.symptoms.includes(x.key)?'on':''}" onclick="toggleSym('${x.key}')">
+  const R=S.rep, P=S.problems||[];
+  const chosen=P.find(x=>x.key===R.problem);
+  const wantPhoto = R.problem==='unsure' || R.showPhoto || !!R.image;
+  const img=R.image;
+  openSheet(`<h3>通報問題</h3><p>選一個就能送出。照片和文字都不用填。${R.sid?`　地點：${stationName(R.sid)}`:''}</p>
+    <div class="symp" style="max-height:none">${P.map(x=>`<div class="sy ${R.problem===x.key?'on':''}" onclick="pickProblem('${x.key}')">
       <span class="e">${x.icon}</span><span class="t">${x.label}${x.unsafe?'<div class="warn">有安全疑慮</div>':''}</span><span class="ck"></span></div>`).join('')}</div>
-      <div class="hint" style="padding:8px 0 0">可以複選。我們不會因為你按了這裡就判定車輛故障，要有車號或柱號的重複證據才會派修。</div>`;
-  } else if(cur==='txn'){
-    body=`<div class="symp">${S.txnStates.map(t=>`<div class="sy ${S.rep.txn_state===t.key?'on':''}" onclick="S.rep.txn_state='${t.key}';renderReport()">
-      <span class="e">${t.key==='not_started'?'⭕':t.key==='unsure'?'❔':t.key==='riding'?'🚲':'🅿️'}</span><span class="t">${t.label}</span><span class="ck"></span></div>`).join('')}</div>
-      <div class="hint" style="padding:8px 0 0">這關係到我們該不該建議你換一台。狀態不明時不要反覆刷卡，可能重複扣款。</div>`;
-  } else {
-    body=`<label class="fl">車號（車身上，選填）</label><input id="rp-bike" value="${S.rep.bike_no||''}" placeholder="例如 YB2-12345" style="width:100%;border:1.5px solid #e6eaef;border-radius:12px;padding:11px;font:inherit">
-      <label class="fl">柱號（地面或柱身，選填）</label><input id="rp-dock" value="${S.rep.dock_no||''}" placeholder="例如 07" style="width:100%;border:1.5px solid #e6eaef;border-radius:12px;padding:11px;font:inherit">
-      ${needCode()?`<label class="fl">螢幕上的錯誤碼（選填）</label><input id="rp-code" value="${S.rep.error_code||''}" placeholder="例如 E-31" style="width:100%;border:1.5px solid #e6eaef;border-radius:12px;padding:11px;font:inherit">`:''}
-      <div class="hint" style="padding:10px 0 0">兩個都可以不填，直接送出。填了我們才分得出是這台車的問題還是這個柱的問題。</div>`;
-  }
-  const canNext = cur==='sym'? S.rep.symptoms.length>0 : cur==='txn'? !!S.rep.txn_state : true;
-  const last = S.rep.step===steps.length-1;
-  openSheet(`<h3>${st.t}</h3><p>${st.p}　${S.rep.sid?`地點：${(S.stations||[]).find(x=>x.sid===S.rep.sid)?.name||''}`:''}</p>
-    ${bar}${unsafePicked()&&cur!=='sym'?'<div class="safety"><span>⚠️</span><div>你選的症狀有安全疑慮。請先停止騎乘，把車停在安全的地方。<b>不要騎故障車去送修。</b></div></div>':''}
-    ${body}
-    <button class="btn" style="margin-top:12px" ${canNext?'':'disabled'} onclick="${last?'submitReport()':'nextRepStep()'}">${last?'送出回報':'下一步'}</button>
-    <button class="btn ghost" onclick="leaveReport()">先離開，之後再說</button>`);
+    ${R.problem==='body'?`<div class="sy ${R.saddle_broken?'on':''}" style="margin-top:7px" onclick="S.rep.saddle_broken=!S.rep.saddle_broken;renderReport()">
+        <span class="e">🔧</span><span class="t">壞的就是坐墊本身（卡住或鬆脫）</span><span class="ck"></span></div>`:''}
+    ${wantPhoto?photoPanel(img):`<div class="linkline" style="margin:12px 0 0" onclick="S.rep.showPhoto=true;renderReport()">＋ 加一張照片（非必填）</div>`}
+    <details style="margin-top:10px"><summary class="xs muted" style="cursor:pointer">補充說明與車號柱號（都可以不填）</summary>
+      <input id="rp-text" value="${R.free_text||''}" placeholder="一句話就好" style="width:100%;border:1.5px solid #e6eaef;border-radius:12px;padding:11px;font:inherit;margin-top:8px">
+      <div class="row2" style="margin-top:8px"><input id="rp-bike" value="${R.bike_no||''}" placeholder="車號" style="width:100%;border:1.5px solid #e6eaef;border-radius:12px;padding:11px;font:inherit">
+      <input id="rp-dock" value="${R.dock_id||''}" placeholder="柱號" style="width:100%;border:1.5px solid #e6eaef;border-radius:12px;padding:11px;font:inherit"></div></details>
+    <button class="btn" style="margin-top:12px" ${R.problem&&!R.busy?'':'disabled'} onclick="submitReport()">${R.busy?'送出中…':'送出通報'}</button>
+    <button class="btn ghost" onclick="closeSheet();afterReportClose()">先離開，之後再說</button>
+    <div class="hint" style="padding:8px 0 0">送出代表我們已受理，不代表已經確認是哪裡壞、也不代表這台車已經被停租。</div>`);
 }
-function nextRepStep(){ saveRepInputs(); S.rep.step++; renderReport(); }
-function saveRepInputs(){ const b=$('rp-bike'),d=$('rp-dock'),c=$('rp-code');
-  if(b) S.rep.bike_no=b.value.trim(); if(d) S.rep.dock_no=d.value.trim(); if(c) S.rep.error_code=c.value.trim(); }
-function leaveReport(){ closeSheet(); if(S.rep&&S.rep.id) API.post(`/api/c/report/${S.rep.id}/leave`);
-  pushNotice({title:'已離開回報',body:'不用反覆試車幫我們診斷。已填的部分我們會留著。',kind:'info',ts:S.clock.ts});
-  if(S.screen==='nav'&&S.navTimer===null&&S.legs.length) renderNav(); }
+function stationName(sid){ return ((S.stations||[]).find(x=>x.sid===sid)||{}).name||''; }
+function photoPanel(img){
+  if(S.rep.imgBusy) return `<div class="guide" style="margin-top:12px">📷 判讀中…<br><span class="xs muted">看不清楚或模型沒回應也沒關係，你照樣可以送出。</span></div>`;
+  if(!img) return `<div class="guide" style="margin-top:12px"><b>拍照或上傳照片，請 AI 協助判讀</b><br>
+    <span class="xs muted">只用來辨識看得見的現象與編號。不要拍到人臉、票卡或付款畫面。</span>
+    <input type="file" accept="image/jpeg,image/png" capture="environment" id="rp-file" style="display:none" onchange="uploadPhoto(this)">
+    <button class="btn sec" style="margin-top:9px" onclick="$('rp-file').click()">選擇照片</button></div>`;
+  const bad=!img.ok||img.degraded_reason||!(img.observations||[]).length;
+  return `<div class="guide" style="margin-top:12px">
+    <b>${bad?'照片無法確認':'照片看到這些'}</b>
+    ${bad?`<div style="margin-top:4px">${img.degraded_reason||'這張照片看不出具體問題'}。<b>你還是可以直接送出通報。</b></div>`
+        :`<ul style="margin:6px 0 0 16px;padding:0">${img.observations.map(o=>`<li>${o}</li>`).join('')}</ul>`}
+    ${(img.extracted_bike_no||img.extracted_dock_id)?`<div style="margin-top:6px">辨識到編號：${img.extracted_bike_no?`車號 <b>${img.extracted_bike_no}</b>`:''}${img.extracted_dock_id?` 柱號 <b>${img.extracted_dock_id}</b>`:''}
+      <div class="row" style="gap:6px;margin-top:5px"><button class="small primary" onclick="adoptIds(true)">正確，採用</button><button class="small" onclick="adoptIds(false)">不對，我自己填</button></div></div>`:''}
+    <div class="xs muted" style="margin-top:6px">${(img.uncertainties||[]).slice(0,2).join('；')}</div>
+    <div class="xs muted" style="margin-top:4px">${img.safety_note||'照片不能證明車輛安全。'}${img.model_source?`　來源：${img.model_source}`:''}</div>
+    ${!bad?`<div class="row" style="gap:6px;margin-top:8px"><button class="small ${S.rep.image_confirmed?'primary':''}" onclick="S.rep.image_confirmed=true;renderReport()">我確認照片沒錯</button>
+      <button class="small" onclick="S.rep.image_confirmed=false;renderReport()">不採用判讀</button></div>`:''}
+    <button class="btn ghost" style="margin-top:8px" onclick="S.rep.image=null;S.rep.image_confirmed=false;renderReport()">換一張／移除照片</button></div>`;
+}
+function adoptIds(ok){ const i=S.rep.image||{};
+  if(ok){ if(i.extracted_bike_no) S.rep.bike_no=i.extracted_bike_no; if(i.extracted_dock_id) S.rep.dock_id=i.extracted_dock_id; }
+  S.rep.image_confirmed=ok; renderReport(); }
+async function uploadPhoto(el){
+  const f=el.files&&el.files[0]; if(!f) return;
+  saveRepInputs(); S.rep.imgBusy=true; renderReport();
+  const fd=new FormData(); fd.append('file',f); fd.append('hint',(S.problems.find(x=>x.key===S.rep.problem)||{}).label||'不確定');
+  try{ const r=await fetch('/api/c/image',{method:'POST',body:fd}); S.rep.image=await r.json(); }
+  catch(e){ S.rep.image={ok:false,observations:[],uncertainties:[],requires_manual_review:true,degraded_reason:'上傳失敗：'+e.message,safety_note:'照片不能證明車輛安全。'}; }
+  S.rep.imgBusy=false; renderReport();
+}
+function saveRepInputs(){ const t=$('rp-text'),b=$('rp-bike'),d=$('rp-dock');
+  if(t) S.rep.free_text=t.value.trim(); if(b) S.rep.bike_no=b.value.trim(); if(d) S.rep.dock_id=d.value.trim(); }
 async function submitReport(){
-  saveRepInputs();
-  const body={sid:S.rep.sid,stage:S.rep.stage,symptoms:S.rep.symptoms,txn_state:S.rep.txn_state,
-              bike_no:S.rep.bike_no,dock_no:S.rep.dock_no,error_code:S.rep.error_code};
-  openSheet('<h3>送出中…</h3><p>正在判斷該交給誰處理。</p>');
-  let r; try{ r=await API.post('/api/c/report',body); }catch(e){ openSheet(`<h3>送不出去</h3><p>${e.message}</p><button class="btn" onclick="closeSheet()">關閉</button>`); return; }
-  S.rep.id=r.id; S.lastReport=r;
-  let alts={alternatives:[]};
-  if(['before_borrow','after_return'].includes(S.rep.stage)){
-    try{ alts=await API.get(`/api/c/alternatives?sid=${S.rep.sid}&kind=${S.rep.stage==='after_return'?'return':'borrow'}`); }catch(e){}
-  }
-  renderReportResult(r, alts);
+  saveRepInputs(); const R=S.rep; R.busy=true; renderReport();
+  const body={request_id:R.request_id, sid:R.sid, stage:R.stage, problem:R.problem, free_text:R.free_text,
+              bike_no:R.bike_no, dock_id:R.dock_id, saddle_broken:R.saddle_broken,
+              image_analysis:R.image||null, image_confirmed:R.image_confirmed,
+              txn_state:(R.stage==='after_return'&&R.problem==='cannot_use')?'return_unconfirmed':null};
+  let r;
+  try{ r=await API.post('/api/c/report',body); }
+  catch(e){
+    R.busy=false;
+    openSheet(`<h3>還沒送出去</h3><p>${e.message}</p>
+      <div class="guide">先不要重填。按重試會用同一個編號送，不會變成兩張單。</div>
+      <button class="btn" onclick="S.rep.busy=false;submitReport()">重試</button>
+      <button class="btn ghost" onclick="renderReport()">回上一步</button>`); return; }
+  R.busy=false; R.id=r.id; S.lastReport=r;
+  if(!r.accepted){ openSheet(`<h3>尚未受理</h3><p>伺服器沒有完成受理，請重試。</p>
+    <button class="btn" onclick="submitReport()">重試</button><button class="btn ghost" onclick="renderReport()">回上一步</button>`); return; }
+  renderAccepted(r);
 }
-function renderReportResult(r, alts){
-  const g=r.guidance, t=r.triage;
-  openSheet(`<h3>已收到，編號 ${r.id}</h3><p>${r.symptom_labels.join('、')}　${C_STAGE_TXT(r.stage)}</p>
+function renderAccepted(r){
+  const g=r.guidance||{}, sd=r.saddle||{}, tk=r.ticket;
+  const next = sd.applicable ? `<button class="btn" style="margin-top:12px" onclick="renderSaddle('${r.id}')">下一步：提醒下一位</button>`
+                             : `<button class="btn" style="margin-top:12px" onclick="renderTrack('${r.id}')">追蹤處理進度</button>`;
+  openSheet(`<h3>已受理，編號 ${r.id}</h3><p>${r.problem_label}　${STAGE_TXT[r.stage]||''}${r.idempotent?'　（同一次送出，沒有重複建單）':''}</p>
     ${g.safety_stop?'<div class="safety"><span>⚠️</span><div>請先停止騎乘，把車停在安全的地方。不要騎故障車去送修。</div></div>':''}
-    <div class="guide">${g.lines.map(l=>`<div>· ${l}</div>`).join('')}</div>
-    <div style="font-size:12.5px;margin:2px 0 8px"><b>目前判斷</b>：${t.text}<br>
-      <span style="color:var(--sub)">${t.confident?'依據':'目前證據'}：${t.evidence}　→　${t.route}</span></div>
-    <div class="tline">${r.history.map(h=>`<div><b>${h.label}</b><br><span style="color:var(--sub);font-size:11px">${h.ts}</span></div>`).join('')}</div>
-    ${r.ticket_id?`<div class="hint" style="padding:8px 0 0">已開維修工單 ${r.ticket_id}，微笑單車端看得到。</div>`
-                 :`<div class="hint" style="padding:8px 0 0">尚未指派維修。單筆回報無法證明設備故障，要有同車號或同柱號的重複證據才會派修。</div>`}
-    ${alts.alternatives&&alts.alternatives.length?`<div style="font-size:13px;font-weight:700;margin:14px 0 4px">附近還可以去這幾站</div>
-      ${alts.alternatives.map(a=>`<div class="altstn"><span class="dot" style="background:${a.state.color}"></span><span class="nm">${a.name}</span>
-        <span style="color:var(--sub)">走 ${Math.round(a.walk_min)} 分</span><b>${S.rep.stage==='after_return'?a.spaces+' 位':a.bikes+' 輛'}</b></div>`).join('')}
-      <div class="hint" style="padding:6px 0 0">${alts.disclaimer}</div>`:''}
-    ${g.may_swap?'<button class="btn" style="margin-top:12px" onclick="swapBike()">換一台再試</button>':''}
-    ${g.escalate?'<button class="btn warn" style="margin-top:12px" onclick="officialHelp()">怎麼申報未完成還車</button>':''}
+    ${tk&&tk.id?`<div class="guide"><b>維修工單 ${tk.id}</b>　${tk.status_label}<br>
+        <span class="xs muted">已進入微笑單車端的處理清單。建單不等於已確認根因，也不代表這台車已被停租。</span></div>`
+      :`<div class="guide"><b>已受理，尚未指派維修</b><br><span class="xs muted">${r.triage.text}。${r.triage.route}。</span></div>`}
+    ${g.lines&&g.lines.length?`<div class="guide">${g.lines.map(l=>`<div>· ${l}</div>`).join('')}</div>`:''}
+    ${g.no_reward?'<div class="hint" style="padding:0 0 8px">還車尚未確認，這趟不會顯示完成、也不會發放完成獎勵。</div>':''}
+    ${next}
+    ${g.may_swap?'<button class="btn sec" style="margin-top:8px" onclick="swapBike()">換一台再試</button>':''}
+    ${g.escalate?'<button class="btn warn" style="margin-top:8px" onclick="officialHelp()">怎麼申報未完成還車</button>':''}
     <button class="btn ghost" onclick="closeSheet();afterReportClose()">關閉</button>`);
 }
-function C_STAGE_TXT(s){ return {before_borrow:'借車前',riding:'騎乘中',after_return:'還車時',passing:'路過看到'}[s]||s; }
-function afterReportClose(){ if(S.screen==='nav'&&S.legs.length){ if(S.rep.stage==='before_borrow') borrowScreen(); else if(S.rep.stage==='after_return') returnScreen(); else playNav(); } }
-async function swapBike(){ const r=await API.post('/api/c/swap_bike',{reason:'使用者回報借不到'});
+function renderSaddle(rid){
+  const r=S.lastReport, sd=r.saddle;
+  const deferred = sd.status==='deferred';
+  openSheet(`<h3>提醒下一位</h3><p>${sd.title}</p>
+    ${deferred?`<div class="safety"><span>⚠️</span><div>${sd.reason}</div></div>`:''}
+    <div style="display:flex;gap:12px;align-items:center;justify-content:center;margin:10px 0 12px">
+      ${saddleSvg(false)}<span style="font-size:20px;color:var(--sub)">→</span>${saddleSvg(true)}
+    </div>
+    <div class="guide">${sd.steps.map((x,i)=>`<div>${i+1}. ${x}</div>`).join('')}</div>
+    <div class="hint" style="padding:0 0 10px">${sd.disclaimer}<br>${sd.official}</div>
+    <button class="btn" onclick="markSaddle('${rid}','done')">我已完成</button>
+    <button class="btn sec" style="margin-top:8px" onclick="markSaddle('${rid}','skipped')">不方便操作／已離開</button>`);
+}
+function saddleSvg(flipped){
+  return `<svg width="86" height="92" viewBox="0 0 86 92" aria-label="${flipped?'坐墊調低並轉向車尾':'正常坐墊'}">
+    <rect x="0" y="0" width="86" height="92" rx="10" fill="${flipped?'#fff4e8':'#f2f5f9'}" stroke="${flipped?'#f0c98a':'#e2e7ee'}"/>
+    <line x1="43" y1="${flipped?46:24}" x2="43" y2="76" stroke="#8a94a3" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="43" cy="80" r="4" fill="#8a94a3"/>
+    <path d="${flipped?'M43 46 q -16 -3 -21 4 q 10 5 21 3 z':'M43 24 q 16 -3 21 4 q -10 5 -21 3 z'}" fill="${flipped?'#d98a00':'#5c6775'}"/>
+    <text x="43" y="90" font-size="9" text-anchor="middle" fill="#7b8794">${flipped?'調低＋朝後':'正常'}</text>
+    ${flipped?'<text x="70" y="20" font-size="14">⚠️</text>':''}
+  </svg>`;
+}
+async function markSaddle(rid, st){
+  try{ await API.post(`/api/c/report/${rid}/saddle`,{status:st}); }catch(e){}
+  pushNotice({title: st==='done'?'已記錄坐墊標記':'已略過坐墊動作',
+    body: st==='done'?'這是提醒下一位的現場標記，不是把車修好。工單照常處理。':'工單不受影響，仍在處理中。',
+    kind:'ticket', ts:S.clock.ts});
+  renderTrack(rid);
+}
+async function renderTrack(rid){
+  let r; try{ r=await API.get('/api/c/report/'+rid); }catch(e){ closeSheet(); return; }
+  S.lastReport=r; const tk=r.ticket, sd=r.saddle||{};
+  openSheet(`<h3>處理進度　${r.id}</h3><p>${r.problem_label}　${r.station}</p>
+    <div class="tline">${(r.history||[]).map(h=>`<div><b>${h.label}</b><br><span style="color:var(--sub);font-size:11px">${h.ts}</span></div>`).join('')}</div>
+    ${tk&&tk.id?`<div class="guide" style="margin-top:10px"><b>工單 ${tk.id}</b>　${tk.status_label}
+      ${tk.assignee?`<br><span class="xs muted">處理單位：${tk.assignee}</span>`:''}
+      ${tk.reports>1?`<br><span class="xs muted">已合併 ${tk.reports} 次回報（同一台車或同一個柱）</span>`:''}
+      <br><span class="xs muted">狀態由微笑單車端維護，本頁不會自行計時或宣稱已修好。</span></div>`:''}
+    ${sd.marker_status&&sd.marker_status!=='unknown'?`<div class="hint" style="padding:6px 0 0">坐墊標記：${{done:'已完成（現場提醒，非維修確認）',skipped:'已略過（不影響工單）',not_applicable:'不適用'}[sd.marker_status]}</div>`:''}
+    <button class="btn sec" style="margin-top:12px" onclick="renderTrack('${rid}')">重新整理</button>
+    <button class="btn ghost" onclick="leaveReport('${rid}')">關閉</button>`);
+}
+async function leaveReport(rid){
+  closeSheet();
+  if(rid){ try{ await API.post(`/api/c/report/${rid}/leave`); }catch(e){} }
+  pushNotice({title:'已關閉頁面',body:'案件仍在處理，不會因為你離開就結案。',kind:'info',ts:S.clock.ts});
+  afterReportClose();
+}
+function afterReportClose(){ if(S.screen==='nav'&&S.legs.length){ const st=S.rep&&S.rep.stage;
+  if(st==='before_borrow') borrowScreen(); else if(st==='after_return') returnScreen(); else if(S.navTimer===null) renderNav(); } }
+async function swapBike(){ const r=await API.post('/api/c/swap_bike',{reason:'使用者通報問題'});
   if(S.trip) S.trip.bike_no=r.new_bike;
   closeSheet(); pushNotice({title:'幫你換了一台',body:`原車號 ${r.old_bike} 已標記待查，改配 ${r.new_bike}`,kind:'ticket',ts:S.clock.ts}); borrowScreen(); }
 function officialHelp(){
   openSheet(`<h3>申報未完成還車</h3><p>這件事只有營運商能處理，我們不能代你停止計費。</p>
-    <div class="guide"><div>1. 先確認車有沒有真的鎖上。沒鎖上的話請不要離開。</div>
+    <div class="guide"><div>1. 先確認車有沒有真的鎖上。沒鎖上請不要離開。</div>
       <div>2. 記下柱號、車號與現在時間，可以的話拍下車柱畫面與停放狀態。</div>
       <div>3. 用官方 APP 的客服或客服專線申報未完成還車，附上剛才的證據。</div>
-      <div>4. 我們的回報編號 ${S.rep.id||'—'} 可以一起提供，但它不會取代官方流程。</div></div>
-    <div class="hint" style="padding:0">本服務沒有介接官方租借系統，無法查詢你的交易狀態，也無法確認計費是否已停止。</div>
+      <div>4. 我們的回報編號 ${(S.lastReport||{}).id||'—'} 可以一起提供，但不會取代官方流程。</div></div>
+    <div class="hint" style="padding:0">本服務沒有介接官方租借系統，查不到你的交易狀態，也無法確認計費是否已停止。這是示範環境，工單不會送到真正的 YouBike 官方。</div>
     <button class="btn ghost" style="margin-top:10px" onclick="closeSheet();afterReportClose()">知道了</button>`);
 }
 async function finishTrip(){ clearInterval(S.navTimer); S.navTimer=null; const r=await API.post('/api/trip/finish',{}); const rep=S.lastReport?[S.lastReport]:[]; S.trip=null; S.lastReport=null;
@@ -686,7 +754,7 @@ async function loadMe(){ const p=await API.get('/api/profile'); S.profile=p; con
   <div class="mrow"><div class="l">願意步行上限</div><div class="v">${p.max_walk_min} 分鐘</div></div>
   <div style="padding:16px 18px">
     <button class="btn sec" onclick="editPref()">改變預設推薦</button>
-    <button class="btn sec" style="margin-top:8px" onclick="reportPassing()">回報路過看到的問題</button>
+    <button class="btn sec" style="margin-top:8px" onclick="reportPassing()">通報路過看到的問題</button>
     <button class="btn sec" style="margin-top:8px" onclick="notifySettings()">通知設定</button>
     <button class="btn" style="margin-top:8px" onclick="installApp()">加到手機或桌面主畫面</button>
     <button class="btn ghost" style="margin-top:8px" onclick="S.obStep=0;S.ob={...S.ob,role:p.role,home_sid:p.home_sid,work_sid:p.work_sid,out_time:p.out_time,back_time:p.back_time,join_rewards:p.join_rewards,preference:p.preference};go('onboard');obRender()">重新設定常用地點</button></div>
@@ -726,11 +794,15 @@ async function askNotifyPerm(){
     kind:'info', ts:S.clock.ts});
 }
 /* 頁面被切到背景但仍在執行時，改用系統通知。關掉頁面就收不到，這點在通知設定裡寫明。 */
+const ROLE_URL={citizen:'/citizen', ops:'/ops', gov:'/gov'};
 function osNotify(n){
   if(!('Notification' in window) || Notification.permission!=='granted') return;
   if(!document.hidden) return;
+  const role=(n.extra&&n.extra.role)||n.channel||'citizen';
+  const url=ROLE_URL[role]||'/citizen';
   navigator.serviceWorker.ready.then(reg=>reg.active&&reg.active.postMessage(
-    {type:'show-notification', title:n.title, body:n.body, tag:'yb-'+n.kind, url:'/citizen'})).catch(()=>{});
+    {type:'show-notification', title:n.title, body:n.body, tag:'yb-'+role+'-'+n.kind,
+     url, role, event_id:(n.extra&&(n.extra.event_id||n.extra.ticket_id||n.extra.report_id))||null})).catch(()=>{});
 }
 
 /* ================= PWA ================= */
@@ -757,8 +829,8 @@ connectEvents({
 });
 
 async function boot(reload){
-  const [p,places,sym]=await Promise.all([API.get('/api/profile'),API.get('/api/places'),API.get('/api/c/symptoms')]);
-  S.profile=p; S.places=places; S.symptoms=sym.symptoms; S.txnStates=sym.txn_states;
+  const [p,places,pb]=await Promise.all([API.get('/api/profile'),API.get('/api/places'),API.get('/api/c/problems')]);
+  S.profile=p; S.places=places; S.problems=pb.problems; S.txnStates=pb.txn_states;
   API.get('/api/stations').then(d=>{S.stations=d.stations;}).catch(()=>{});
   const st=await API.get('/api/state'); S.clock=st.clock; $('clock').textContent='回放 '+st.clock.ts.slice(5);
   const w=await API.get('/api/weather'); S.wx=w.replay; renderWx();

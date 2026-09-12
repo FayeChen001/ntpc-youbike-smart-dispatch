@@ -1081,25 +1081,28 @@ def api_metrics_flow():
 
 
 # ============================================================================
-# C 主線（用戶端）：借不到 ≠ 車壞掉、交易與安全狀態、回報後回饋、推播能力誠實揭露
+# C 主線（用戶端）：按鈕直接通報 → 不確定才用圖片輔助 → 受理成功 → 坐墊提醒 → 追蹤進度
+#
+# 設計界線（介面必須照著說）：
+# - 建單不等於已確認根因、不等於遠端停租、不等於官方庫存已扣除、不等於安全復役。
+# - 坐墊反轉是「提醒下一位」的現場標記，不是修好車，不會結束工單。
+# - 還車未確認時不宣稱停止計費、不發完成獎勵。
+# - 建單一律走 B 主線的 api_ops_ticket（與 POST /api/ops/tickets 同一實作），不另建入口。
 # 本區塊只新增端點與自有狀態，不修改其他主線既有的函式或 STATE 結構。
 # ============================================================================
+import report_image as RIMG
+from fastapi import UploadFile, File, Form
 
-# 可觀察症狀。刻意不問「哪裡壞了」，因為使用者看得到的是現象，不是根因。
-C_SYMPTOMS = [
-    {"key": "no_response", "icon": "🚫", "label": "刷卡或掃碼沒反應", "asks_txn": True,  "asset": "dock"},
-    {"key": "error_shown", "icon": "⚠️", "label": "螢幕顯示錯誤",     "asks_txn": True,  "asset": "dock", "asks_code": True},
-    {"key": "charge_odd",  "icon": "💳", "label": "扣款或解鎖怪怪的", "asks_txn": True,  "asset": "account"},
-    {"key": "stuck",       "icon": "🔒", "label": "車卡住拿不出來或推不進去", "asks_txn": True, "asset": "dock"},
-    {"key": "brake",       "icon": "🛑", "label": "煞車怪怪的",       "asks_txn": False, "asset": "bike", "unsafe": True},
-    {"key": "tire",        "icon": "🛞", "label": "輪胎沒氣或破了",   "asks_txn": False, "asset": "bike", "unsafe": True},
-    {"key": "chain",       "icon": "⛓️", "label": "鏈條掉了或卡住",   "asks_txn": False, "asset": "bike", "unsafe": True},
-    {"key": "body",        "icon": "🪑", "label": "坐墊、把手或車身壞了", "asks_txn": False, "asset": "bike"},
-    {"key": "battery",     "icon": "🔋", "label": "電輔車沒電或沒助力", "asks_txn": False, "asset": "bike"},
-    {"key": "no_bike",     "icon": "🅿️", "label": "現場根本沒有車可借", "asks_txn": False, "asset": "supply"},
-    {"key": "no_dock",     "icon": "🈵", "label": "現場沒有空位可還",   "asks_txn": False, "asset": "supply"},
-    {"key": "unsure",      "icon": "❓", "label": "說不上來，就是用不了", "asks_txn": True,  "asset": "unknown"},
+# 使用者按鈕。mech = 車輛機械問題，才會進入坐墊提醒。
+C_PROBLEMS = [
+    {"key": "tire",  "icon": "🛞", "label": "輪胎沒氣／破損", "kind": "mech", "asset": "bike", "unsafe": True},
+    {"key": "brake", "icon": "🛑", "label": "煞車異常",       "kind": "mech", "asset": "bike", "unsafe": True},
+    {"key": "chain", "icon": "⛓️", "label": "鏈條異常",       "kind": "mech", "asset": "bike", "unsafe": True},
+    {"key": "body",  "icon": "🪑", "label": "車身／坐墊異常", "kind": "mech", "asset": "bike", "unsafe": False, "asks_saddle_broken": True},
+    {"key": "cannot_use", "icon": "🚫", "label": "借不到／還不了", "kind": "service", "asset": "unknown"},
+    {"key": "unsure",     "icon": "❓", "label": "不確定",         "kind": "unsure",  "asset": "unknown", "offers_photo": True},
 ]
+C_PROB = {p["key"]: p for p in C_PROBLEMS}
 # 交易狀態由使用者自述，系統無法驗證。文案不可寫成已停止計費或已退款。
 C_TXN = {
     "not_started": {"label": "還沒借成功，車沒出來", "safe_swap": True},
@@ -1108,139 +1111,276 @@ C_TXN = {
     "return_unconfirmed": {"label": "推回去了但沒看到還車成功", "safe_swap": False},
 }
 C_STAGE = {"before_borrow": "借車前", "riding": "騎乘中", "after_return": "還車時", "passing": "路過看到"}
-C_STATUS = ["received", "triaging", "routed", "resolved", "user_left"]
-C_STATUS_LABEL = {"received": "已收到", "triaging": "判斷中", "routed": "已分流給負責單位（模擬）",
-                  "resolved": "已處理（模擬）", "user_left": "你已離開，我們仍會處理"}
-CREPORTS = {"items": [], "seq": 0}
+# 狀態分開：使用者離開、工單處理、服務恢復、設備驗收不共用同一個欄位。
+C_STATUS_LABEL = {
+    "received": "已受理", "pending_triage": "已受理，待診斷（尚未指派維修）",
+    "routed_repair": "已建立維修工單", "routed_ops": "已轉調度端（供需問題）",
+    "user_left": "你已離開，案件仍在處理",
+}
+SADDLE_STEPS = [
+    "把車停穩，確認腳架立好或已停回車柱。",
+    "鬆開坐墊下方的快拆桿，把坐墊降到最低。",
+    "把坐墊轉 180 度，讓坐墊前端朝向車尾。",
+    "鎖回快拆桿，確認坐墊不會自己轉動。",
+]
+CREPORTS = {"items": [], "seq": 0, "by_request": {}, "saddle": []}
+
+
+def _c_now():
+    return {"ts": iso(now_ts()), "clock_source": "replay", "version": 1}
+
+
+def _c_find(rid):
+    for r in CREPORTS["items"]:
+        if r["id"] == rid: return r
+    return None
+
+
+def _c_ticket_view(tid):
+    """工單狀態由 B 主線的 STATE['tickets'] 為準，C 只讀不改。"""
+    if not tid: return None
+    for tk in STATE["tickets"]:
+        if tk["id"] == tid:
+            return {"id": tk["id"], "status": tk["status"], "status_label": TICKET_LABEL.get(tk["status"], tk["status"]),
+                    "asset_type": tk.get("asset_type", "unknown"), "assignee": tk.get("assignee"),
+                    "reports": tk.get("reports", 1), "dedup_key": tk.get("dedup_key"),
+                    "history": tk.get("history", [])[-4:]}
+    return {"id": tid, "status": "unknown", "status_label": "工單狀態未知（可能已被重置）"}
+
+
+def _c_saddle(problem, stage, txn_state, saddle_broken):
+    """坐墊提醒的適用條件。只針對已停穩、可安全操作、坐墊本身完好的車輛機械問題。"""
+    base = {"title": "提醒下一位：把故障車坐墊調到最低，再轉 180 度朝後",
+            "steps": SADDLE_STEPS,
+            "disclaimer": "這是標記故障車給下一位看，不是把車修好。工單不會因此結束，也不會延長你的計費。",
+            "official": "YouBike 官方對故障車的處理說明（2026-04-08 公告）也是坐墊調低並反轉 180 度。本服務把提醒放在受理之後，不表示官方要求先通報才能反轉。"}
+    p = C_PROB.get(problem, {})
+    # 順序有意義：還車未確認最優先，其次是坐墊本身壞掉，最後才是「不是機械問題」。
+    if txn_state == "return_unconfirmed":
+        return {**base, "applicable": False, "status": "not_applicable",
+                "reason": "還車還沒確認，請先處理還車與計費，不要先去弄坐墊。"}
+    if problem == "body" and saddle_broken:
+        return {**base, "applicable": False, "status": "not_applicable",
+                "reason": "坐墊本身卡住或損壞時不要強行轉動，以免傷手或弄壞更多。"}
+    if p.get("kind") != "mech":
+        return {**base, "applicable": False, "status": "not_applicable",
+                "reason": "你回報的不是車輛機械問題，不要去反轉一台正常車的坐墊。"}
+    if stage == "riding":
+        return {**base, "applicable": True, "status": "deferred",
+                "reason": "你還在騎乘中。請先停到安全的地方、確認車停穩，再做這個動作。"}
+    return {**base, "applicable": True, "status": "pending", "reason": ""}
 
 
 def _c_triage(rep):
-    """依證據給疑似方向。單筆通常無法定論，預設待診斷，不把「借不到」寫成「車壞了」。"""
-    same_bike, same_dock, same_station = [], [], []
-    for r in CREPORTS["items"]:
-        if r["id"] == rep["id"]: continue
-        if (now_ts() - pd.Timestamp(r["ts"])).total_seconds() > 6 * 3600: continue
-        if rep.get("bike_no") and r.get("bike_no") == rep["bike_no"]: same_bike.append(r)
-        if rep.get("dock_no") and r.get("dock_no") == rep["dock_no"] and r["sid"] == rep["sid"]: same_dock.append(r)
-        if r["sid"] == rep["sid"]: same_station.append(r)
-    assets = {s["asset"] for s in C_SYMPTOMS if s["key"] in rep["symptoms"]}
-    if same_bike and len({r.get("dock_no") for r in same_bike if r.get("dock_no")} | ({rep["dock_no"]} if rep.get("dock_no") else set())) > 1:
-        return {"suspect": "bike", "text": "同一車號在不同車柱都出問題，疑似車輛或車機",
-                "route": "營運診斷後交授權車輛維修", "evidence": f"同車號回報 {len(same_bike)+1} 次", "confident": True}
-    if same_dock and len({r.get("bike_no") for r in same_dock if r.get("bike_no")} | ({rep["bike_no"]} if rep.get("bike_no") else set())) > 1:
-        return {"suspect": "dock", "text": "同一柱號換車還是出問題，疑似車柱或鎖具",
-                "route": "站務設備維護", "evidence": f"同柱號回報 {len(same_dock)+1} 次", "confident": True}
-    docks = {r.get("dock_no") for r in same_station if r.get("dock_no")} | ({rep["dock_no"]} if rep.get("dock_no") else set())
-    if len(docks) >= 3:
-        return {"suspect": "station", "text": "同一站多個柱同時出錯，疑似供電、網路或站端系統",
-                "route": "查設備心跳與錯誤碼", "evidence": f"同站 {len(docks)} 個柱有回報", "confident": True}
-    if assets == {"supply"}:
-        return {"suspect": "supply", "text": "現場沒有車或沒有位，屬供需問題不是設備故障",
-                "route": "調度端補車或分流", "evidence": "症狀僅涉及數量", "confident": True}
-    if assets == {"bike"}:
-        return {"suspect": "bike_symptom", "text": "回報的是車體可觀察損壞",
-                "route": "授權車輛維修", "evidence": "使用者描述機械症狀", "confident": False}
-    return {"suspect": "unknown", "text": "證據還不足以判斷是車、柱、站端還是帳戶問題",
-            "route": "待診斷，先不指派維修", "evidence": "僅單筆回報，缺車號或柱號對應",
-            "confident": False}
+    """依證據給疑似方向。按鈕選的機械問題是使用者自述，來源標明待現場檢查，不當成已確認根因。"""
+    p = C_PROB.get(rep["problem"], {})
+    img = rep.get("image") or {}
+    if p.get("kind") == "mech":
+        return {"suspect": "bike", "text": f"使用者自述{p['label']}，屬車輛可觀察機械問題",
+                "route": "維修工單，待現場檢查確認", "evidence": "使用者按鈕選擇（自述，未經現場確認）",
+                "confident": False, "source": "user_report"}
+    if p.get("kind") == "service":
+        return {"suspect": "service", "text": "借不到或還不了可能是車柱、車機、鎖具或交易，不能直接判定車輛壞掉",
+                "route": "租借／車機／鎖具／交易待查", "evidence": "使用者按鈕選擇", "confident": False, "source": "user_report"}
+    obs = img.get("observations") or []
+    if img.get("ok") and obs and img.get("suspected_asset_type") in ("bike", "dock", "station") and rep.get("image_confirmed"):
+        a = img["suspected_asset_type"]
+        return {"suspect": a, "text": f"使用者確認照片顯示的{ {'bike':'車輛','dock':'車柱','station':'站端'}[a] }可見現象",
+                "route": "待現場檢查確認", "evidence": "照片可見現象＋使用者確認（影像推測，非確認根因）",
+                "confident": False, "source": "user_confirmed_image"}
+    return {"suspect": "unknown", "text": "還無法判斷是車、柱、站端還是交易問題",
+            "route": "待診斷，先不指派維修", "evidence": "資訊不足或照片未能確認", "confident": False, "source": "user_report"}
 
 
 def _c_guidance(rep):
     """交易與安全狀態的處置建議。不宣稱已停止計費、已退款或已鎖定設備。"""
-    g = {"safety_stop": False, "may_swap": False, "lines": [], "escalate": False}
-    unsafe = [s for s in C_SYMPTOMS if s["key"] in rep["symptoms"] and s.get("unsafe")]
-    if unsafe and rep["stage"] in ("riding", "before_borrow"):
+    g = {"safety_stop": False, "may_swap": False, "escalate": False, "no_reward": False, "lines": []}
+    p = C_PROB.get(rep["problem"], {})
+    if p.get("unsafe") and rep["stage"] in ("riding", "before_borrow"):
         g["safety_stop"] = True
         g["lines"].append("這類狀況有安全疑慮。請先停止騎乘，把車停在安全的地方，不要騎故障車去送修。")
     txn = rep.get("txn_state")
-    if rep["stage"] == "before_borrow" and txn == "not_started":
+    if rep["stage"] == "before_borrow" and (txn == "not_started" or p.get("kind") == "mech"):
         g["may_swap"] = True
-        g["lines"].append("你還沒借成功，可以直接換一台。這台我們會標記待查。")
-    elif txn == "unsure":
-        g["lines"].append("交易狀態不明時，請不要反覆刷卡或重試，可能造成重複扣款。先到官方 APP 或客服查證這筆有沒有成立。")
-    elif rep["stage"] == "after_return" and txn == "return_unconfirmed":
-        g["escalate"] = True
+        g["lines"].append("你還沒騎走這台，可以直接換一台。這台我們已經標記待查。")
+    if txn == "unsure":
+        g["lines"].append("交易狀態不明時請不要反覆刷卡或重試，可能造成重複扣款。先到官方 APP 或客服查證這筆有沒有成立。")
+    if rep["stage"] == "after_return" and txn == "return_unconfirmed":
+        g["escalate"] = True; g["no_reward"] = True
         g["lines"].append("還車還沒確認，我們無法代你停止計費，也無法確認這筆是否已結束。")
         g["lines"].append("請保留現場證據：柱號、車號、現在時間，可以的話拍下車柱畫面與停放狀態。")
         g["lines"].append("接著用官方 APP 或客服申報未完成還車，這個流程只有營運商能處理。")
-    elif rep["stage"] == "riding":
+    if rep["stage"] == "riding" and not g["safety_stop"]:
         g["lines"].append("騎乘中先不要操作手機。到站停妥後再補充細節。")
     if rep["stage"] == "passing":
-        g["lines"].append("感謝回報。你不是這台車的租借人，不會影響你的任何費用。")
+        g["lines"].append("你不是這台車的租借人，回報不會影響你的任何費用。")
     if not g["lines"]:
         g["lines"].append("已收到。你可以隨時離開，不需要反覆試車幫我們診斷。")
     return g
 
 
-@app.get("/api/c/symptoms")
-def api_c_symptoms():
-    return {"symptoms": C_SYMPTOMS, "txn_states": [{"key": k, **v} for k, v in C_TXN.items()],
-            "stages": C_STAGE,
-            "note": "只問看得到的現象。根因需要租借錯誤碼、車號柱號對應與設備心跳才能確認，本服務未取得這些介接。"}
+@app.get("/api/c/problems")
+def api_c_problems():
+    return {"problems": C_PROBLEMS, "txn_states": [{"key": k, **v} for k, v in C_TXN.items()], "stages": C_STAGE,
+            "image": {"max_bytes": RIMG.MAX_BYTES, "min_side": RIMG.MIN_SIDE, "formats": ["jpeg", "png"],
+                      "purpose": "照片只用來辨識看得見的現象與編號，會送到 Amazon Bedrock 判讀，不會存進事件流或版本庫。",
+                      "avoid": "請不要拍到人臉、票卡或付款畫面。"},
+            "note": "按鈕就能送出，圖片與文字都非必填。建單代表已受理，不代表已確認根因或已停租。"}
+
+
+@app.post("/api/c/image")
+async def api_c_image(file: UploadFile = File(None), hint: str = Form("（未填）"), data_url: str = Form(None)):
+    """照片輔助判讀。失敗一律降級為人工待判讀，不回傳假的辨識成功。圖片本身不落地、不進事件流。"""
+    raw = b""
+    try:
+        if file is not None: raw = await file.read()
+        elif data_url:
+            import base64
+            raw = base64.b64decode(data_url.split(",", 1)[-1])
+    except Exception as e:
+        return {**RIMG._blank(f"讀取上傳內容失敗：{type(e).__name__}"), "hint": hint}
+    r = RIMG.analyze(raw, hint)
+    r["hint"] = hint
+    r["note"] = "辨識結果僅供你確認或更正。不採用也可以照常送出回報。"
+    return r
 
 
 @app.post("/api/c/report")
 def api_c_report(body: dict):
-    sid = int(body["sid"]); stage = body.get("stage", "passing")
-    syms = [s for s in (body.get("symptoms") or []) if s in {x["key"] for x in C_SYMPTOMS}]
-    if not syms: return JSONResponse({"error": "請至少選一個症狀"}, 400)
+    """單一回報入口。request_id 相同就回同一筆，不會重複建單。"""
+    rid_req = (body.get("request_id") or "").strip()
+    if rid_req and rid_req in CREPORTS["by_request"]:
+        old = _c_find(CREPORTS["by_request"][rid_req])
+        if old: return {**old, "idempotent": True, "ticket": _c_ticket_view(old.get("ticket_id"))}
+    problem = body.get("problem")
+    if problem not in C_PROB: return JSONResponse({"error": "unknown problem", "allowed": list(C_PROB)}, 400)
+    try: sid = int(body["sid"])
+    except Exception: return JSONResponse({"error": "sid is required"}, 400)
+    row = ST.loc[ST.sid == sid]
+    if row.empty: return JSONResponse({"error": "unknown sid"}, 404)
+
+    p = C_PROB[problem]
+    # 柱號對外統一 dock_id，相容 C 既有的 dock_no 輸入，正規化一次。
+    dock_id = (body.get("dock_id") or body.get("dock_no") or "").strip() or None
+    img = body.get("image_analysis") or None
+    if isinstance(img, dict):
+        img = {k: img.get(k) for k in ("ok", "model_source", "observations", "suspected_asset_type",
+                                       "extracted_bike_no", "extracted_dock_id", "error_text",
+                                       "uncertainties", "requires_manual_review", "degraded_reason", "ms")}
     CREPORTS["seq"] += 1
-    name = ST.loc[ST.sid == sid, "name"].iloc[0]
-    rep = {"id": f"C{CREPORTS['seq']:03d}", "sid": sid, "station": name, "stage": stage,
-           "symptoms": syms, "symptom_labels": [x["label"] for x in C_SYMPTOMS if x["key"] in syms],
-           "bike_no": (body.get("bike_no") or "").strip(), "dock_no": (body.get("dock_no") or "").strip(),
-           "error_code": (body.get("error_code") or "").strip(), "txn_state": body.get("txn_state"),
-           "note": (body.get("note") or "").strip(), "ts": str(now_ts()), "status": "received",
-           "history": [{"ts": iso(now_ts()), "status": "received", "label": C_STATUS_LABEL["received"]}],
-           "ticket_id": None, "source": "民眾症狀回報"}
+    rep = {"id": f"C{CREPORTS['seq']:03d}", "request_id": rid_req or None, "sid": sid,
+           "station": row["name"].iloc[0], "stage": body.get("stage", "passing"),
+           "problem": problem, "problem_label": p["label"], "problem_kind": p["kind"],
+           "free_text": (body.get("free_text") or "").strip()[:200] or None,
+           "bike_no": (body.get("bike_no") or "").strip() or None, "dock_id": dock_id,
+           "error_code": (body.get("error_code") or "").strip() or None,
+           "txn_state": body.get("txn_state"), "saddle_broken": bool(body.get("saddle_broken")),
+           "image": img, "image_confirmed": bool(body.get("image_confirmed")),
+           "accepted": False, "ticket_id": None, "status": "received",
+           "history": [], **_c_now()}
+    rep["history"].append({"ts": rep["ts"], "status": "received", "label": C_STATUS_LABEL["received"]})
     CREPORTS["items"].insert(0, rep)
+    if rid_req: CREPORTS["by_request"][rid_req] = rep["id"]
+
     rep["triage"] = _c_triage(rep)
     rep["guidance"] = _c_guidance(rep)
-    rep["status"] = "triaging"; rep["history"].append({"ts": iso(now_ts()), "status": "triaging",
-                                                       "label": f"{C_STATUS_LABEL['triaging']}：{rep['triage']['text']}"})
-    # 只有在證據指向設備時才開維修工單。供需問題或證據不足不開，避免把「借不到」寫成「車壞了」。
-    if rep["triage"]["suspect"] in ("bike", "dock", "station", "bike_symptom"):
-        issue = "｜".join(rep["symptom_labels"][:2])
-        tk = api_ticket_create({"sid": sid, "bike_no": rep["bike_no"], "issue": issue,
-                                "note": f"{C_STAGE.get(stage, stage)}｜{rep['triage']['text']}｜柱號 {rep['dock_no'] or '未填'}｜錯誤碼 {rep['error_code'] or '未填'}"})
-        if isinstance(tk, dict): rep["ticket_id"] = tk.get("id")
-        rep["status"] = "routed"
-        rep["history"].append({"ts": iso(now_ts()), "status": "routed",
-                               "label": f"{C_STATUS_LABEL['routed']}：{rep['triage']['route']}"})
-    elif rep["triage"]["suspect"] == "supply":
-        notify("ops", f"民眾回報借不到／還不了｜{name}", f"{'、'.join(rep['symptom_labels'])}。屬供需問題，非設備故障。", "warn", {"sid": sid, "report_id": rep["id"]})
-        rep["status"] = "routed"
-        rep["history"].append({"ts": iso(now_ts()), "status": "routed", "label": "已轉調度端（供需問題，未開維修工單）"})
+
+    # 建單：機械問題或使用者確認的照片線索才開維修工單，走 B 的單一實作。
+    if rep["triage"]["suspect"] in ("bike", "dock", "station"):
+        issue = p["label"] if p.get("kind") == "mech" else "、".join((img or {}).get("observations", [])[:1]) or "照片可見異常"
+        note_bits = [C_STAGE.get(rep["stage"], rep["stage"]), f"來源：{rep['triage']['source']}（自述／待現場檢查）"]
+        if rep["free_text"]: note_bits.append(f"補充：{rep['free_text']}")
+        if img and img.get("observations"): note_bits.append("照片觀察：" + "；".join(img["observations"][:3]))
+        if img and img.get("uncertainties"): note_bits.append("照片無法確認：" + "；".join(img["uncertainties"][:2]))
+        tk = api_ops_ticket({"sid": sid, "issue": issue, "bike_no": rep["bike_no"] or "", "dock_id": dock_id or "",
+                             "error_code": rep["error_code"] or "", "asset_type": rep["triage"]["suspect"],
+                             "source": "user_report", "note": "｜".join(note_bits)})
+        if isinstance(tk, dict) and tk.get("id"):
+            rep["ticket_id"] = tk["id"]; rep["accepted"] = True; rep["status"] = "routed_repair"
+            rep["history"].append({"ts": iso(now_ts()), "status": "routed_repair",
+                                   "label": f"{C_STATUS_LABEL['routed_repair']} {tk['id']}" + ("（合併既有工單）" if tk.get("merged") else "")})
+        else:
+            rep["status"] = "pending_triage"
+            rep["history"].append({"ts": iso(now_ts()), "status": "pending_triage", "label": "建單未成功，保留為待診斷"})
+    elif rep["triage"]["suspect"] == "service":
+        rep["accepted"] = True; rep["status"] = "routed_ops"
+        rep["history"].append({"ts": iso(now_ts()), "status": "routed_ops", "label": C_STATUS_LABEL["routed_ops"]})
+        notify("ops", f"民眾回報借不到／還不了｜{rep['station']}",
+               f"{p['label']}。車柱／車機／鎖具／交易待查，未判定車輛故障。", "warn",
+               {"sid": sid, "report_id": rep["id"], "role": "ops"})
     else:
-        notify("ops", f"待診斷回報｜{name}", f"{'、'.join(rep['symptom_labels'])}。證據不足，尚未指派維修。", "info", {"sid": sid, "report_id": rep["id"]})
-    broadcast("c_report", {k: rep[k] for k in ("id", "sid", "station", "status", "symptom_labels", "triage", "ticket_id")})
-    return rep
+        rep["accepted"] = True; rep["status"] = "pending_triage"
+        rep["history"].append({"ts": iso(now_ts()), "status": "pending_triage", "label": C_STATUS_LABEL["pending_triage"]})
+        notify("ops", f"待診斷回報｜{rep['station']}", f"{p['label']}。證據不足，尚未指派維修。", "info",
+               {"sid": sid, "report_id": rep["id"], "role": "ops"})
+
+    rep["saddle"] = _c_saddle(problem, rep["stage"], rep["txn_state"], rep["saddle_broken"])
+    rep["saddle"]["marker_status"] = "not_applicable" if not rep["saddle"]["applicable"] else "unknown"
+    # 事件流只送摘要，不含照片、base64 或自由文字。
+    broadcast("c_report", {"id": rep["id"], "sid": sid, "station": rep["station"], "status": rep["status"],
+                           "problem": problem, "ticket_id": rep["ticket_id"], "accepted": rep["accepted"]})
+    return {**rep, "ticket": _c_ticket_view(rep["ticket_id"]), "idempotent": False}
 
 
 @app.get("/api/c/report/{rid}")
 def api_c_report_get(rid: str):
-    for r in CREPORTS["items"]:
-        if r["id"] == rid: return r
-    return JSONResponse({"error": "not found"}, 404)
+    r = _c_find(rid)
+    if not r: return JSONResponse({"error": "not found"}, 404)
+    return {**r, "ticket": _c_ticket_view(r.get("ticket_id")), "server_ts": iso(now_ts())}
+
+
+@app.post("/api/c/report/{rid}/saddle")
+def api_c_saddle(rid: str, body: dict):
+    """記錄坐墊標記。這是現場提醒，不是維修確認，不會結束工單。"""
+    r = _c_find(rid)
+    if not r: return JSONResponse({"error": "not found"}, 404)
+    st = (body or {}).get("status")
+    if st not in ("done", "skipped", "not_applicable", "unknown"):
+        return JSONResponse({"error": "status must be done/skipped/not_applicable/unknown"}, 400)
+    if not r["saddle"]["applicable"] and st == "done":
+        return JSONResponse({"error": "此回報不適用坐墊標記", "reason": r["saddle"]["reason"]}, 409)
+    r["saddle"]["marker_status"] = st
+    r["history"].append({"ts": iso(now_ts()), "status": r["status"],
+                         "label": {"done": "使用者回報已完成坐墊反轉（現場提醒，非維修確認）",
+                                   "skipped": "使用者略過坐墊動作（工單不受影響）",
+                                   "not_applicable": "不適用坐墊標記",
+                                   "unknown": "坐墊標記狀態未知"}[st]})
+    CREPORTS["saddle"] = [x for x in CREPORTS["saddle"] if x["report_id"] != rid]
+    CREPORTS["saddle"].append({"report_id": rid, "ticket_id": r.get("ticket_id"), "sid": r["sid"],
+                               "bike_no": r.get("bike_no"), "saddle_marker_status": st,
+                               "source": "user_report", "ts": iso(now_ts())})
+    return {"report_id": rid, "saddle_marker_status": st, "ticket_id": r.get("ticket_id"),
+            "ticket_unchanged": True,
+            "note": "坐墊標記只是現場提醒，工單狀態不受影響，也不代表車輛已修好或已驗收。",
+            "pending_contract": "B 主線尚未在工單上提供 saddle_marker_status 欄位；在那之前請讀 /api/c/saddle_markers。"}
+
+
+@app.get("/api/c/saddle_markers")
+def api_c_saddle_markers():
+    """給 B／A 讀的坐墊標記清單。B 在工單加上欄位後可改為直接寫入工單。"""
+    return {"markers": CREPORTS["saddle"],
+            "semantics": "done 代表使用者自述已把故障車坐墊反轉，僅為現場提醒；不是維修確認、不停止工單、不是安全或故障真值。"}
 
 
 @app.post("/api/c/report/{rid}/leave")
 def api_c_report_leave(rid: str):
-    for r in CREPORTS["items"]:
-        if r["id"] == rid:
-            r["status"] = "user_left"
-            r["history"].append({"ts": iso(now_ts()), "status": "user_left", "label": C_STATUS_LABEL["user_left"]})
-            return r
-    return JSONResponse({"error": "not found"}, 404)
+    r = _c_find(rid)
+    if not r: return JSONResponse({"error": "not found"}, 404)
+    r["history"].append({"ts": iso(now_ts()), "status": r["status"], "label": C_STATUS_LABEL["user_left"]})
+    r["user_left"] = True
+    return {**r, "ticket": _c_ticket_view(r.get("ticket_id")),
+            "note": "使用者離開不結案。工單與回報狀態維持不變。"}
 
 
 @app.get("/api/c/reports")
-def api_c_reports(): return {"items": CREPORTS["items"][:30]}
+def api_c_reports():
+    return {"items": [{**r, "ticket": _c_ticket_view(r.get("ticket_id"))} for r in CREPORTS["items"][:30]],
+            "server_ts": iso(now_ts())}
 
 
 @app.get("/api/c/alternatives")
 def api_c_alternatives(sid: int, kind: str = "borrow"):
-    """附近替代站。明示是預測與快照，不保證你走到時還有車或還有位。"""
+    """附近替代站。明示是快照與預測，不保證你走到時還有車或還有位。"""
     p = current_pred()
     row = p[p.sid == sid]
     if row.empty: return JSONResponse({"error": "unknown station"}, 404)
@@ -1252,8 +1392,7 @@ def api_c_alternatives(sid: int, kind: str = "borrow"):
         ok = (s["bikes"] or 0) >= 2 if kind == "borrow" else (s["spaces"] or 0) >= 2
         if not ok: continue
         out.append({**s, "state": s["ease"] if kind == "borrow" else s["dock"]})
-    out = out[:5]
-    return {"station": r["name"], "kind": kind, "alternatives": out, "ts": iso(now_ts()),
+    return {"station": r["name"], "kind": kind, "alternatives": out[:5], "ts": iso(now_ts()),
             "disclaimer": "這是最近一次快照與預測，不是保證。走過去時可能已經被借走或停滿，建議到場前再看一次。"}
 
 
@@ -1262,26 +1401,19 @@ def api_c_push_status():
     """誠實揭露推播能力。沒有推播伺服器就不能宣稱背景送達。"""
     configured = bool(os.environ.get("VAPID_PUBLIC_KEY"))
     return {
-        "web_push_configured": configured,
-        "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY") or None,
+        "web_push_configured": configured, "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY") or None,
         "levels": [
             {"key": "in_page", "label": "頁面內通知", "available": True,
              "desc": "這個頁面開著的時候才會出現。經 Server-Sent Events 由伺服器推到瀏覽器。"},
             {"key": "os_while_alive", "label": "系統通知（頁面仍在執行時）", "available": True,
              "desc": "需要你授權通知權限。切到別的 App 時仍可能出現，但把這個分頁關掉就不會有。"},
             {"key": "background_push", "label": "背景推播（關掉頁面也收得到）", "available": configured,
-             "desc": "需要推播伺服器與 VAPID 金鑰。本次未設定，所以關掉頁面後不會收到任何通知。"},
+             "desc": "需要推播伺服器與 VAPID 金鑰。本次未設定，關掉頁面後不會收到任何通知。iOS 鎖定畫面通知本輪為明示模擬。"},
         ],
         "honesty": "介面不會顯示「已送達」。伺服器只知道事件已發出，不知道你的裝置有沒有收到或看到。",
-        "ios_note": "iPhone 需先把網頁加到主畫面，才能使用 Web Push；本次未設定推播伺服器，所以加了也只有頁面內通知。",
+        "ios_note": "iPhone 需先把網頁加到主畫面才能使用 Web Push；本次未設定推播伺服器，所以加了也只有頁面內通知。",
+        "simulated": True,
     }
-
-
-@app.post("/api/c/reset")
-def api_c_reset():
-    """C 主線自有狀態的重置。api_reset 由共用邏輯負責，這裡不動它。"""
-    n = len(CREPORTS["items"]); CREPORTS["items"].clear(); CREPORTS["seq"] = 0
-    return {"cleared_reports": n}
 
 
 @app.post("/api/c/swap_bike")
@@ -1290,9 +1422,26 @@ def api_c_swap_bike(body: dict = None):
     t = STATE["trip"]
     if not t: return JSONResponse({"error": "no trip"}, 404)
     old = t["bike_no"]; t["bike_no"] = f"YB2-{np.random.randint(10000, 99999)}"
-    t.setdefault("skipped_bikes", []).append({"bike_no": old, "reason": (body or {}).get("reason", "使用者回報借不到")})
+    t.setdefault("skipped_bikes", []).append({"bike_no": old, "reason": (body or {}).get("reason", "使用者回報")})
     broadcast("trip", t)
     return {"old_bike": old, "new_bike": t["bike_no"]}
+
+
+@app.post("/api/c/reset")
+def api_c_reset():
+    """C 主線自有狀態的重置。api_reset 由共用邏輯負責，這裡不動它。"""
+    n = len(CREPORTS["items"])
+    CREPORTS["items"].clear(); CREPORTS["by_request"].clear(); CREPORTS["saddle"].clear(); CREPORTS["seq"] = 0
+    RIMG.STATUS.update({"calls": 0, "degraded": 0, "last_error": None, "last_model": None})
+    return {"cleared_reports": n}
+
+
+@app.get("/api/c/vision/status")
+def api_c_vision_status():
+    return {**RIMG.STATUS, "model": RIMG.VISION_MODEL, "timeout_s": RIMG.VISION_TIMEOUT_S,
+            "provider": "Amazon Bedrock（競賽允許的基礎模型）",
+            "degrade_policy": "模型不可用、逾時或看不清楚，一律保留照片附件與人工待判讀，不回傳假的辨識成功。"}
+
 
 
 # ============================================================================

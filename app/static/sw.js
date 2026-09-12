@@ -39,11 +39,22 @@ self.addEventListener("message", e => {
   });
 });
 
+// 依角色路由：政府通知開 /gov、營運通知開 /ops、民眾通知才開 /citizen。
+// 先找同一個角色已開著的分頁聚焦，找不到才新開。帶 event_id 讓目標頁深連結到那一筆。
 self.addEventListener("notificationclick", e => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || "/citizen";
+  const d = e.notification.data || {};
+  const base = d.url || "/citizen";
+  const target = base + (d.event_id ? (base.includes("?") ? "&" : "?") + "focus=" + encodeURIComponent(d.event_id) : "");
   e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
-    for (const c of list) { if (c.url.includes("/citizen") && "focus" in c) return c.focus(); }
-    if (clients.openWindow) return clients.openWindow(url);
+    for (const c of list) {
+      try {
+        if (new URL(c.url).pathname === new URL(target, self.location.origin).pathname && "focus" in c) {
+          if ("navigate" in c) c.navigate(target);
+          return c.focus();
+        }
+      } catch (err) {}
+    }
+    if (clients.openWindow) return clients.openWindow(target);
   }));
 });
