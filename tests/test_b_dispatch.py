@@ -9,6 +9,15 @@ FOCUS = ["板橋區", "新莊區", "土城區"]
 BASE = os.environ.get("YB_BASE", "http://127.0.0.1:8787")
 def get(u):
     with urllib.request.urlopen(BASE + u, timeout=20) as r: return json.loads(r.read().decode())
+# 自己鎖定情境與時鐘，不要吃前一支測試留下的狀態
+# （曾經因為前一支跑完 /api/reset 加推時鐘，落在所有缺車站期限剛好相同的時點而誤判失敗）
+def post(u, body=None):
+    d = json.dumps(body or {}).encode()
+    r = urllib.request.Request(BASE + u, data=d, method="POST", headers={"content-type": "application/json"})
+    with urllib.request.urlopen(r, timeout=60) as x: return json.loads(x.read().decode())
+post("/api/scenario/commute_am")
+import time; time.sleep(2)
+
 pred = pd.DataFrame(get("/api/stations?adjusted=1")["stations"])
 for c in ("bikes", "spaces", "cap"): pred[c] = pd.to_numeric(pred[c], errors="coerce")
 now = pd.Timestamp(get("/api/state")["clock"]["ts"])

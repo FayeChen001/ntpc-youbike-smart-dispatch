@@ -42,9 +42,14 @@ s, sd = POST(f"/api/c/report/{r1['id']}/saddle", {"status": "skipped"})
 check("C03 坐墊端點回報成功", s, 200)
 tk2 = GET(f"/api/ops/tickets/{tid}")[1]
 check("C03 略過坐墊後工單狀態不變", tk2["status"], "reported")
-ext = tk2.get("saddle_marker_external") or {}
-check("C03 B 端看得到坐墊標記（唯讀橋接）", ext.get("status"), "skipped")
-check("C03 橋接明示不是工單權威欄位", ext.get("authoritative"), False)
+# C 已改成直接寫工單的權威欄位（原本是存在自己的 CREPORTS，靠 B 的唯讀橋接才看得到）。
+# 這裡驗權威欄位；saddle_marker_external 仍保留為 fallback，不強制要求它出現。
+sm = tk2.get("saddle_marker") or {}
+check("C03 坐墊標記寫進工單的權威欄位", sm.get("status"), "skipped")
+check("C03 標記來源記為 user_report", sm.get("source"), "user_report")
+check("C03 標記不改設備驗收狀態", tk2.get("asset_state"), "suspect")
+ext = tk2.get("saddle_marker_external")
+check("C03 權威欄位有值時不再需要唯讀橋接", ext is None, True)
 
 # B 端：派查 → 現場 → 處理 → 驗收
 v = tk2["version"]

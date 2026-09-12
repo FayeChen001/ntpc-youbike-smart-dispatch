@@ -195,39 +195,27 @@ GET /api/ops/availability?district=板橋區&sid=123&only_flagged=1
 
 工單推進到 `verified` 後會自動從不可用名單移除（實測：2 台 → 驗收 1 台 → 剩 1 台）。
 
-## 7b. 目前待 C 調整的三件事
+## 7b. 跨端接線狀況（2026-09-13 重啟後複驗）
 
-### (1) `api_reset` 沒有清掉 `CREPORTS` — **這一項會擋驗收「三端 reset 一致」**
+### (1) ~~`api_reset` 沒有清掉 `CREPORTS`~~ — **C 已修（`f8184e1`），複驗全過**
 
-重現：`python3 tests/test_b_reset_crossend.py`（B 的部分通過，這三項失敗）
+`python3 tests/test_b_reset_crossend.py` 現在 9 項全過：reset 後舊工單與舊回報都回 404、
+坐墊標記不留殘影、重送同一個 `request_id` 會建出**全新的單**
+（`version=1`、`reports=1`、時間戳是重送當下）。
 
-```
-[FAIL] reset 後 C 的回報也該清掉         → GET /api/c/report/C001 仍回 200，ticket_id=R001（工單已刪）
-[FAIL] reset 後坐墊標記不該指向已刪工單   → /api/c/saddle_markers 仍有 ticket_id=R001
-[FAIL] reset 後同 request_id 應重新建單   → 仍回傳舊的 R001（by_request 未清）
-```
+**複驗時修掉我自己一條錯的判準**：原本用「重送後的 `ticket_id` 應該不同」判定殘影，
+但 reset 之後編號從 R001 重新開始，新單本來就會撞到舊 id，這樣根本分不出新舊。
+改成「舊 id 要 404、新 id 要解析得到、且 `version/reports` 是全新值、時間戳不同」。
 
-後果：reset 之後 C 端會顯示一張**已經不存在的工單編號**，而且同一個 `request_id`
-再送會拿到殘影而不是新單。
+### (2) ~~坐墊標記還沒寫進工單~~ — **C 已改成直接寫權威欄位，複驗通過**
 
-修法是在 `api_reset()` 加一行（`CREPORTS` 是 C 的狀態，依分工由 C 決定語意）：
+C 端呼叫 `/api/c/report/{rid}/saddle` 之後，工單上的 `saddle_marker` 會直接變成
+`{status:"skipped", source:"user_report", ts:"..."}`，而 `status` 仍為 `reported`、
+`asset_state` 仍為 `suspect`、`version` 前進——**標記不結案、不代表修好**，符合契約。
 
-```python
-CREPORTS.update({"items": [], "seq": 0, "by_request": {}, "saddle": []})
-```
+`saddle_marker_external` 唯讀橋接保留為 fallback（權威欄位有值時不會出現）。
+A 端若看到它，代表那是用戶端回報清單裡的資料、**不是**工單上的已確認資訊。
 
-B 這邊的對應狀態（`TK.SERVICE.reset()`、`PL.ledger_reset()`）已經在 `api_reset` 裡清了。
-
-### (2) 坐墊標記還沒寫進工單（我已先做相容，不擋 demo）
-
-C 目前把坐墊標記存在自己的 `CREPORTS["saddle"]`，回應裡寫
-   「B 主線尚未提供 saddle_marker_status 欄位」——那是在我這個端點上線前寫的。
-   現在 `POST /api/ops/tickets/{id}/saddle` 已經可用，請改成在記錄自己的回報後
-   一併呼叫它，工單上的 `saddle_marker` 才會是權威值。
-   **在那之前**我在 `GET /api/ops/tickets`／`/{id}` 做了唯讀橋接：
-   若工單的 `saddle_marker.status` 還是 `unknown`，會附一個
-   `saddle_marker_external: {status, source, ts, origin:"c_report", authoritative:false}`。
-   這是唯讀的，不會覆寫工單欄位，A 端請不要把它當成已確認資訊。
 ### (3) `merged` 欄位
 
 C 的程式讀 `tk.get("merged")`，我原本只回 `action`。已補上 `merged: true/false` 相容欄位，
@@ -247,6 +235,9 @@ C 不必改碼。
 | C01 | 同 request_id 重送只建一張 | fixture＋HTTP（8789） | **通過** 兩次同 id、工單數 1 |
 | C01 | 無圖片可直接建單 | fixture | **通過** `diagnosis=direct_repair` |
 | C03 | 略過坐墊不結案 | fixture＋HTTP | **通過** status 仍 reported、asset_state 仍 suspect |
+| C03 | 坐墊標記寫進工單權威欄位 | HTTP 閉環（2026-09-13） | **通過** C 端呼叫後 `saddle_marker` 直接生效 |
+| — | 三端 reset 一致 | HTTP（2026-09-13 重啟後） | **通過** 9 項，舊工單／回報／坐墊標記都不留殘影 |
+| — | only_flagged 列出有故障設備的站 | HTTP（2026-09-13） | **通過** 官方可借 5、已知不可用 1 的站會被列出 |
 | I01 | 修復不等於驗收 | HTTP | **通過** recovered→asset_state=repaired，未到 verified |
 | I02 | 同站兩台不同車不合併 | fixture＋HTTP（跨兩個入口） | **通過** 兩張單，同車跨入口才合併 |
 | I02 | `dock_no`→`dock_id` 結構化保留 | fixture＋HTTP | **通過** 同站不同柱不合併 |
@@ -362,11 +353,9 @@ git show :app/server.py > /tmp/staged.py && python3 -c "import ast;ast.parse(ope
 
 ## 4. 接手後第一件事：重啟 8787 並複驗兩項
 
-共用機目前跑的程式**少了兩個已經 commit 的修正**：
-
-1. `only_flagged` 過濾條件修正（`c6bb5aa`）——有已知不可用設備但未達整站門檻的站會被漏掉。
-2. C 在 `api_reset` 補的 `CREPORTS` 清除（`f8184e1`）——我的
-   `tests/test_b_reset_crossend.py` 目前有 3 項失敗，**程式碼已修，等重啟後複驗應該要全過**。
+**2026-09-13 已重啟並複驗完畢，這一節保留作為下次重啟的操作範本。**
+當時補驗的兩項都已通過：`only_flagged` 修正（有已知不可用設備但未達整站門檻的站會列出來了）、
+跨端 reset 一致（9 項全過）。八套測試對 8787 連跑全數 exit 0。
 
 ```bash
 # 重啟前一定要在 chat 喊一聲，會清掉三端的回放狀態

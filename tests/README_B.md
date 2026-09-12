@@ -32,4 +32,6 @@ YB_BASE=http://127.0.0.1:8787 python3 tests/test_b_http_tickets.py
 **對共用的 8787 跑之前一定要先在 chat 講**；跑完請用
 `curl -X POST http://127.0.0.1:8787/api/scenario/commute_am -d '{}' -H 'content-type: application/json'`
 把情境與任務復原。
-`test_b_http_cycle.py` 會自己把時鐘推一步讓伺服器重排任務，不依賴前一支測試留下的狀態。
+`test_b_http_cycle.py` 會自己把時鐘推一步讓伺服器重排任務；`test_b_dispatch.py` 會自己
+`POST /api/scenario/commute_am` 鎖定時鐘。兩支都不依賴前一支測試留下的狀態——連跑時
+前一支的 `/api/reset` 會清掉任務，曾經因此誤判失敗。

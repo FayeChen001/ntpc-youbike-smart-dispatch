@@ -20,6 +20,7 @@ body = {"sid": sid, "stage": "before_borrow", "problem": "chain", "bike_no": "YB
 s, rep = POST("/api/c/report", body)
 tid = rep.get("ticket_id"); rid = rep.get("id")
 check("前置：C 回報建出工單", bool(tid and rid), True)
+first_ts = GET(f"/api/ops/tickets/{tid}")[1].get("ts")
 POST(f"/api/c/report/{rid}/saddle", {"status": "skipped"})
 
 POST("/api/reset")
@@ -37,10 +38,20 @@ stale = [m for m in sm.get("markers", []) if m.get("ticket_id") == tid]
 check("reset 後坐墊標記不該還指向已刪除的工單", stale, [],
       "CREPORTS['saddle'] 未被 api_reset 清除")
 
+# 重送同一個 request_id：要建出「真正的新單」。
+# 不能拿 ticket_id 字串比對——reset 之後編號從 R001 重新開始，新單本來就會撞到舊的 id。
+# 真正的判準是：舊 id 已經 404、新 id 解析得到、而且那張單是全新的（version=1、reports=1、時間不同）。
+POST("/api/clock", {"action": "step"})          # 推一步讓時間戳分得出新舊
 s4, again = POST("/api/c/report", body)
-check("reset 後同一個 request_id 應該重新建單，而不是回傳舊的殘影",
-      again.get("ticket_id") != tid or again.get("ticket_id") is None, True,
-      f"舊 ticket_id={tid}，重送後拿到 {again.get('ticket_id')}；CREPORTS['by_request'] 未清")
+new_tid = again.get("ticket_id")
+s5, new_tk = GET(f"/api/ops/tickets/{new_tid}")
+check("reset 後重送，回傳的 ticket_id 解析得到（不是指向已刪除的單）", s5, 200)
+check("reset 後重送建出來的是全新的單，不是殘影",
+      (new_tk.get("version"), new_tk.get("reports")), (1, 1),
+      f"若是殘影，version/reports 會沿用舊值")
+check("reset 後重送，工單總數為 1", len(GET("/api/tickets")[1]["tickets"]), 1)
+check("reset 後重送的單，時間戳是重送當下而不是 reset 前",
+      new_tk.get("ts") != first_ts, True, f"reset 前 ts={first_ts}，重送後 ts={new_tk.get('ts')}")
 
 POST("/api/reset")
 print()
