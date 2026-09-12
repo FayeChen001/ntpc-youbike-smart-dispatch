@@ -263,6 +263,7 @@ def check_reminders():
 TICKET_FLOW = ["reported", "accepted", "on_site", "recovered", "verified", "closed"]
 TICKET_LABEL = {"reported": "已回報", "accepted": "授權店家接單（模擬）", "on_site": "現場處理中（模擬）", "recovered": "已回收/維修（模擬）", "verified": "驗收復役（模擬）", "closed": "結案，核發獎勵"}
 def progress_tickets():
+    _b_update_service_states()
     for tk in STATE["tickets"]:
         if tk["status"] == "closed": continue
         if tk.get("manual"): continue          # 已由派車端實際派工的單，狀態只能由人推進
@@ -274,6 +275,12 @@ def progress_tickets():
             if want == "closed":
                 grant_reward(12, f"有效報修 {tk['station']}", stamp={"name": "維修回報章", "type": "service"})
                 notify("citizen", "報修已結案", f"{tk['station']} 的回報經店家驗收復役，獲得維修回報章 +12 點（獎勵兌付為模擬）", "reward")
+
+def _b_update_service_states():
+    """B 線掛在 tick 上的服務觀測更新。實作在檔尾，這裡延後呼叫。"""
+    try: update_service_states()
+    except NameError: pass          # 模組載入期間檔尾尚未定義完成
+    except Exception as e: print("service_state update error", e, flush=True)
 
 def grant_reward(points, reason, stamp=None, coupon=None):
     R = STATE["rewards"]; R["points"] += points
@@ -1648,7 +1655,7 @@ def api_ops_tickets(state: str = "", pending: int = 0):
     if state == "open": out = [t for t in out if t["status"] != "closed"]
     if pending: out = [t for t in out if t.get("diagnosis") == "pending_triage"]
     return {"tickets": [_with_saddle(t) for t in out], "flow": [{"key": k, "label": TK.FLOW_LABEL[k]} for k in TK.FLOW],
-            "contract_version": "b-1", "clock_source": "replay", "ts": iso(now_ts())}
+            "contract_version": "b-2", "clock_source": "replay", "ts": iso(now_ts())}
 
 @app.get("/api/ops/tickets/dedup")
 def api_ops_ticket_dedup():
@@ -1708,19 +1715,69 @@ def api_ops_ticket_transition(tid: str, body: dict = None):
 def api_ops_contract():
     """給 A／C 對照的契約摘要，避免三端各自猜欄位。唯讀。"""
     return {
-        "contract_version": "b-1",
+        "contract_version": "b-2",
         "single_entry": "POST /api/tickets 與 POST /api/ops/tickets 都委派 server.submit_ticket → app/tickets.py",
         "identifiers": {"dock": "對外統一 dock_id，相容輸入 dock_no，內部正規化一次",
                         "null_policy": "沒有就是 null，不用空字串冒充識別"},
         "idempotency": "帶 request_id 重送回同一張單（action=idempotent）",
         "dedup_rule": "車號 > 柱號 > 站點＋問題類別；站點層級限 2 小時且雙方都必須沒有資產識別",
         "states": {"status": TK.FLOW, "service_state": list(TK.SERVICE_STATE),
+                   "service_state_label": TK.SERVICE_LABEL,
+                   "service_flags": ["handled_not_restored", "restored_not_closed"],
                    "asset_state": list(TK.ASSET_STATE), "saddle_marker": list(TK.SADDLE)},
-        "state_meaning": {"status": "工單處理流程", "service_state": "站點服務是否恢復",
+        "state_meaning": {"status": "工單處理流程",
+                          "service_state": "該站這一種服務有沒有被觀測到中斷。unknown=資料不足以判定、nominal=觀測未見中斷、degraded=觀測到中斷中、restored=曾中斷已觀測到恢復。快照不是交易，有車不等於借得到；車輛工單的站點借車狀況也不代表那台車修好了",
                           "asset_state": "設備驗收", "saddle_marker": "用戶現場標記，非維修確認"},
         "version": "每次變更 +1；transition 帶舊 version 回 409",
         "clock_source": "replay", "ts": iso(now_ts()),
     }
+
+# ---- B 線：站點服務觀測（service_state） ----
+# 工單的 service_state 是「該站這一種服務有沒有被觀測到中斷」，不是維修進度。
+# 觀測面直接沿用政府端 events.observed_run，不自己再寫一套零車／零位判定。
+def _service_observe(sid, kind):
+    """回傳 (observed, detail)。observed ∈ ok / down / no_data。
+    kind: empty=借車、full=還車、both=兩者任一中斷就算中斷。"""
+    kinds = ("empty", "full") if kind == "both" else (kind,)
+    p = current_pred()
+    row = p[p.sid == int(sid)]
+    if row.empty: return "no_data", {"reason": "站點不在預測集合中"}
+    r = row.iloc[0]
+    if r["status"] in ("no_data", "stale_flat", "cap_conflict", "both_zero"):
+        return "no_data", {"reason": f"站點狀態 {r['status']}，不足以判定服務", "station_status": r["status"]}
+    for k in kinds:
+        val = r["bikes"] if k == "empty" else r["spaces"]
+        if val is None or pd.isna(val):
+            return "no_data", {"reason": "該時點無有效觀測"}
+        if float(val) <= 0:
+            # 注意不要用 observed 當 key：外層會用 {**detail} 展開，會蓋掉 observed 的字串值
+            det = {"service": "借車" if k == "empty" else "還車", "observed_value": 0}
+            try:
+                run = EV.observed_run(PRED.ctx, PRED.bins, STATE["clock"]["t_idx"], int(sid), k)
+                if run: det.update({"span_min": run["span_min"], "upper_min": run["upper_min"],
+                                    "upper_known": run["upper_known"], "last_data_ts": run["last_data_ts"],
+                                    "gap_inside": run["gap_inside"], "wording": run["wording"]})
+            except Exception:
+                pass
+            return "down", det
+    return "ok", {"bikes": None if pd.isna(r["bikes"]) else int(r["bikes"]),
+                  "spaces": None if pd.isna(r["spaces"]) else int(r["spaces"])}
+
+def update_service_states():
+    """每個 tick 更新一次工單的服務觀測。只寫觀測欄位，不動工單處理狀態。"""
+    now = iso(now_ts())
+    for tk in STATE["tickets"]:
+        kind = TK.SERVICE_KIND.get(tk.get("asset_type"), "both")
+        observed, detail = _service_observe(tk["sid"], kind)
+        prev = tk.get("service_state") or "unknown"
+        nxt = TK.service_transition(prev, observed)
+        tk["service_state"] = nxt
+        tk["service_checked_at"] = now
+        tk["service_stale"] = (observed == "no_data")
+        tk["service_basis"] = {"kind": kind, "observed": observed, **detail}
+        if nxt == "degraded" and prev != "degraded": tk["degraded_since"] = now
+        if nxt == "restored" and prev == "degraded": tk["restored_at"] = now
+        tk["service_flags"] = TK.service_flags(tk.get("status"), nxt)
 
 # ---- B 線：規劃週期與任務資源狀態 ----
 def _find_task(tid):

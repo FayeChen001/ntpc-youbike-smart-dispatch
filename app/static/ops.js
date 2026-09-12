@@ -22,6 +22,13 @@ const TK_LABEL = { reported: '已受理', accepted: '班組接單', on_site: '�
 const TK_NEXT = { reported: 'accepted', accepted: 'on_site', on_site: 'recovered', recovered: 'verified', verified: 'closed' };
 const ASSET_TXT = { bike: '車輛', dock: '車柱', station: '站端系統', unknown: '待判定' };
 const ESCALATE = { cross_district: '跨區支援', accept_delay: '接受延誤並通知', divert_only: '無可派資源，改民眾分流' };
+const SVC = { unknown: '資料不足以判定', nominal: '觀測未見中斷', degraded: '觀測到服務中斷中', restored: '曾中斷，已觀測到恢復' };
+const SVC_CLASS = { unknown: 'grey', nominal: 'ok', degraded: 'high', restored: 'info' };
+const SVC_FLAG = { handled_not_restored: '已處理但站點服務仍中斷', restored_not_closed: '服務已恢復但工單未結案' };
+function svcBadge(t) {
+  const st = t.service_state || 'unknown';
+  return `<span class="badge ${SVC_CLASS[st]}">${SVC[st]}${t.service_stale ? '（資料中斷）' : ''}</span>`;
+}
 const SERVICE_TARGET_MIN = 30;   // 主管訪談輸入：空站約 30 分鐘可接受（非官方 SLA，見 docs/DIRECTION_REVIEW_2026-09-12.md）
 const HAV = (a, b) => { const R = 6371000, r = Math.PI / 180;
   const x = (b[0] - a[0]) * r, y = (b[1] - a[1]) * r * Math.cos((a[0] + b[0]) / 2 * r);
@@ -452,7 +459,8 @@ function ticketCard(t) {
     <div class="stepper" style="margin-top:5px">${TK_FLOW.map((k, i) => `<div class="st ${i < idx ? 'done' : (i === idx ? 'cur' : '')}"><i></i>${TK_LABEL[k]}</div>`).join('')}</div>
     <div class="rs">${String(t.ts).slice(11, 16)} 受理${t.reports > 1 ? `・合併 ${t.reports} 次` : ''}${st ? `・該站現有 ${st.bikes ?? '–'} 輛` : ''}
       ${t.crew ? `・<b>${t.crew}</b>${t.eta ? ` ETA ${t.eta}` : ''}` : '・<b style="color:var(--bad)">未指派</b>'}
-      ${pend ? '・<b style="color:var(--bad)">待診斷</b>' : ''}</div></div>`;
+      ${pend ? '・<b style="color:var(--bad)">待診斷</b>' : ''}</div>
+    ${(t.service_flags || []).length ? `<div class="rs"><b style="color:var(--bad)">⚠ ${(t.service_flags || []).map(f => SVC_FLAG[f]).join('、')}</b></div>` : ''}</div>`;
 }
 function emptyCard(s) {
   return `<div class="task ${s._isolated ? 'iso' : 'empty'}" onclick="openMover(${s.sid})">
@@ -605,6 +613,19 @@ function detailTicket(t) {
       <div><div class="v">${st ? (st.bikes ?? '–') : '–'}</div><div class="l">該站現有車數（影響評估）</div></div></div>
     <div class="eff"><span>位置：${st ? `${short(st.district)}・${st.lat.toFixed(4)}, ${st.lon.toFixed(4)}` : '—'}</span><span>回報 ${t.reports || 1} 次</span><span>${String(t.ts).slice(5, 16)}</span></div>
     <div class="stepper" style="margin:10px 0">${TK_FLOW.map((k, i) => `<div class="st ${i < idx ? 'done' : (i === idx ? 'cur' : '')}"><i></i>${TK_LABEL[k]}</div>`).join('')}</div>
+    <div class="brief" style="margin-bottom:8px">
+      <div class="row wrap" style="gap:6px"><b>站點服務觀測</b>${svcBadge(t)}
+        ${(t.service_flags || []).map(f => `<span class="badge high">${SVC_FLAG[f]}</span>`).join('')}</div>
+      <div class="xs muted" style="margin-top:4px">
+        ${(() => { const b2 = t.service_basis || {};
+          if (b2.observed === 'down') return `${b2.service || '該服務'}目前觀測為 0；${b2.span_min != null ? `零快照跨度 ${b2.span_min} 分` : ''}${b2.upper_known ? `、最多可能 ${b2.upper_min} 分` : '、上界未知'}${b2.gap_inside ? '（中間有缺測）' : ''}。<b>${b2.wording || '觀測跨度，不是確定的連續中斷時間'}</b>`;
+          if (b2.observed === 'no_data') return `${b2.reason || '資料不足'}。缺測不是恢復，也不是中斷。`;
+          if (b2.observed === 'ok') return `觀測到可借 ${b2.bikes ?? '–'} 輛／可還 ${b2.spaces ?? '–'} 格。<b>快照不是交易，有車不等於借得到。</b>`;
+          return '尚未觀測'; })()}
+        ${t.degraded_since ? `<br>首次觀測中斷 ${t.degraded_since}` : ''}${t.restored_at ? `・觀測到恢復 ${t.restored_at}` : ''}
+        ${t.service_checked_at ? `<br>觀測時間 ${t.service_checked_at}` : ''}
+        ${t.asset_type === 'bike' ? '<br><b>注意</b>：這是站點的借車狀況，<b>不代表被回報的那台車修好了</b>。設備狀態看下面的「設備驗收」。' : ''}
+      </div></div>
     <div class="row wrap" style="gap:5px">
       ${t.status === 'reported' ? `<button class="small primary" onclick="openAssign('${t.id}')">指派維修班組</button>` : ''}
       ${nxt && t.status !== 'reported' ? `<button class="small primary" onclick="ticketAct('${t.id}','${nxt}')">推進到「${TK_LABEL[nxt]}」</button>` : ''}

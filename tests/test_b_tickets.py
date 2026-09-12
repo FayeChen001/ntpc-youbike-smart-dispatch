@@ -117,6 +117,30 @@ tks2 = []
 t, a = submit(tks2, sid=1, issue="x", request_id="keep-me")
 check("reset 後同一個 request_id 會重新建立（冪等表已清）", a, "created")
 
+# ---- 服務觀測狀態機：手算真值表 ----
+print()
+TRUTH = {
+    ("unknown", "ok"): "nominal",   ("unknown", "down"): "degraded",  ("unknown", "no_data"): "unknown",
+    ("nominal", "ok"): "nominal",   ("nominal", "down"): "degraded",  ("nominal", "no_data"): "unknown",
+    ("degraded", "ok"): "restored", ("degraded", "down"): "degraded", ("degraded", "no_data"): "degraded",
+    ("restored", "ok"): "restored", ("restored", "down"): "degraded", ("restored", "no_data"): "restored",
+}
+bad = [(k, TK.service_transition(*k), v) for k, v in TRUTH.items() if TK.service_transition(*k) != v]
+check("service_transition 12 種組合全部符合手算真值表", bad, [])
+check("沒中斷過就不會變成 restored（不無中生有）", TK.service_transition("nominal", "ok"), "nominal")
+check("中斷中遇到缺測維持 degraded，不當成恢復", TK.service_transition("degraded", "no_data"), "degraded")
+check("正常中遇到缺測退回 unknown，不當成正常", TK.service_transition("nominal", "no_data"), "unknown")
+
+# ---- 兩種落差旗標 ----
+check("已處理但站點仍中斷 → handled_not_restored", TK.service_flags("recovered", "degraded"), ["handled_not_restored"])
+check("已驗收但站點仍中斷 → 仍要標", TK.service_flags("verified", "degraded"), ["handled_not_restored"])
+check("已結案但站點仍中斷 → 仍要標", TK.service_flags("closed", "degraded"), ["handled_not_restored"])
+check("服務已恢復但工單未結案 → restored_not_closed", TK.service_flags("reported", "restored"), ["restored_not_closed"])
+check("接單中且服務已恢復 → 仍要標", TK.service_flags("accepted", "restored"), ["restored_not_closed"])
+check("已驗收且服務已恢復 → 沒有落差", TK.service_flags("verified", "restored"), [])
+check("處理中且未觀測到中斷 → 沒有落差", TK.service_flags("accepted", "nominal"), [])
+check("處理中且資料不足 → 沒有落差（不亂標）", TK.service_flags("accepted", "unknown"), [])
+
 print()
 print("全部通過" if not fails else f"未通過 {len(fails)} 項：{fails}")
 sys.exit(1 if fails else 0)

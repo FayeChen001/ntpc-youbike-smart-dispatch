@@ -81,7 +81,7 @@ POST /api/ops/tickets        （或沿用 POST /api/tickets，同一個實作）
 | 欄位 | 值 | 意義 |
 |---|---|---|
 | `status` | reported → accepted → on_site → recovered → verified → closed | **工單處理流程** |
-| `service_state` | unknown / degraded / restored | 站點服務是否恢復 |
+| `service_state` | unknown / nominal / degraded / restored | **該站這一種服務有沒有被觀測到中斷**（見 §6d） |
 | `asset_state` | suspect / confirmed_faulty / repaired / verified_ok / not_applicable | 設備驗收 |
 | `saddle_marker.status` | unknown / done / skipped / not_applicable | 用戶現場標記，**非維修確認** |
 
@@ -173,6 +173,39 @@ POST /api/ops/tasks/{id}/escalate
 4. 坐墊教學顯示在**受理成功之後**，呼叫 `/saddle`；使用者略過不要撤銷工單。
 5. 只有 `status` 是工單流程；不要用它表示「使用者已離開」，那是 C 自己的回報狀態。
 
+## 6d. `service_state`：站點服務觀測（契約 b-2）
+
+每個 tick 更新一次，只寫觀測欄位，**不動工單處理狀態**。
+
+| 值 | 意義 |
+|---|---|
+| `unknown` | **資料不足以判定**（站點狀態為 no_data／stale_flat／cap_conflict／both_zero，或該時點無有效觀測） |
+| `nominal` | 有觀測，且自工單建立以來**未觀測到中斷**。沒中斷過就不存在「恢復」，不會標 restored |
+| `degraded` | 目前觀測到該服務中斷 |
+| `restored` | 曾觀測到中斷，現在觀測到可用 |
+
+看哪一種服務由 `asset_type` 決定：車輛看**借車**、車柱看**還車**、站端／未判定看**兩者任一中斷**。
+
+附帶欄位：`service_checked_at`、`service_stale`、`degraded_since`、`restored_at`、
+`service_basis`（觀測依據）。`service_basis` 在中斷時會帶
+`span_min`／`upper_min`／`upper_known`／`gap_inside`／`wording`，
+這些**直接沿用政府端 `events.observed_run`**，不是我這邊另寫一套零車判定。
+
+### 兩種落差旗標（`service_flags`）
+
+| 旗標 | 條件 | 意義 |
+|---|---|---|
+| `handled_not_restored` | `status ∈ {recovered, verified, closed}` 且 `service_state == degraded` | **已處理但站點服務仍中斷** |
+| `restored_not_closed` | `service_state == restored` 且 `status ∉ {verified, closed}` | **服務已恢復但維修未結案** |
+
+### 三條界線
+
+1. **快照不是交易**：觀測到有車不等於借得到。`restored` 是「觀測到可用」，不是「確認服務恢復」。
+2. **缺測不是恢復，也不是中斷**：中斷中遇到缺測維持 `degraded` 並標 `service_stale`；
+   `nominal` 遇到缺測退回 `unknown`。
+3. **站點借車狀況 ≠ 那台車修好了**：車輛工單的 `service_state` 講的是站，設備看 `asset_state`。
+   介面上有明寫這一句。
+
 ## 6c. 服務可用性（A 的「官方可借 N／已確認不可用 X／疑似異常 Y」）
 
 ```
@@ -238,6 +271,12 @@ C 不必改碼。
 | C03 | 坐墊標記寫進工單權威欄位 | HTTP 閉環（2026-09-13） | **通過** C 端呼叫後 `saddle_marker` 直接生效 |
 | — | 三端 reset 一致 | HTTP（2026-09-13 重啟後） | **通過** 9 項，舊工單／回報／坐墊標記都不留殘影 |
 | — | only_flagged 列出有故障設備的站 | HTTP（2026-09-13） | **通過** 官方可借 5、已知不可用 1 的站會被列出 |
+| — | `service_transition` 12 種組合 | fixture 手算真值表 | **通過** |
+| — | 沒中斷過不會標 restored | fixture | **通過** nominal |
+| — | 缺測不當成恢復 | fixture | **通過** degraded+no_data → 維持 degraded |
+| — | 真實零車→有車轉 restored | HTTP（回放真資料） | **通過** sid 269 走 1 步後恢復 |
+| — | 已處理但仍中斷 → handled_not_restored | HTTP | **通過** (recovered, degraded) |
+| — | 服務恢復不動工單狀態與設備驗收 | HTTP | **通過** status/asset_state 不變 |
 | I01 | 修復不等於驗收 | HTTP | **通過** recovered→asset_state=repaired，未到 verified |
 | I02 | 同站兩台不同車不合併 | fixture＋HTTP（跨兩個入口） | **通過** 兩張單，同車跨入口才合併 |
 | I02 | `dock_no`→`dock_id` 結構化保留 | fixture＋HTTP | **通過** 同站不同柱不合併 |
@@ -280,10 +319,9 @@ python3 tests/test_b_availability.py   # 17 項：服務可用性不重扣、不
 ## 10. 尚未驗證／已知限制
 
 ### 仍未完成
-- **需重啟 8787 才生效**。共用機還是舊碼；所有 HTTP 實測跑在臨時的 8789（測完已關）。
-- **`service_state` 只有欄位，恆為 `unknown`**，尚未接到站點恢復判定。
-  也就是說「已處理但未恢復」與「已恢復但維修未結案」目前只能靠 `status` 與 `asset_state` 推，
-  沒有獨立的服務恢復訊號。
+- **`service_state` 的變更需重啟 8787 才生效**（契約 b-2）。實測跑在臨時的 8789。
+- **服務觀測只看該站的借／還是否為 0**，沒有辨識「站端系統故障但車柱正常」這種情況；
+  也沒有接任何營運商的設備健康訊號。
 - **`evidence[]` 原樣保留但未做內容驗證**。圖片本身不進 SSE、不進日誌、不進 Git。
 - **C 的坐墊標記尚未寫進工單**（見 7b），目前靠唯讀橋接。
 

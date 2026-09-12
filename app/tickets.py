@@ -23,9 +23,41 @@ from __future__ import annotations
 FLOW = ["reported", "accepted", "on_site", "recovered", "verified", "closed"]
 FLOW_LABEL = {"reported": "已受理", "accepted": "維修班組接單", "on_site": "現場檢查中",
               "recovered": "已處理／回收", "verified": "驗收復役", "closed": "結案"}
-SERVICE_STATE = ("unknown", "degraded", "restored")
+# 站點服務觀測。刻意把「資料不足以判定」與「觀測到沒有中斷」分開——
+# 兩者混成一個 unknown，就會讓缺測看起來像沒事。
+SERVICE_STATE = ("unknown", "nominal", "degraded", "restored")
+SERVICE_LABEL = {"unknown": "資料不足以判定", "nominal": "觀測未見中斷",
+                 "degraded": "觀測到服務中斷中", "restored": "曾中斷，已觀測到恢復"}
+# 工單關心的是哪一種服務：車輛故障看借車、車柱問題看還車、站端或未判定看兩者
+SERVICE_KIND = {"bike": "empty", "dock": "full", "station": "both", "unknown": "both"}
 ASSET_STATE = ("suspect", "confirmed_faulty", "repaired", "verified_ok", "not_applicable")
 SADDLE = ("unknown", "done", "skipped", "not_applicable")
+
+
+def service_transition(current, observed):
+    """依這一輪的觀測推進服務狀態。observed ∈ ok / down / no_data。
+
+    缺測不是恢復，也不是中斷（沿用政府端 events.py 的原則）：
+    - 本來就在中斷中，這輪沒資料 → 維持 degraded，另外標 stale，不可以講成恢復。
+    - 本來是 nominal，這輪沒資料 → 退回 unknown，因為現在確實不知道。
+    - 觀測到可用，但先前從未觀測到中斷 → nominal，不是 restored。
+      沒中斷過就不存在「恢復」這件事，講 restored 是無中生有。
+    """
+    if observed == "no_data":
+        return current if current in ("degraded", "restored") else "unknown"
+    if observed == "down":
+        return "degraded"
+    return "restored" if current in ("degraded", "restored") else "nominal"
+
+
+def service_flags(ticket_status, service_state):
+    """把「維修流程」與「服務觀測」的落差挑出來，這是驗收要的兩種差異。"""
+    out = []
+    if ticket_status in ("recovered", "verified", "closed") and service_state == "degraded":
+        out.append("handled_not_restored")      # 已處理但站點服務仍觀測到中斷
+    if service_state == "restored" and ticket_status not in ("verified", "closed"):
+        out.append("restored_not_closed")       # 服務已觀測到恢復，但維修還沒結案
+    return out
 ASSET_LABEL = {"bike": "車輛", "dock": "車柱", "station": "站端系統", "unknown": "待判定"}
 STATION_MERGE_WINDOW_S = 7200          # 沒有資產識別時，才用「同站同問題 2 小時」當作同一件
 
