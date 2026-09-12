@@ -85,6 +85,11 @@ main{max-width:1480px;margin:0 auto;padding:18px}
 svg.map{display:block;width:100%;height:clamp(380px,52vh,580px);touch-action:manipulation}
 svg.map circle{cursor:pointer;transition:r .12s,opacity .12s}
 svg.map circle:hover{stroke:#fff;stroke-width:1.4}
+svg.map text.dlab{fill:#93a3bd;font-size:17px;font-weight:700;letter-spacing:1px;
+  cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#0b0e14;stroke-width:5px;
+  stroke-linejoin:round;user-select:none;opacity:.85}
+svg.map text.dlab:hover{fill:#e8edf6;opacity:1}
+svg.map text.dlab.on{fill:#5aa9f7;font-size:20px;opacity:1}
 .legend{display:flex;gap:14px;flex-wrap:wrap;padding:10px 15px;border-top:1px solid var(--line);font-size:11px;color:var(--mute)}
 .legend i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:-1px}
 #tip{position:fixed;pointer-events:none;z-index:99;background:#050810ee;border:1px solid var(--line2);
@@ -204,7 +209,7 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
+           filter:'all', mdist:null, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -294,14 +299,25 @@ function stColor(s){
 function mapSVG(){
   const W=1000,H=560;
   projectInit(W,H);
-  const f=S.filter;
+  const f=S.filter, dsel=S.mdist;
   const circles=S.stations.map(s=>{
     const m=stColor(s);
-    const show = f==='all'||f===m.k||(f==='tight'&&(m.k==='tight'||m.k==='no_bike'||m.k==='no_dock'));
-    const op = f==='all'?.92:(show?1:.07);
-    const r = show&&f!=='all'? m.r+1.1 : m.r;
+    const passF = f==='all'||f===m.k||(f==='tight'&&(m.k==='tight'||m.k==='no_bike'||m.k==='no_dock'));
+    const passD = !dsel || s.district===dsel;
+    const show = passF && passD;
+    const op = (f==='all'&&!dsel)?.92:(show?1:.06);
+    const r = show&&(f!=='all'||dsel)? m.r+1.1 : m.r;
     return `<circle cx="${px(s).toFixed(1)}" cy="${py(s).toFixed(1)}" r="${r}" fill="${m.c}"
       opacity="${op}" data-sid="${s.sid}"/>`;
+  }).join('');
+  // 行政區標籤：用該區站點的重心，只標站數夠多的區，避免糊成一團
+  const byD={};
+  S.stations.forEach(s=>{(byD[s.district]=byD[s.district]||[]).push(s);});
+  const labels=Object.entries(byD).filter(([,v])=>v.length>=18).map(([d,v])=>{
+    const cx=v.reduce((a,s)=>a+px(s),0)/v.length, cy=v.reduce((a,s)=>a+py(s),0)/v.length;
+    const on = dsel===d;
+    return `<text x="${cx.toFixed(0)}" y="${cy.toFixed(0)}" text-anchor="middle"
+      class="dlab ${on?'on':''}" data-dist="${d}">${d.replace('區','')}</text>`;
   }).join('');
   const cnt=k=>S.stations.filter(s=>stColor(s).k===k).length;
   const chip=(id,lab)=>`<button class="chip ${S.filter===id?'on':''}" data-f="${id}">${lab}`+
@@ -313,9 +329,10 @@ function mapSVG(){
       <div class="chips" style="margin-left:auto">
         ${chip('all','全部')}${chip('no_dock','只是還不了')}${chip('no_bike','只是借不到')}
         ${chip('offline','整站無服務')}${chip('gap','容量落差')}${chip('inactive','暫停營運')}
+        ${dsel?`<button class="chip on" data-f="__cleardist">${esc(dsel)} ✕</button>`:''}
       </div>
     </div>
-    <svg class="map" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${circles}</svg>
+    <svg class="map" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${circles}${labels}</svg>
     <div class="legend">
       <span><i style="background:#c084fc"></i>整站無服務（借還皆 0）</span>
       <span><i style="background:#f2615b"></i>只是無位可還</span>
@@ -352,7 +369,11 @@ function bindMap(){
     const c=e.target.closest('circle'); if(!c) return;
     openStation(+c.dataset.sid);
   });
-  $$('.chip[data-f]').forEach(b=>b.onclick=()=>{S.filter=b.dataset.f;render();});
+  $$('.chip[data-f]').forEach(b=>b.onclick=()=>{
+    if(b.dataset.f==='__cleardist'){ S.mdist=null; } else { S.filter=b.dataset.f; }
+    render();});
+  $$('text.dlab').forEach(t=>t.addEventListener('click',()=>{
+    S.mdist = (S.mdist===t.dataset.dist)?null:t.dataset.dist; render();}));
 }
 async function openStation(sid){
   S.sel={sid,loading:true}; render();
@@ -596,7 +617,7 @@ function govView(){
       <p class="sub" style="margin-top:9px">臺北同定義同月份：高 ${ref.high}／中 ${ref.mid}／低 ${ref.low}（共 ${ref.n} 站）</p>`;
   };
 
-  const dist=a.districts.slice(0,10).map(d=>`<tr><td>${esc(d.district)}<span class="xs dim"> ${d.stations} 站</span></td>
+  const dist=a.districts.slice(0,10).map(d=>`<tr class="click" data-dist-row="${esc(d.district)}"><td>${esc(d.district)}<span class="xs dim"> ${d.stations} 站</span></td>
     <td style="width:100px"><div class="bar"><i style="width:${Math.min(100,d.no_bike*7)}%;background:var(--warn)"></i></div></td>
     <td class="mono">${d.no_bike}%</td>
     <td style="width:100px"><div class="bar"><i style="width:${Math.min(100,d.no_dock*7)}%;background:var(--bad)"></i></div></td>
@@ -996,6 +1017,9 @@ function render(){
       openStation(+el.dataset.sid);});
   });
   $$('[data-alt]').forEach(el=>el.onclick=()=>openStation(+el.dataset.alt));
+  $$('[data-dist-row]').forEach(el=>el.onclick=()=>{
+    S.mdist=(S.mdist===el.dataset.distRow)?null:el.dataset.distRow;
+    render(); scrollTo({top:0,behavior:'smooth'});});
   const tf=$('#tfrom'), tt=$('#tto'), tg=$('#tgo');
   if(tf) tf.onchange=()=>{S.tFrom=+tf.value;};
   if(tt) tt.onchange=()=>{S.tTo=+tt.value;};
