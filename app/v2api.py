@@ -345,12 +345,57 @@ def ops_board():
 
 
 # ---------------------------------------------------------------- 獎勵
+def _points(multiplier):
+    """單次點數 = 5 × 倍率，固定四捨五入。
+
+    不用內建 round()：它是銀行家捨入，round(22.5)=22 但 round(23.5)=24，
+    會讓 ×4.5 的任務比 ×4.4 給得還少，對使用者是莫名其妙的。
+    """
+    return int(math.floor(5.0 * multiplier + 0.5))
+
+
 def _multiplier(deficit_ratio, minutes_to_target, extra_walk_min):
     """docs/REWARDS.md 第 1 層：倍率 = 1 + min(4, 缺口 + 急迫 + 距離)。"""
     w_gap = min(2.0, deficit_ratio * 2.0)
     w_urg = 1.5 if minutes_to_target < 60 else (1.0 if minutes_to_target < 120 else 0.5)
     w_dist = 0.5 if extra_walk_min >= 8 else 0.0
     return round(1.0 + min(4.0, w_gap + w_urg + w_dist), 2)
+
+
+# 兌換目錄：讓點數有具體的價值感。**全部是示範**，合作商家尚未洽談。
+CATALOG = [
+    {"tier": 30, "title": "超商中杯咖啡折 10 元", "note": "示範品項"},
+    {"tier": 50, "title": "YouBike 騎乘金 50 元", "note": "示範品項"},
+    {"tier": 120, "title": "捷運單程票一張", "note": "示範品項"},
+    {"tier": 250, "title": "合作店家 100 元抵用券", "note": "示範品項，商家未洽談"},
+    {"tier": 500, "title": "月租型輕騎方案折抵", "note": "示範品項"},
+]
+SEED_STAMPS = 2          # 已賦予進度效應：新用戶一開始就有 2 枚，不是從 0 開始
+
+
+def _wallet(rw):
+    n = len(rw.get("stamps", [])) + rw.get("seed_stamps", SEED_STAMPS)
+    pts = rw.get("points", 0)
+    nxt = next((c for c in CATALOG if c["tier"] > pts), None)
+    streak = rw.get("streak_days", 0)
+    milestones = [3, 7, 14, 30]
+    next_ms = next((m for m in milestones if m > streak), None)
+    return {
+        "points": pts,
+        "stamps": n,
+        "stamps_in_card": (n % 10) or (10 if n else 0),
+        "cards_completed": n // 10,
+        "streak_days": streak,
+        "streak_next_milestone": next_ms,
+        "streak_days_to_milestone": (next_ms - streak) if next_ms else None,
+        "level": ("白金調度師" if n >= 30 else "黃金調度師" if n >= 20
+                  else "白銀調度師" if n >= 10 else "青銅調度師"),
+        "next_level_at": 10 if n < 10 else 20 if n < 20 else 30 if n < 30 else n,
+        "seeded": rw.get("seed_stamps", SEED_STAMPS),
+        "next_reward": nxt,
+        "points_to_next": (nxt["tier"] - pts) if nxt else None,
+        "catalog": CATALOG,
+    }
 
 
 @router.get("/rewards/board")
@@ -371,7 +416,7 @@ def rewards_board(sid: int = None):
             mult = _multiplier(deficit / target_min, 60 if (r60 and r60["p_no_bike"] > .3) else 120, 0)
             quests.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
                            "lat": x["lat"], "lon": x["lon"], "kind": "還車到這站",
-                           "deficit": deficit, "multiplier": mult, "points": int(round(5 * mult)),
+                           "deficit": deficit, "multiplier": mult, "points": _points(mult),
                            "remaining_to_clear": deficit,
                            "hist_risk_60": round(r60["p_no_bike"] * 100, 1) if r60 else None})
         # 滿站型任務：鼓勵「從這一站借車騎走」
@@ -380,20 +425,19 @@ def rewards_board(sid: int = None):
             mult = _multiplier(deficit / target_min, 60 if (r60 and r60["p_no_dock"] > .3) else 120, 0)
             quests.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
                            "lat": x["lat"], "lon": x["lon"], "kind": "從這站借走",
-                           "deficit": deficit, "multiplier": mult, "points": int(round(5 * mult)),
+                           "deficit": deficit, "multiplier": mult, "points": _points(mult),
                            "remaining_to_clear": deficit,
                            "hist_risk_60": round(r60["p_no_dock"] * 100, 1) if r60 else None})
     quests.sort(key=lambda q: (-q["multiplier"], -q["deficit"]))
     top = quests[:40]
     budget = sum(q["deficit"] * 25 for q in top)
+    issued = sum(h.get("points", 0) for h in rw.get("history", [])
+                 if str(h.get("ts", "")).startswith(datetime.now(TZ).strftime("%Y-%m-%d")))
     return {
-        "wallet": {"points": rw.get("points", 0),
-                   "stamps": len(rw.get("stamps", [])),
-                   "streak_days": rw.get("streak_days", 0),
-                   "level": rw.get("level", "青銅調度師"),
-                   "next_level_at": rw.get("next_level_at", 10)},
+        "wallet": _wallet(rw),
         "quests": top, "quest_total": len(quests),
         "budget_cap_twd": budget,
+        "issued_today_points": issued,
         "rules": {
             "formula": "倍率 = 1 + min(4, 缺口權重 + 急迫權重 + 距離權重)；單次上限 25 元",
             "guards": ["借還同站不計", "騎乘距離需 ≥400 公尺", "沿用官方每帳號 10 分鐘最多 2 次"],
@@ -428,31 +472,28 @@ def rewards_claim(body: ClaimIn):
     if deficit <= 0:
         raise HTTPException(409, "這一站目前已經沒有缺口，加碼已解除")
     mult = _multiplier(deficit / target_min, 60, 0)
-    pts = int(round(5 * mult))
+    pts = _points(mult)
     rw["points"] = rw.get("points", 0) + pts
     rw["streak_days"] = rw.get("streak_days", 0) + (0 if rw.get("streak_today") else 1)
     rw["streak_today"] = True
     rw["stamps"].append({"name": "接力章", "type": "relay",
                          "ts": datetime.now(TZ).strftime("%Y-%m-%d %H:%M")})
-    n = len(rw["stamps"])
-    rw["level"] = ("白金調度師" if n >= 30 else "黃金調度師" if n >= 20
-                   else "白銀調度師" if n >= 10 else "青銅調度師")
-    rw["next_level_at"] = 10 if n < 10 else 20 if n < 20 else 30 if n < 30 else n
     rw["history"].insert(0, {"ts": datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),
                              "points": pts,
                              "reason": f"{body.kind}：{x['name']}（×{mult} 加碼，示範紀錄）"})
     if body.request_id:
         claimed.append(body.request_id)
+    w = _wallet(rw)
     return {"ok": True, "points": rw["points"], "gained": pts, "multiplier": mult,
-            "stamps": n, "level": rw["level"], "streak_days": rw["streak_days"],
-            "caveat": "示範機制，不代表可實際兌換"}
+            "stamps": w["stamps"], "level": w["level"], "streak_days": w["streak_days"],
+            "wallet": w, "caveat": "示範機制，不代表可實際兌換"}
 
 
 @router.get("/rewards/leaderboard")
 def leaderboard():
     """第 3 層：團體賽。示範資料，明確標示。"""
     rw = _CTX["state"].get("rewards", {})
-    me = rw.get("points", 0)
+    me = _wallet(rw)["points"]
     teams = [{"team": "板橋隊", "points": 12840, "members": 312},
              {"team": "新莊隊", "points": 11226, "members": 288},
              {"team": "中和隊", "points": 9871, "members": 265},

@@ -8,14 +8,16 @@ B=$(mktemp -d)/ybdeploy
 INSTANCE=i-08076f512f308cce9
 BUCKET=ntpc-youbike-hackathon-329899784315
 
-mkdir -p "$B/reports" "$B/models" "$B/data/processed"
+mkdir -p "$B/reports" "$B/models" "$B/data/processed" "$B/data/analytics"
 cd "$ROOT"
-cp -r app pipeline docs "$B/"
+cp -r app pipeline docs analytics tests "$B/"
 cp README.md requirements.txt "$B/"
 cp reports/model_eval.json reports/data_audit.json reports/utilization_analysis.json reports/dispatch_plan.json "$B/reports/"
 cp models/context.npz models/meta.json "$B/models/"
 cp -r models/sagemaker "$B/models/"
 cp data/processed/obs.parquet data/processed/stations.parquet data/processed/neighbors_800m.parquet data/processed/ingest_log.json "$B/data/processed/"
+# v2 一站式需要的分析預算結果；缺了 /api/v2/analytics 會回 503，整頁載不出來
+cp data/analytics/slot_risk.parquet data/analytics/summary.json data/analytics/stations.json "$B/data/analytics/"
 find "$B" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "$B" -name ".DS_Store" -delete 2>/dev/null || true
 cd "$(dirname "$B")" && tar -czf ybdeploy.tar.gz ybdeploy
@@ -30,4 +32,11 @@ for i in $(seq 1 40); do
   [[ "$ST" != "InProgress" && "$ST" != "Pending" ]] && break; sleep 15
 done
 echo "SSM: $ST"
-curl -s -m 20 http://35.93.221.246/api/state | python3 -c "import json,sys;d=json.load(sys.stdin);print('OK 模型:',d['model_origin'],'站點:',d['kpi']['stations'])"
+echo "--- 驗收（來源 IP 被擋時改用 SSM 從機器內部查）---"
+V=$(aws ssm send-command --instance-ids $INSTANCE --document-name AWS-RunShellScript \
+  --parameters 'commands=["curl -s -m 20 http://127.0.0.1/api/state | head -c 200","echo","curl -s -m 25 http://127.0.0.1/api/v2/live | head -c 400","echo","md5sum /opt/youbike/app/v2api.py /opt/youbike/app/live.py /opt/youbike/app/static/v2.html"]' \
+  --query 'Command.CommandId' --output text)
+sleep 25
+aws ssm get-command-invocation --command-id $V --instance-id $INSTANCE --query StandardOutputContent --output text
+echo "--- 本機雜湊（要與上面相同才算這一版真的上去了）---"
+md5 -q app/v2api.py app/live.py app/static/v2.html
