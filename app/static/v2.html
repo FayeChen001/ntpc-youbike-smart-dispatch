@@ -533,6 +533,17 @@ function forecastCard(){
       模型卡的離線指標是在六月測試集上量的，<b>不等於即時推論的準確度</b>。</p></div>`;
 }
 
+function insightsFor(aud){
+  if(!S.ins) return '<p class="sub">產生中…</p>';
+  const ins=S.ins.insights.filter(i=>aud.includes(i.audience));
+  if(!ins.length) return '<p class="sub">目前沒有需要處理的項目。</p>';
+  return ins.map(i=>`<div class="ins ${i.level}">
+    <h4>${esc(i.title)}</h4><p>${esc(i.body)}</p>
+    ${i.evidence?.length?`<ul>${i.evidence.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}
+    <div class="act">→ ${esc(i.action)}</div>
+    ${i.caveat?`<div class="cav">口徑：${esc(i.caveat)}</div>`:''}</div>`).join('');
+}
+
 /* ============================================================ 政府端 */
 function govView(){
   const st=S.live.stats, sta=S.live.status, a=S.ana;
@@ -591,13 +602,7 @@ function govView(){
     <td style="width:100px"><div class="bar"><i style="width:${Math.min(100,d.no_dock*7)}%;background:var(--bad)"></i></div></td>
     <td class="mono">${d.no_dock}%</td></tr>`).join('');
 
-  const ins=(S.ins?.insights||[]).filter(i=>i.audience==='gov'||i.audience==='citizen');
-  const insHTML = S.ins? (ins.map(i=>`<div class="ins ${i.level}">
-      <h4>${esc(i.title)}</h4><p>${esc(i.body)}</p>
-      ${i.evidence?.length?`<ul>${i.evidence.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`:''}
-      <div class="act">→ ${esc(i.action)}</div>
-      ${i.caveat?`<div class="cav">口徑：${esc(i.caveat)}</div>`:''}</div>`).join('')||'<p class="sub">目前沒有需要升級的項目。</p>')
-    : '<p class="sub">產生中…</p>';
+  const insHTML = insightsFor(['gov','citizen']);
 
   return `${kpis}
   <div class="split" style="margin-top:14px">
@@ -693,6 +698,9 @@ function opsView(){
           <th>1 小時後</th><th>2 小時後</th><th>優先度</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="dim">目前沒有候選</td></tr>'}</tbody></table></div>
         <div class="legend"><span>${esc(S.ops.semantics)}</span></div>
       </div>
+      <div class="card" style="margin-top:14px"><h3>調度分析建議 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
+        <p class="sub">把此刻的官方站況與六個月歷史交叉後自動產生，每條都附證據與口徑。</p>
+        ${insightsFor(['ops'])}</div>
       ${mapSVG()}
     </div>
     <div>

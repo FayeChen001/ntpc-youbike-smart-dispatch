@@ -341,6 +341,56 @@ def insights():
             "evidence": [], "action": "出發前就給替代站，不要等使用者到現場才發現。",
             "caveat": "快照比例，非旅次成功率。"})
 
+    # 行政區層級：哪一區的早峰缺車最嚴重，以及此刻的實況對照
+    dists = s.get("districts", [])
+    if dists:
+        top3 = dists[:3]
+        by_d = stats.get("by_district", {})
+        ev = []
+        for d in top3:
+            cur = by_d.get(d["district"], {})
+            ev.append(f"{d['district']}（{d['stations']} 站）歷史早峰無車 {d['no_bike']}%、"
+                      f"無位 {d['no_dock']}%；此刻無車 {cur.get('no_bike', 0)} 站、"
+                      f"落差車柱 {cur.get('gap_units', 0)} 個")
+        items.append({
+            "level": "mid", "audience": "gov", "title": "早峰缺車最集中的行政區",
+            "body": (f"平日早峰無車可借比例最高的是 {'、'.join(d['district'] for d in top3)}。"
+                     "這三區同時也是通勤起點最密集的區域——住家端被借空，正是早峰的第一種失敗。"),
+            "evidence": ev,
+            "action": "前一天的預排以這幾區的住家端站為主，不要等早上才動。",
+            "caveat": "歷史為半小時快照比例；此刻數字為官方即時資料，兩者口徑不同不可相減。"})
+
+    # 站點分型：結構性的早晚反向需求
+    prof = s.get("profiles", {})
+    if prof:
+        dest = next((k for k in prof if k.startswith("目的地端")), None)
+        home = next((k for k in prof if k.startswith("住家端")), None)
+        if dest and home:
+            items.append({
+                "level": "mid", "audience": "ops", "title": "兩種站的需求方向剛好相反",
+                "body": (f"用平日每小時淨流量分群，{prof[home]} 個站屬住家端（早上被借空、傍晚回補）、"
+                         f"{prof[dest]} 個站屬目的地端（早上被還爆、傍晚被借空）。"
+                         "**同一台車早上該從住家端往目的地端走，傍晚要反過來。**"
+                         "這代表早晚各需要一次方向相反的再平衡，不是單向補車。"),
+                "evidence": [f"{k}：{v} 站" for k, v in prof.items()],
+                "action": "把兩類站配成對，早晚各跑一次反向，比各自獨立補車省里程。",
+                "caveat": ("分型用的是快照的淨變化，其中同時包含使用者借還與人工調度，"
+                           "兩者無法分離，不是純需求。")})
+
+    # 調度負擔：哪些站不管怎麼補都會再度失衡
+    burden = s.get("burden", {})
+    if burden.get("top"):
+        items.append({
+            "level": "mid", "audience": "gov", "title": "先天就需要高頻服務的站",
+            "body": (f"以「日內庫存振幅 ÷ 容量」當調度負擔的代理指標，全市中位數 {burden['median']}，"
+                     "代表典型站每天的庫存起伏約是容量的六成。下列站明顯更高——"
+                     "它們不是補一次就好，而是先天需要高頻服務，或該重新檢討容量與配置。"),
+            "evidence": [f"{x['name']}（{x['district']}）振幅比 {x['amp_ratio']}"
+                         for x in burden["top"][:5]],
+            "action": "這類站適合固定班次而不是事件驅動；也值得評估加柱或調整初始配車。",
+            "caveat": ("振幅同時包含使用者借還與人工調度，無法分離，"
+                       "不可當成純需求，也不等於這些站服務比較差。")})
+
     fc = _CTX.get("fc")
     if fc is not None:
         fst = fc.status()
