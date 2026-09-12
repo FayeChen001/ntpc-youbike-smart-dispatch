@@ -204,7 +204,7 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', sel:null, ptab:'nearby', cdist:'板橋區', cq:''};
+           filter:'all', sel:null, ptab:'nearby', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -222,6 +222,7 @@ async function boot(){
     feed(live.status);
     render();
     api('/api/v2/insights').then(d=>{S.ins=d; if(S.view==='gov')render();}).catch(()=>{});
+    loadForecast();
     api('/api/v2/ops/board').then(d=>{S.ops=d; if(S.view==='ops')render();}).catch(()=>{});
     api('/api/v2/rewards/board').then(d=>{S.rw=d; if(S.view==='citizen')render();}).catch(()=>{});
     setInterval(refresh, 60000);
@@ -231,6 +232,18 @@ async function boot(){
     setTimeout(boot, 8000);
   }
 }
+async function loadForecast(){
+  try{
+    S.fc = await api('/api/v2/forecast/status');
+    if(S.fc.available){
+      const [f,e] = await Promise.all([
+        api('/api/v2/forecast/risk?kind=full&horizon=120&limit=10'),
+        api('/api/v2/forecast/risk?kind=empty&horizon=120&limit=10')]);
+      S.riskF=f; S.riskE=e;
+    }
+    if(S.view!=='citizen') render();
+  }catch(e){ S.fc={available:false,reason:String(e.message)}; }
+}
 async function refresh(){
   try{
     const [live,stations] = await Promise.all([api('/api/v2/live'),api('/api/v2/live/stations')]);
@@ -238,6 +251,7 @@ async function refresh(){
     if(S.view==='ops') api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
     else if(S.view==='citizen') api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
     else { api('/api/v2/insights').then(d=>{S.ins=d;render();}); render(); }
+    loadForecast();
   }catch(e){ /* 保留上一份快照，狀態列會顯示過期 */ }
 }
 function feed(st){
@@ -263,9 +277,11 @@ const py = s => MAP.oy + (MAP.laMax-s.lat)*MAP.k;
 
 function stColor(s){
   if(!s.act) return {c:'#4a5568',r:2.2,k:'inactive'};
+  // 借還同時為 0 是整站無服務，不是缺車也不是滿站——獨立一類，否則兩邊計數都會對不上 KPI
+  if(s.b===0&&s.d===0) return {c:'#c084fc',r:4.6,k:'offline'};
   if(s.d===0) return {c:'#f2615b',r:4.2,k:'no_dock'};
   if(s.b===0) return {c:'#f5c451',r:4.2,k:'no_bike'};
-  if(s.gap>3) return {c:'#a78bfa',r:3.4,k:'gap'};
+  if(s.gap>3) return {c:'#7c8cf8',r:3.4,k:'gap'};
   if(s.b<=2||s.d<=2) return {c:'#f59e5b',r:3.0,k:'tight'};
   return {c:'#38d39f',r:2.4,k:'ok'};
 }
@@ -289,18 +305,23 @@ function mapSVG(){
       <div><h3 style="margin:0">全市即時站況 <span class="tag live">即時</span></h3>
         <div class="sm dim" style="margin-top:3px">點任一站看歷史同時段風險與替代站</div></div>
       <div class="chips" style="margin-left:auto">
-        ${chip('all','全部')}${chip('no_dock','還不了')}${chip('no_bike','借不到')}
-        ${chip('gap','容量落差')}${chip('inactive','暫停營運')}
+        ${chip('all','全部')}${chip('no_dock','只是還不了')}${chip('no_bike','只是借不到')}
+        ${chip('offline','整站無服務')}${chip('gap','容量落差')}${chip('inactive','暫停營運')}
       </div>
     </div>
     <svg class="map" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${circles}</svg>
     <div class="legend">
-      <span><i style="background:#f2615b"></i>無位可還</span>
-      <span><i style="background:#f5c451"></i>無車可借</span>
+      <span><i style="background:#c084fc"></i>整站無服務（借還皆 0）</span>
+      <span><i style="background:#f2615b"></i>只是無位可還</span>
+      <span><i style="background:#f5c451"></i>只是無車可借</span>
       <span><i style="background:#f59e5b"></i>剩 ≤2</span>
-      <span><i style="background:#a78bfa"></i>容量落差 &gt;3</span>
+      <span><i style="background:#7c8cf8"></i>容量落差 &gt;3</span>
       <span><i style="background:#38d39f"></i>正常</span>
       <span><i style="background:#4a5568"></i>暫停營運</span>
+    </div>
+    <div class="legend" style="border-top:none;padding-top:0;color:var(--dim)">
+      <span>上方 KPI 的「無位可還／無車可借」是官方口徑，包含整站無服務的站；
+        地圖分類把它們獨立出來，所以兩邊的數字不會相等。</span>
     </div></div>`;
 }
 function bindMap(){
@@ -369,6 +390,15 @@ function stationPanel(){
     ${H.profile?`<p class="sm" style="margin:0 0 10px">站點分型　<span class="pill info">${esc(H.profile)}</span>
       ${H.burden!=null?`<span class="pill" title="日內庫存振幅÷容量">調度負擔 ${H.burden}</span>`:''}
       ${H.alt_500m!=null?`<span class="pill">500m 內 ${H.alt_500m} 站</span>`:''}</p>`:''}
+    ${S.sel.model?`<h3 style="margin-top:14px">模型預測 <span class="tag live">即時推論</span></h3>
+      <p class="sub">模型跑在官方即時站況上，以本服務累積的即時歷史當落後特徵。</p>
+      <table><thead><tr><th>時點</th><th>預測可借</th><th>預測可還</th><th>無車機率</th><th>無位機率</th></tr></thead>
+      <tbody>${S.sel.model.horizon.map(h=>`<tr><td class="mono">+${h.ahead_min}分
+        <span class="dim xs">${h.at}</span></td>
+        <td class="mono">${h.bikes.toFixed(0)}</td><td class="mono">${h.docks.toFixed(0)}</td>
+        <td class="mono" style="color:${h.p_empty>=.3?'var(--warn)':'var(--dim)'}">${(h.p_empty*100).toFixed(0)}%</td>
+        <td class="mono" style="color:${h.p_full>=.3?'var(--bad)':'var(--dim)'}">${(h.p_full*100).toFixed(0)}%</td>
+        </tr>`).join('')}</tbody></table>`:''}
     <h3 style="margin-top:14px">歷史同時段風險 <span class="tag hist">歷史</span></h3>
     <p class="sub">過去六個月、同樣是${new Date().getDay()%6===0?'假日':'平日'}的同一個半小時分箱裡，
       這一站無車／無位的快照比例。<b>不是模型預測</b>，不保證今天會發生。</p>
@@ -409,15 +439,53 @@ function legendDots(series){
       background:${s.color};margin-right:5px;vertical-align:-1px"></i>${s.name}</span>`).join('')+`</div>`;
 }
 
+function forecastCard(){
+  const fc=S.fc;
+  if(!fc) return '';
+  if(!fc.available){
+    const need=fc.needed_for_full_lags||5, have=fc.history_bins||0;
+    return `<div class="card"><h3>模型即時預警 <span class="tag sim">暖機中</span></h3>
+      <p class="sub">模型要用 30／60／120 分鐘前的觀測當落後特徵，但官方 API 只給當下，
+        所以本服務自己累積。目前已累積 <b>${have}</b> 個半小時分箱，
+        落後特徵齊全需要 ${need} 個（約 ${(need*0.5).toFixed(1)} 小時）。
+        累積期間仍可推論，但準確度會低於模型卡的離線指標，所以先不顯示。</p>
+      <div class="bar" style="height:7px"><i style="width:${Math.min(100,have/need*100)}%;
+        background:var(--warn)"></i></div>
+      <p class="sub" style="margin-top:9px">${esc(fc.note||fc.reason||'')}</p></div>`;
+  }
+  const tbl=(r,lab,col)=>{
+    if(!r||!r.stations.length) return `<p class="sub">${lab}：目前沒有機率 ≥30% 的站</p>`;
+    return `<div class="sm" style="font-weight:600;margin:10px 0 5px">${lab}　
+        <span class="dim" style="font-weight:400">${r.stations.length} 站</span></div>
+      <table><tbody>${r.stations.slice(0,6).map(x=>`<tr class="click" data-sid="${x.sid}">
+        <td>${esc(x.name)}<div class="xs dim">${esc(x.district)}</div></td>
+        <td class="mono dim" style="width:58px">現在 ${x.now.toFixed(0)}</td>
+        <td style="width:80px"><div class="bar"><i style="width:${x.p}%;background:${col}"></i></div></td>
+        <td class="mono" style="width:46px;color:${col}">${x.p}%</td></tr>`).join('')}</tbody></table>`;
+  };
+  const cov=S.riskF?.status?.history_bins??fc.history_bins;
+  return `<div class="card"><h3>模型即時預警 · 120 分鐘後 <span class="tag live">即時推論</span></h3>
+    <p class="sub">HistGradientBoosting 跑在官方即時站況上（來源：${esc(fc.model_origin||'—')}）。
+      已累積 ${cov} 個分箱的即時歷史。<b>這是模型預測，不是歷史同時段分布。</b></p>
+    ${tbl(S.riskF,'可能無位可還','var(--bad)')}
+    ${tbl(S.riskE,'可能無車可借','var(--warn)')}
+    <p class="sub" style="margin-top:11px;border-top:1px dashed var(--line);padding-top:8px">
+      120 分鐘足夠新動員一台車（前置 15 分＋行車），現在排還來得及。
+      模型卡的離線指標是在六月測試集上量的，<b>不等於即時推論的準確度</b>。</p></div>`;
+}
+
 /* ============================================================ 政府端 */
 function govView(){
   const st=S.live.stats, sta=S.live.status, a=S.ana;
   const k=(cls,lab,val,unit,note)=>`<div class="kpi ${cls}">
     <div class="lab">${lab}</div><div class="val">${val}<em>${unit||''}</em></div>
     <div class="note">${note||''}</div></div>`;
+  const offline=S.stations.filter(s=>s.act&&s.b===0&&s.d===0).length;
   const kpis=`<div class="grid g4">
-    ${k('bad','此刻無位可還',st.no_dock,'站',`營運中站點的 ${pct(st.no_dock_pct)}`)}
-    ${k('warn','此刻無車可借',st.no_bike,'站',`營運中站點的 ${pct(st.no_bike_pct)}`)}
+    ${k('bad','此刻無位可還',st.no_dock,'站',
+        `營運中站點的 ${pct(st.no_dock_pct)}　其中 ${offline} 站是整站無服務`)}
+    ${k('warn','此刻無車可借',st.no_bike,'站',
+        `營運中站點的 ${pct(st.no_bike_pct)}　其中 ${offline} 站是整站無服務`)}
     ${k('info','容量落差',st.capacity_gap_stations,'站',
         `${fmt(st.capacity_gap_units)} 個車柱名目存在但借不到也還不了（${pct(st.capacity_gap_pct)}）`)}
     ${k(st.stale_stations>40?'warn':'ok','資料新鮮度',st.data_age_min_median,'分',
@@ -495,6 +563,7 @@ function govView(){
     </div>
     <div>
       ${stationPanel()}
+      <div style="margin-top:14px">${forecastCard()}</div>
       <div class="card" style="margin-top:14px"><h3>月平均把尖峰稀釋掉了 <span class="tag hist">歷史</span></h3>
         <p class="sub">這些站的六月見位率落在官方分級的「高」或「中」，
           但平日早峰有三成上下的時間還不了車。18 小時平均會洗掉通勤者真正遇到的那兩小時。</p>
@@ -568,6 +637,7 @@ function opsView(){
     </div>
     <div>
       ${stationPanel()}
+      <div style="margin-top:14px">${forecastCard()}</div>
       <div class="card" style="margin-top:14px"><h3>整站無服務 <span class="tag live">即時</span></h3>
         <p class="sub">可借與可還<b>同時為 0</b>。這不是缺車——派車過去也沒有柱位可用。
           必須先確認是設備離線、整站未投車，還是已經退場。<b>不列入調度優先序。</b></p>

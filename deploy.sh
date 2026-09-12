@@ -18,6 +18,8 @@ cp -r models/sagemaker "$B/models/"
 cp data/processed/obs.parquet data/processed/stations.parquet data/processed/neighbors_800m.parquet data/processed/ingest_log.json "$B/data/processed/"
 # v2 一站式需要的分析預算結果；缺了 /api/v2/analytics 會回 503，整頁載不出來
 cp data/analytics/slot_risk.parquet data/analytics/summary.json data/analytics/stations.json "$B/data/analytics/"
+# 即時歷史緩衝：模型的落後特徵靠它，帶上去讓線上不用從零累積兩小時
+[[ -f data/live_history.parquet ]] && cp data/live_history.parquet "$B/data/"
 find "$B" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "$B" -name ".DS_Store" -delete 2>/dev/null || true
 cd "$(dirname "$B")" && tar -czf ybdeploy.tar.gz ybdeploy

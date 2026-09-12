@@ -66,8 +66,9 @@ class Risk:
                 "mean_docks": round(float(row[3]), 2)}
 
 
-def init(live_store, stations_df, state, planner=None):
+def init(live_store, stations_df, state, planner=None, forecaster=None):
     _CTX["live"] = live_store
+    _CTX["fc"] = forecaster
     _CTX["st"] = stations_df
     _CTX["state"] = state
     _CTX["planner"] = planner
@@ -176,12 +177,52 @@ def station_detail(sid: int):
                              "dist_m": int(r.dist_m), "walk_min": round(r.dist_m / 80.0, 1),
                              "bikes": a["bikes"], "docks": a["docks"], "act": a["active"]})
     is_new = int(sid) < 0
+    fc = _CTX.get("fc")
+    model = fc.station(sid) if (fc is not None and not is_new) else None
     return {"live": cur, "history": meta, "horizon": horizon, "alternatives": alts,
+            "model": model,
             "is_new_station": is_new,
             "horizon_semantics": (
                 "本站為 2026 年 6 月之後新增，歷史快照資料沒有涵蓋，因此沒有同時段風險可比。"
                 if is_new else
                 "歷史同時段（平日/假日 × 半小時分箱）的快照比例，不是模型預測")}
+
+
+# ---------------------------------------------------------------- 即時模型預測
+@router.get("/forecast/status")
+def forecast_status():
+    fc = _CTX.get("fc")
+    if fc is None:
+        return {"available": False, "reason": "即時預測層未初始化"}
+    return fc.status()
+
+
+@router.get("/forecast/risk")
+def forecast_risk(kind: str = "full", horizon: int = 120, limit: int = 20, min_p: float = 0.3):
+    """未來最可能無位可還／無車可借的站——這是模型預測，不是歷史同時段分布。"""
+    fc = _CTX.get("fc")
+    if fc is None:
+        raise HTTPException(503, "即時預測層未初始化")
+    st = fc.status()
+    rows = fc.risk_ranking(kind=kind, horizon=horizon, limit=limit, min_p=min_p)
+    return {"kind": kind, "horizon_min": horizon, "min_p": min_p,
+            "count": len(rows), "stations": rows,
+            "status": st,
+            "semantics": ("HistGradientBoosting 模型跑在官方即時站況上；"
+                          "落後特徵來自本服務自行累積的即時歷史，累積不足時準確度下降。"
+                          "模型卡的離線指標是在六月測試集上量的，不等於即時推論的準確度。")}
+
+
+@router.get("/forecast/station/{sid}")
+def forecast_station(sid: int):
+    fc = _CTX.get("fc")
+    if fc is None:
+        raise HTTPException(503, "即時預測層未初始化")
+    r = fc.station(sid)
+    if r is None:
+        return {"available": False,
+                "reason": "此站沒有即時觀測或沒有訓練期輪廓（例如 2026-06 之後新增的站）"}
+    return {"available": True, **r}
 
 
 # ---------------------------------------------------------------- 歷史分析
@@ -275,6 +316,31 @@ def insights():
                      "起點與終點是兩種不同的失敗。"),
             "evidence": [], "action": "出發前就給替代站，不要等使用者到現場才發現。",
             "caveat": "快照比例，非旅次成功率。"})
+
+    fc = _CTX.get("fc")
+    if fc is not None:
+        fst = fc.status()
+        if fst.get("available"):
+            hz = 120 if 120 in (fst.get("horizons") or []) else (fst.get("horizons") or [None])[-1]
+            full = fc.risk_ranking("full", hz, 8, 0.3)
+            empty = fc.risk_ranking("empty", hz, 8, 0.3)
+            cov = min(fc.forecast()["coverage"].values()) if fc.forecast() else 0
+            partial = cov < 100
+            if full or empty:
+                items.append({
+                    "level": "high" if (full or empty) else "mid", "audience": "ops",
+                    "title": f"模型預警：{hz} 分鐘後可能出事的站",
+                    "body": (f"模型在官方即時站況上推論，{hz} 分鐘後無位可還機率 ≥30% 的有 {len(full)} 站、"
+                             f"無車可借 ≥30% 的有 {len(empty)} 站。"
+                             + ("**落後特徵尚未累積完整，準確度會低於模型卡的離線指標。**"
+                                if partial else "落後特徵已累積完整。")),
+                    "evidence": ([f"{r['name']}（{r['district']}）目前可還 {r['now']:.0f}，"
+                                  f"{hz} 分後無位機率 {r['p']}%" for r in full[:3]]
+                                 + [f"{r['name']}（{r['district']}）目前可借 {r['now']:.0f}，"
+                                    f"{hz} 分後無車機率 {r['p']}%" for r in empty[:3]]),
+                    "action": f"{hz} 分鐘足夠新動員一台車（前置 15 分＋行車），現在排還來得及。",
+                    "caveat": ("模型預測，不是歷史同時段分布；模型卡的離線指標在六月測試集上量，"
+                               "不等於即時推論的準確度。")})
 
     return {"generated_at": now.isoformat(), "count": len(items), "insights": items}
 

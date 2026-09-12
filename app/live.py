@@ -12,6 +12,7 @@
   * 合成負數 sid 代表 2026-06 之後才新增、歷史資料沒有的站，詳情頁會明示無歷史可比。
 """
 import json
+import os
 import re
 import threading
 import time
@@ -26,6 +27,10 @@ TPE_URL = "https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_imme
 TZ = timezone(timedelta(hours=8))
 POLL_SEC = 120          # 官方每 5 分鐘更新，我們每 2 分鐘取一次
 TIMEOUT = 25
+STEP_MIN = 30           # 與訓練時的分箱一致，落後特徵才對得上
+KEEP_BINS = 96          # 保留 48 小時的即時歷史
+HIST_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "data", "live_history.parquet")
 
 
 def _norm(name: str) -> str:
@@ -55,6 +60,78 @@ class LiveStore:
         self._sids = stations_df["sid"].to_numpy()
         self._thread = None
         self._new_ids = {}       # 官方站號 → 合成負數 sid（六月後新增、歷史資料沒有的站）
+        # 即時歷史緩衝：{分箱時間 → {sid: (可借, 可還, 容量)}}。
+        # 模型的落後特徵需要 30/60/120 分鐘前的觀測，官方 API 只給當下，所以自己累積。
+        self._hist = {}
+        self._load_hist()
+
+    # ---------------------------------------------------------- 即時歷史緩衝
+    def _load_hist(self):
+        """從磁碟載回緩衝，這樣服務重啟（含重新部署）不會把累積的落後特徵清光。"""
+        if not os.path.exists(HIST_PATH):
+            return
+        try:
+            import pandas as pd
+            t = pd.read_parquet(HIST_PATH)
+            for b, g in t.groupby("bin"):
+                self._hist[pd.Timestamp(b)] = {
+                    int(r.sid): (float(r.bikes), float(r.spaces), float(r.cap))
+                    for r in g.itertuples()}
+            self._trim()
+            print(f"live: 載回即時歷史 {len(self._hist)} 個分箱", flush=True)
+        except Exception as e:                              # noqa: BLE001
+            print(f"live: 即時歷史載入失敗（{type(e).__name__}），從空的開始", flush=True)
+
+    def _save_hist(self):
+        try:
+            import pandas as pd
+            rows = [{"bin": b, "sid": sid, "bikes": v[0], "spaces": v[1], "cap": v[2]}
+                    for b, d in self._hist.items() for sid, v in d.items()]
+            if not rows:
+                return
+            os.makedirs(os.path.dirname(HIST_PATH), exist_ok=True)
+            pd.DataFrame(rows).to_parquet(HIST_PATH, index=False)
+        except Exception:                                   # noqa: BLE001
+            pass        # 寫不進去不影響服務，下一輪再試
+
+    def _trim(self):
+        if len(self._hist) > KEEP_BINS:
+            for b in sorted(self._hist)[:-KEEP_BINS]:
+                self._hist.pop(b, None)
+
+    def _record(self, snap):
+        """把這一次的快照寫進當前分箱（同分箱內後到的覆蓋先到的，取最接近分箱結束的值）。"""
+        import pandas as pd
+        b = pd.Timestamp(datetime.now(TZ)).tz_localize(None).floor(f"{STEP_MIN}min")
+        self._hist[b] = {sid: (float(x["bikes"]), float(x["docks"]), float(x["capacity"]))
+                         for sid, x in snap.items() if sid >= 0}
+        self._trim()
+
+    def history_bins(self):
+        with self._lock:
+            return sorted(self._hist)
+
+    def history_matrices(self, n_stations):
+        """回傳 (分箱索引, B, S, C)，供模型的落後特徵使用。無觀測處為 NaN。"""
+        import numpy as np
+        import pandas as pd
+        with self._lock:
+            bins = sorted(self._hist)
+            if not bins:
+                return pd.DatetimeIndex([]), None, None, None
+            full = pd.date_range(bins[0], bins[-1], freq=f"{STEP_MIN}min")
+            B = np.full((len(full), n_stations), np.nan, np.float32)
+            S = np.full((len(full), n_stations), np.nan, np.float32)
+            C = np.full((len(full), n_stations), np.nan, np.float32)
+            pos = {b: i for i, b in enumerate(full)}
+            for b, d in self._hist.items():
+                i = pos.get(b)
+                if i is None:
+                    continue
+                for sid, (bk, sp, cp) in d.items():
+                    if 0 <= sid < n_stations:
+                        B[i, sid], S[i, sid], C[i, sid] = bk, sp, cp
+            return full, B, S, C
 
     # ---------------------------------------------------------- 站鍵對應
     def _match(self, rec):
@@ -116,6 +193,7 @@ class LiveStore:
         stats = self._summarize(snap, unmatched)
         with self._lock:
             self._snap, self._stats = snap, stats
+            self._record(snap)
             self._fetched_at = datetime.now(TZ)
             self._error = None
             self._ok_count += 1
@@ -168,6 +246,10 @@ class LiveStore:
                 with self._lock:
                     self._error = f"{type(e).__name__}: {e}"
                     self._err_count += 1
+            try:
+                self._save_hist()
+            except Exception:                               # noqa: BLE001
+                pass
             time.sleep(POLL_SEC)
 
     def start(self):
@@ -198,6 +280,8 @@ class LiveStore:
                 "stale": (age is None) or (age > POLL_SEC * 3),
                 "ok": self._ok_count, "errors": self._err_count, "last_error": self._error,
                 "available": self._snap is not None,
+                "history_bins": len(self._hist),
+                "history_hours": round(len(self._hist) * STEP_MIN / 60.0, 1),
             }
 
     def snapshot(self):

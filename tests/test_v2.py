@@ -209,6 +209,85 @@ def test_analytics_file():
                 d["am_no_dock"] > (100 - d["park_rate"]))
 
 
+# ====================================================== 5b. 即時模型預測（合成緩衝）
+def test_live_forecast():
+    print("\n[5b] 即時模型預測：用合成的即時歷史驗證推論路徑")
+    try:
+        import numpy as np
+        import pandas as pd
+        import liveforecast
+        from predict import Predictor
+    except Exception as e:                                   # noqa: BLE001
+        print(f"  跳過：{type(e).__name__} {e}")
+        return
+
+    pred = Predictor()
+    if not pred.model_horizons:
+        print("  跳過：沒有可用模型")
+        return
+    ns = len(pred.st)
+
+    class StubLive:
+        """五個分箱的合成即時歷史，讓 lag1/2/4 都有值。"""
+
+        def __init__(self):
+            base = pd.Timestamp("2026-09-13 08:00:00")
+            self.bins = [base + pd.Timedelta(minutes=30 * i) for i in range(5)]
+
+        def history_bins(self):
+            return list(self.bins)
+
+        def history_matrices(self, n):
+            full = pd.DatetimeIndex(self.bins)
+            B = np.full((len(full), n), np.nan, np.float32)
+            S = np.full((len(full), n), np.nan, np.float32)
+            C = np.full((len(full), n), np.nan, np.float32)
+            cap = pred.st["cap_mode"].to_numpy(dtype=np.float32)
+            for i in range(len(full)):
+                # 讓可借車數隨分箱遞減，模擬早峰被借空
+                B[i] = np.clip(cap * 0.5 - i * 2, 0, cap)
+                C[i] = cap
+                S[i] = cap - B[i]
+            return full, B, S, C
+
+    fc = liveforecast.LiveForecaster(pred, StubLive())
+    st = fc.status()
+    ck("五個分箱 → 預測可用", st["available"], True)
+    ck("回報累積分箱數", st["history_bins"], 5)
+    ck_true("有標注輪廓來自訓練期歷史", "訓練期歷史" in st["note"])
+
+    f = fc.forecast()
+    ck_true("有產出預測", f is not None)
+    ck("預測站數＝合成資料的站數", f["n_stations"], ns)
+    ck("lag1 涵蓋全部站", f["coverage"]["lag1"], ns)
+    ck("lag4 涵蓋全部站", f["coverage"]["lag4"], ns)
+    d = f["stations"]
+    for hm in pred.model_horizons:
+        ck_true(f"{hm} 分鐘的機率都在 0–1",
+                bool(((d[f"p_empty_{hm}"] >= 0) & (d[f"p_empty_{hm}"] <= 1)).all()))
+        ck_true(f"{hm} 分鐘的預測車數不為負", bool((d[f"bikes_{hm}"] >= 0).all()))
+        ck_true(f"{hm} 分鐘的預測車數不超過容量",
+                bool((d[f"bikes_{hm}"] <= d["cap_now"] + 0.05).all()))
+
+    one = fc.station(int(pred.st["sid"].iloc[0]))
+    ck_true("單站預測有結果", one is not None)
+    ck("單站預測的尺度數＝模型尺度數", len(one["horizon"]), len(pred.model_horizons))
+    ck_true("單站預測有標注模型來源", bool(one["model_origin"]))
+
+    rank = fc.risk_ranking("empty", pred.model_horizons[-1], 10, 0.0)
+    ck_true("風險排名有結果", len(rank) > 0)
+    ck_true("風險排名依機率遞減",
+            all(rank[i]["p"] >= rank[i + 1]["p"] for i in range(len(rank) - 1)))
+    high = fc.risk_ranking("empty", pred.model_horizons[-1], 50, 0.99)
+    ck_true("門檻拉到 0.99 後筆數不會變多", len(high) <= len(rank) or len(rank) == 10)
+
+    ck("分箱不足 → 不給預測",
+       liveforecast.LiveForecaster(pred, type("E", (), {
+           "history_bins": lambda self: [],
+           "history_matrices": lambda self, n: (pd.DatetimeIndex([]), None, None, None)})()).forecast(),
+       None)
+
+
 # ====================================================== 6. HTTP
 def test_http():
     print(f"\n[6] HTTP（{BASE}）")
@@ -307,6 +386,7 @@ def main():
     test_summary()
     test_nan_guard()
     test_analytics_file()
+    test_live_forecast()
     test_http()
     print(f"\n{'=' * 52}\n通過 {PASS}　失敗 {FAIL}")
     return 1 if FAIL else 0

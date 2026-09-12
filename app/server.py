@@ -1906,11 +1906,13 @@ def api_ops_availability(district: str = "", sid: int = -1, only_flagged: int = 
 
 
 # ==================================================================== v2 一站式（新增，不改動既有端點）
-import live as LIVE          # noqa: E402
-import v2api as V2           # noqa: E402
+import live as LIVE                  # noqa: E402
+import liveforecast as LIVEFC        # noqa: E402
+import v2api as V2                   # noqa: E402
 
 LIVE_STORE = LIVE.LiveStore(ST)
-V2.init(LIVE_STORE, ST, STATE, PL)
+LIVE_FC = LIVEFC.LiveForecaster(PRED, LIVE_STORE)
+V2.init(LIVE_STORE, ST, STATE, PL, LIVE_FC)
 app.include_router(V2.router)
 
 
@@ -1920,7 +1922,8 @@ def _start_live_poll():
     LIVE_STORE.start()
     s = LIVE_STORE.status()
     print(f"live: available={s['available']} ok={s['ok']} err={s['errors']} "
-          f"stations={LIVE_STORE.stats().get('stations')}", flush=True)
+          f"stations={LIVE_STORE.stats().get('stations')} "
+          f"history_bins={s.get('history_bins')}", flush=True)
 
 
 @app.get("/v2", response_class=HTMLResponse)
