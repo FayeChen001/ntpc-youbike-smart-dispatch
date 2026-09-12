@@ -221,12 +221,17 @@ POST /api/ops/tasks/{id}/escalate
 | I01 | 修復不等於自動驗收 | HTTP 閉環 | **通過** recovered→repaired，verified 才 verified_ok |
 | I03 | 重連重複 GET 不重複建單 | HTTP 閉環 | **通過** |
 
-重現：
+重現（測試已進版控，見 `tests/README_B.md`）：
 ```bash
-python3 /private/tmp/.../scratchpad/test_tickets.py    # 38 項 fixture 單元測試
-python3 /private/tmp/.../scratchpad/test_http.py       # 24 項 HTTP 整合測試（需 8789 測試機）
+python3 tests/test_b_tickets.py        # 38 項 fixture：建單服務
+python3 tests/test_b_ledger.py         # 27 項 fixture：N03/N04/N05 資源帳與逐站期限
+python3 tests/test_b_dispatch.py       # 11 項：組趟與跨尺度資源帳
+python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8789
+python3 tests/test_b_http_tickets.py   # 24 項：兩個入口同一服務
+python3 tests/test_b_http_cycle.py     # 20 項：規劃週期與任務動作
+python3 tests/test_b_closed_loop.py    # 19 項：三端閉環
 ```
-（測試檔在 scratchpad，未進版控；要保留再說。）
+六套連跑全數 exit 0。**HTTP 套件會呼叫 `/api/reset`，不要對共用的 8787 跑。**
 
 ## 10. 尚未驗證／已知限制
 
