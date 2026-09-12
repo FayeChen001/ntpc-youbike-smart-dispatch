@@ -2,8 +2,9 @@
 events.py — 政府端事件台帳：把「告警」升級成有生命週期、有分級、有原因與證據的事件。
 
 界線：
-- 觀測是每 30 分鐘一筆的庫存快照。「空站多久」只能給觀測下界（第一筆零快照到現在）
-  與可能上界（最後一筆正常觀測到現在），不能給精確值。缺測不算恢復。
+- 觀測是每 30 分鐘一筆的庫存快照。「空站多久」只能給觀測跨度（第一筆零快照到現在）
+  與可能上界（最後一筆確認正常的觀測到現在），不能給精確值，也不能宣稱期間連續中斷。
+  前面沒有任何一筆確認正常的觀測時，上界為未知，不以跨度加一格之類的數字充數。缺測不算恢復。
 - 分級門檻是依訪談轉述整理的「試行」門檻，不是官方標準，也還沒確認是否全站適用。
   訪談提到的「觀測空站 20 分鐘」在 30 分鐘解析度下量不到，這裡改用 30 分鐘並標示。
 - 原因一律要有證據才寫上去。推不出證據就是「待查」，不猜。
@@ -16,19 +17,19 @@ BIN_MIN = 30
 
 # 試行分級（待主管確認，非官方標準）
 LEVELS = {
-    "P0": {"label": "P0", "desc": "超過 60 分鐘、500 公尺內沒有替代站、且沒有可執行的恢復計畫；或 P1 逾時無人接手；或同區站群同時失效", "notify": "主管與值班主管"},
-    "P1": {"label": "P1", "desc": "觀測到的空站／滿站已達 30 分鐘以上；若 500 公尺內還有替代站，最高只到這一級", "notify": "值班調度"},
+    "P0": {"label": "P0", "desc": "零值快照跨度已達 60 分鐘、500 公尺內沒有替代站、且沒有可執行的恢復計畫；或 P1 逾時無人接手；或站群同時失效", "notify": "主管與值班主管"},
+    "P1": {"label": "P1", "desc": "零值快照跨度已達 30 分鐘；若 500 公尺內還有替代站，最高只到這一級", "notify": "值班調度"},
     "P2": {"label": "P2", "desc": "預測 60–180 分鐘後將失衡，進入值班排程", "notify": "不逐則打擾主管"},
     "C":  {"label": "長期", "desc": "連續 12 小時以上沒車，或超過 24 小時沒看到過正常庫存：這不是今天的突發事件，派車解決不了，要查核營運狀態", "notify": "營運查核，不打擾主管"},
     "W":  {"label": "待查", "desc": "雙零、長期不變、容量矛盾：狀態待查核，不直接派車", "notify": "不通知"},
 }
 LEVEL_ORDER = {"P0": 0, "P1": 1, "P2": 2, "C": 3, "W": 4}
 
-CHRONIC_MIN = 720        # 觀測下界達 12 小時 → 長期性，不是今天的事件
+CHRONIC_MIN = 720        # 觀測跨度達 12 小時 → 長期性，不是今天的事件
 CHRONIC_UPPER_MIN = 1440 # 超過 24 小時沒看過正常庫存 → 同上
 
-P1_MIN = 30          # 觀測下界達此值 → P1
-P0_MIN = 60          # 觀測下界達此值且無可執行恢復計畫 → P0
+P1_MIN = 30          # 觀測跨度達此值 → P1（跨度不等於確定連續中斷，分級門檻用跨度是保守取法）
+P0_MIN = 60          # 觀測跨度達此值且無替代站、無可執行恢復計畫 → P0
 P0_UNACKED_MIN = 30  # P1 開啟超過此時間仍無人確認 → 升 P0
 CLUSTER_N = 3        # 同一行政區同時有這麼多件 P0/P1 → 視為站群同時失效
 
@@ -51,8 +52,10 @@ CAUSES = {
 def observed_run(ctx, bins, t_idx, sid, kind):
     """
     回傳這一站在 t_idx 當下、仍在進行中的零車／零位區間。
-    lower_min：第一筆零快照到現在（確定已經這樣多久）
-    upper_min：最後一筆「確認正常」的觀測到現在（最多可能多久）
+    span_min：第一筆零快照到現在的時間差。這是觀測跨度，不是確定的連續中斷時間——
+             快照之間是否曾短暫恢復，30 分鐘一筆的資料證明不了。
+    upper_min：事件前最後一筆「確認正常」的觀測到現在（最多可能多久）。
+              前面找不到確認正常的觀測時為 None（未知），不以其他數字代替。
     兩個都是「到目前為止」，事件還沒結束。
     """
     M = ctx.B if kind == "empty" else ctx.S
@@ -85,12 +88,15 @@ def observed_run(ctx, bins, t_idx, sid, kind):
         k -= 1
 
     return {
-        "lower_min": int((t_idx - start) * BIN_MIN),
+        "span_min": int((t_idx - start) * BIN_MIN),
         "upper_min": None if j < 0 else int((t_idx - j) * BIN_MIN),
+        "upper_known": j >= 0,
+        "zero_snapshot_min": int((t_idx - start + 1) * BIN_MIN),
         "snapshots": int(t_idx - start + 1),
         "started_obs": str(bins[start]),
         "last_data_ts": None if k < 0 else str(bins[k]),
         "gap_inside": gap,
+        "wording": "觀測跨度，不是確定的連續中斷時間",
     }
 
 
@@ -167,7 +173,10 @@ def infer_cause(ev, state, now_ts):
             return {"code": "no_supply", "label": CAUSES["no_supply"], "confident": True,
                     "evidence": [{"kind": "task", "ref": cross[0]["id"], "text": cross[0].get("reason", "區內無可供給站")}]}
         return {"code": "no_task", "label": CAUSES["no_task"], "confident": True,
-                "evidence": [{"kind": "task", "ref": "—", "text": "目前排程中沒有任何一張任務要送車到這一站"}]}
+                "evidence": [{"kind": "task", "ref": "—",
+                              "text": "目前排程中沒有任何一張任務要送車到這一站。"
+                                      "本系統沒有巡查或人員定位紀錄，這只代表排程沒有涵蓋，"
+                                      "不能據此推論沒有人到過現場。"}]}
     if tk["status"] == "too_late":
         return {"code": "too_late", "label": CAUSES["too_late"], "confident": True,
                 "evidence": [{"kind": "task", "ref": tk["id"], "text": tk.get("reason", "決策到抵達的時間趕不上目標時間")}]}
@@ -228,15 +237,15 @@ def refresh(state, pred, pred_df, now_ts, iso):
         lvl = "P2"
         if a["type"] in ONGOING_TYPES and a.get("observed"):
             o = a["observed"]
-            lower, upper = o["lower_min"], o["upper_min"]
-            chronic = lower >= CHRONIC_MIN or upper is None or upper >= CHRONIC_UPPER_MIN
+            span, upper = o["span_min"], o["upper_min"]
+            chronic = span >= CHRONIC_MIN or upper is None or upper >= CHRONIC_UPPER_MIN
             executable = bool(tk and tk["status"] in ("planned", "dispatched", "en_route"))
             has_alt = bool(a["alt"] and a["alt"]["has"])
             if chronic:
                 lvl = "C"
-            elif lower >= P0_MIN and not executable and not has_alt:
+            elif span >= P0_MIN and not executable and not has_alt:
                 lvl = "P0"
-                a["escalated"] = f"已達 {lower} 分鐘、500 公尺內沒有替代站、也沒有可執行的恢復計畫"
+                a["escalated"] = f"零值快照跨度已達 {span} 分鐘、500 公尺內沒有替代站、也沒有可執行的恢復計畫"
             else:
                 lvl = "P1"
         if lvl == "P1" and a.get("status") == "open":
@@ -277,7 +286,7 @@ def refresh(state, pred, pred_df, now_ts, iso):
             a["timeline"].append({"ts": iso(now_ts), "action": "level", "actor": "系統",
                                   "note": f"分級 {LEVELS[prev]['label']} → {LEVELS[lvl]['label']}"
                                           + (f"：{a['escalated']}" if a.get("escalated") else
-                                             (f"：觀測到的中斷已達 {a['observed']['lower_min']} 分鐘" if a.get("observed") else ""))})
+                                             (f"：零值快照跨度已達 {a['observed']['span_min']} 分鐘" if a.get("observed") else ""))})
         a["timeline"] = a["timeline"][-40:]
     return live
 

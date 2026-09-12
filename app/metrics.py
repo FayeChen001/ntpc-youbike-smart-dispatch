@@ -3,9 +3,11 @@ metrics.py — 驗收指標：從觀測快照計算服務中斷事件，並彙�
 
 界線（前端會原文顯示）：
 - 資料是每 30 分鐘一筆的庫存快照，不是借還交易。零車快照不等於有人借不到，也不等於失敗旅次。
-- 一段零車觀測只能給「觀測下界」與「可能上界」：首末兩筆零車快照相距 k 個分箱，下界 k×30 分鐘；
-  真正的起訖落在前一筆正常觀測與後一筆正常觀測之間，上界 = (後一筆正常 − 前一筆正常) × 30 分鐘。
-- 缺測不視為恢復，也不視為持續中斷：缺測會切斷事件並標記，該事件的上界不可收斂。
+- 一段零車觀測只能給「觀測跨度」與「可能上界」：首末兩筆零車快照相距 k 個分箱，跨度 k×30 分鐘。
+  跨度不是確定的連續中斷時間——快照之間是否曾短暫恢復，資料證明不了。
+  上界 =（事件後第一筆確認正常 − 事件前最後一筆確認正常）× 30 分鐘，前後任一側沒有確認正常的觀測時
+  上界為「未知」，不以跨度加一格之類的數字充數。
+- 缺測不視為恢復，也不視為持續中斷：缺測會切斷事件並標記。
 - 雙零、24 小時以上庫存無變化、容量矛盾的站點分箱一律排除，那是待查狀態不是服務中斷事件。
 """
 import json, os
@@ -123,14 +125,17 @@ class ServiceMetrics:
         else:
             sid = s0 = s1 = pv = nx = np.zeros(0, dtype=np.int64)
 
-        lower = (s1 - s0) * BIN_MIN                                   # 觀測下界
+        # 口徑（N01／N02）：
+        # span_min 是「首末兩筆零快照的時間差」，只是觀測跨度。08:00/08:30/09:00 三筆零快照的跨度是
+        # 60 分鐘，不代表確定連續中斷 60 分鐘，更不是 90 分鐘——快照之間是否曾短暫恢復，資料證明不了。
+        # upper_min 只有在事件前後都各有一筆「確認正常」的觀測時才存在；否則保留未知，不以 span+30 充數。
+        span = (s1 - s0) * BIN_MIN
+        zero_min = (s1 - s0 + 1) * BIN_MIN          # 觀測到的零值快照換算站‧分鐘（每筆快照代表一個分箱）
         open_left, open_right = pv < 0, nx >= T
-        upper = np.where(open_left | open_right, -1, (nx - pv) * BIN_MIN)
-        gap_adj = (~open_left & (pv != s0 - 1)) | (~open_right & (nx != s1 + 1))
-        over = np.maximum(0, lower - TARGET_MIN)                      # 超過恢復目標的站分鐘（下界）
-        upper_eff = np.where(upper >= 0, upper, lower + BIN_MIN)       # 上界未收斂時，至少以下界＋一格計
-        over_up = np.maximum(0, upper_eff - TARGET_MIN)
-        up = upper[upper >= 0]
+        upper_known = ~(open_left | open_right)
+        upper = np.where(upper_known, (nx - pv) * BIN_MIN, -1)
+        gap_inside = (~open_left & (pv != s0 - 1)) | (~open_right & (nx != s1 + 1))
+        up = upper[upper_known]
 
         bins = self.P.bins
         names = st["name"].values
@@ -140,22 +145,31 @@ class ServiceMetrics:
             "window": {"key": w["key"], "label": w["label"], "t0": str(bins[t0]), "t1": str(bins[t1 - 1]),
                        "bins": int(T), "days": round(T * BIN_MIN / 1440, 1), "resolution_min": BIN_MIN},
             "kind": kind, "kind_label": KIND_LABEL[kind], "target_min": TARGET_MIN,
-            "counts": {"events": int(len(lower)),
-                       "ge30": int((lower >= 30).sum()), "ge60": int((lower >= 60).sum()),
-                       "ge120": int((lower >= 120).sum()), "single_snapshot": int((lower == 0).sum())},
-            "counts_upper": {"ge30": int((upper_eff >= 30).sum()), "ge60": int((upper_eff >= 60).sum()),
-                             "ge120": int((upper_eff >= 120).sum())},
-            "events_per_day": round(len(lower) / max(1e-9, T * BIN_MIN / 1440), 1),
+            "counts": {"events": int(len(span)),
+                       "span_ge30": int((span >= 30).sum()), "span_ge60": int((span >= 60).sum()),
+                       "span_ge120": int((span >= 120).sum()), "single_snapshot": int((span == 0).sum())},
+            "upper": {"known": int(upper_known.sum()), "unknown": int((~upper_known).sum()),
+                      "ge30": int((up >= 30).sum()), "ge60": int((up >= 60).sum()), "ge120": int((up >= 120).sum()),
+                      "gap_inside": int(gap_inside.sum())},
+            "events_per_day": round(len(span) / max(1e-9, T * BIN_MIN / 1440), 1),
             "stations_affected": int(len(np.unique(sid))) if len(sid) else 0,
             "stations_total": int(len(st)),
             "outage_cells": outage_cells,
-            "over_target_station_min": int(over.sum()),
-            "over_target_station_min_upper": int(over_up.sum()),
-            "recovery": {"p50_lower": _pct(lower, 50), "p90_lower": _pct(lower, 90), "max_lower": int(lower.max()) if len(lower) else 0,
-                         "p50_upper": _pct(up, 50), "p90_upper": _pct(up, 90),
-                         "bounded": int(len(up)), "open_ended": int((upper < 0).sum()), "gap_adjacent": int(gap_adj.sum())},
+            "zero_snapshot_station_min": int(outage_cells * BIN_MIN),
+            "span_over_target_station_min": int(np.maximum(0, span - TARGET_MIN).sum()),
+            "duration": {"span_p50": _pct(span, 50), "span_p90": _pct(span, 90),
+                         "span_max": int(span.max()) if len(span) else 0,
+                         "upper_p50": _pct(up, 50), "upper_p90": _pct(up, 90),
+                         "upper_max": int(up.max()) if len(up) else None},
             "data_gaps": {"runs": gap_runs, "cells": excl["no_data"]},
             "excluded_cells": excl,
+            "definitions": {
+                "span_min": "首末兩筆零值快照的時間差。只出現一筆時為 0。這是觀測跨度，不是確定的連續中斷時間。",
+                "upper_min": "事件前最後一筆確認正常的觀測，到事件後第一筆確認正常的觀測之間的時間差。"
+                             "任一側沒有確認正常的觀測（延伸到期間邊界，或相鄰是缺測）時，上界為未知，不以其他數字代替。",
+                "zero_snapshot_station_min": "觀測到的零值快照數 × 30 分鐘。這是觀測量，不宣稱期間連續中斷。",
+                "not_claimed": "零車快照不等於有人借不到，也不等於失敗旅次。本節沒有任何一個數字是需求或到站成功率。",
+            },
             "source": f"回放觀測快照（{BIN_MIN} 分鐘一筆）真實計算；未使用模擬資料",
         }
 
@@ -165,20 +179,21 @@ class ServiceMetrics:
         hist = []
         for i, lab in enumerate(labels):
             lo, hi = edges[i], edges[i + 1]
-            n_l = int(((lower >= lo) & (lower < hi)).sum())
-            n_u = int(((upper_eff >= lo) & (upper_eff < hi)).sum())
-            hist.append({"label": lab, "lower": n_l, "upper": n_u})
+            hist.append({"label": lab,
+                         "span": int(((span >= lo) & (span < hi)).sum()),
+                         "upper": int(((up >= lo) & (up < hi)).sum())})
         res["duration_hist"] = hist
+        res["upper_unknown"] = int((~upper_known).sum())
 
         # 依行政區
         by_d = {}
-        for i in range(len(lower)):
+        for i in range(len(span)):
             d = dists[sid[i]]
-            r = by_d.setdefault(d, {"district": d, "events": 0, "ge60": 0, "over_min": 0})
+            r = by_d.setdefault(d, {"district": d, "events": 0, "span_ge60": 0, "zero_min": 0})
             r["events"] += 1
-            r["ge60"] += int(lower[i] >= 60)
-            r["over_min"] += int(over[i])
-        res["by_district"] = sorted(by_d.values(), key=lambda r: -r["over_min"])[:14]
+            r["span_ge60"] += int(span[i] >= 60)
+            r["zero_min"] += int(zero_min[i])
+        res["by_district"] = sorted(by_d.values(), key=lambda r: -r["zero_min"])[:14]
 
         # 依時段（事件起始的小時）
         hours = np.zeros(24, dtype=np.int64)
@@ -186,26 +201,26 @@ class ServiceMetrics:
         if len(s0):
             hh = bins[t0 + s0].hour.values
             np.add.at(hours, hh, 1)
-            np.add.at(hours_ge60, hh[lower >= 60], 1)
-        res["by_hour"] = [{"hour": h, "events": int(hours[h]), "ge60": int(hours_ge60[h])} for h in range(24)]
+            np.add.at(hours_ge60, hh[span >= 60], 1)
+        res["by_hour"] = [{"hour": h, "events": int(hours[h]), "span_ge60": int(hours_ge60[h])} for h in range(24)]
 
         # 最嚴重站點
         by_s = {}
-        for i in range(len(lower)):
+        for i in range(len(span)):
             r = by_s.setdefault(int(sid[i]), {"sid": int(sid[i]), "name": names[sid[i]], "district": dists[sid[i]],
-                                              "events": 0, "over_min": 0, "max_lower": 0})
+                                              "events": 0, "zero_min": 0, "max_span": 0})
             r["events"] += 1
-            r["over_min"] += int(over[i])
-            r["max_lower"] = max(r["max_lower"], int(lower[i]))
-        res["top_stations"] = sorted(by_s.values(), key=lambda r: -r["over_min"])[:12]
+            r["zero_min"] += int(zero_min[i])
+            r["max_span"] = max(r["max_span"], int(span[i]))
+        res["top_stations"] = sorted(by_s.values(), key=lambda r: -r["zero_min"])[:12]
 
         # 最長事件
-        if len(lower):
-            ordr = np.argsort(-lower)[:10]
+        if len(span):
+            ordr = np.argsort(-span)[:10]
             res["longest"] = [{"sid": int(sid[i]), "name": names[sid[i]], "district": dists[sid[i]],
                                "start": str(bins[t0 + s0[i]]), "end": str(bins[t0 + s1[i]]),
-                               "lower_min": int(lower[i]), "upper_min": (None if upper[i] < 0 else int(upper[i])),
-                               "snapshots": int(s1[i] - s0[i] + 1), "gap_adjacent": bool(gap_adj[i])} for i in ordr]
+                               "span_min": int(span[i]), "upper_min": (None if upper[i] < 0 else int(upper[i])),
+                               "snapshots": int(s1[i] - s0[i] + 1), "gap_inside": bool(gap_inside[i])} for i in ordr]
         else:
             res["longest"] = []
 
@@ -257,17 +272,17 @@ def threshold_tradeoff(eval_json, horizon, kind="empty", duty_alerts_per_hour=No
         hit = sum(b["n"] * b["obs_rate"] for b in sel)
         rows.append({
             "threshold": round(k / 10, 1),
-            "alerts": int(n),
-            "alerts_per_hour": round(n / test_hours, 1),
+            "candidate_cells": int(n),
+            "candidate_cells_per_hour": round(n / test_hours, 1),
             "precision": round(hit / n, 3) if n else None,
             "recall": round(hit / positives, 3) if positives else None,
-            "false_per_hour": round((n - hit) / test_hours, 1),
+            "false_candidates_per_hour": round((n - hit) / test_hours, 1),
         })
     pick = None
     if duty_alerts_per_hour:
-        ok = [r for r in rows if r["alerts_per_hour"] <= duty_alerts_per_hour]
+        ok = [r for r in rows if r["candidate_cells_per_hour"] <= duty_alerts_per_hour]
         pick = min(ok, key=lambda r: r["threshold"])["threshold"] if ok else None
-    floor = rows[-1]["alerts_per_hour"]         # 門檻拉到 0.9 仍然發出的量
+    floor = rows[-1]["candidate_cells_per_hour"]   # 門檻拉到 0.9 仍然被觸發的候選量
     new_per_hour = round(e["new_events"] / test_hours, 1)
     zw = "零車" if kind == "empty" else "零位"
     gw = "缺車" if kind == "empty" else "缺位"
@@ -285,12 +300,17 @@ def threshold_tradeoff(eval_json, horizon, kind="empty", duty_alerts_per_hour=No
         "floor_per_hour": floor,
         "new_events_per_hour": new_per_hour,
         "threshold_label": f"{zw}機率門檻",
-        "note": ("門檻只能落在校準分箱邊界（每 0.1）；告警量為全市 1,583 站每小時平均。"
+        "unit": "候選觸發的站×時點筆數（每 30 分鐘一個時點、全市 1,583 站）",
+        "dedup_warning": ("這一欄是「候選觸發量」，不是使用者會收到的通知量。實際系統對同一站同一類型"
+                          "開啟中的事件不重發，並對逐則通知節流，去重後的通知量會低很多——但去重比例取決於"
+                          "事件持續多久，無法從校準分箱推算，所以這裡不提供通知量的估計值。"),
+        "note": ("門檻只能落在校準分箱邊界（每 0.1）；候選量為全市 1,583 站每小時平均。"
                  f"≥0.9 分箱多為「當下已{zw}且延續」，會墊高整體精準度，"
                  f"新發生事件召回 {e['new_event_recall']:.1%} 才是預警價值。"),
-        "conclusion": (f"門檻拉到 0.9，全市每小時仍會發出 {floor} 則，其中大多是「已經{zw}、持續中」的站，"
+        "conclusion": (f"門檻拉到 0.9，全市每小時仍有 {floor} 個站×時點被觸發（候選量，非去重後的通知量），"
+                       f"其中大多是「已經{zw}、持續中」的站，"
                        f"而真正新發生的事件本來就有每小時 {new_per_hour} 件。"
-                       "把門檻調高不會把量降到值班可處理的範圍；要降量必須改變告警定義"
+                       "把門檻調高不會把候選量降到值班可處理的範圍；要降量必須改變告警定義"
                        f"（只對新發生、且 500 公尺內沒有替代站、需要{'派車補車' if kind == 'empty' else '派車運出'}的{gw}發告警），"
                        "並以行政區或站群彙總，而不是逐站逐則。"),
         "source": "reports/model_eval.json（六月測試期一次評估）",
@@ -299,8 +319,9 @@ def threshold_tradeoff(eval_json, horizon, kind="empty", duty_alerts_per_hour=No
 
 # ---------------------------------------------------------------- 流程時效
 STAGE_DEFS = [
-    ("open_to_ack", "開啟 → 值班確認", "opened", "acked"),
-    ("ack_to_dispatch", "確認 → 轉調度", "acked", "dispatched"),
+    ("open_to_ack", "開啟 → 有人看到（ack）", "opened", "acked"),
+    ("ack_to_assign", "看到 → 指派負責人", "acked", "assigned_at"),
+    ("assign_to_dispatch", "指派 → 轉營運處理", "assigned_at", "dispatched"),
     ("open_to_resolve", "開啟 → 結案", "opened", "resolved"),
 ]
 
@@ -322,6 +343,7 @@ def flow_metrics(alert_log, tasks, now_ts):
 
     opened = len(svc)
     acked = sum(1 for a in svc if a.get("acked"))
+    assigned = sum(1 for a in svc if a.get("owner"))        # 指派＝有負責人，和 ack 是兩回事
     dispatched = sum(1 for a in svc if a.get("dispatched"))
     resolved_manual = sum(1 for a in svc if a.get("resolved") and a.get("resolve_reason", "").find("自動") < 0)
     resolved_auto = sum(1 for a in svc if a.get("resolved") and a.get("resolve_reason", "").find("自動") >= 0)
@@ -334,10 +356,12 @@ def flow_metrics(alert_log, tasks, now_ts):
     all_stops = sum(1 for t in real for s in t["stops"] if s.get("action") == "dropoff")
     return {
         "stages": stages,
-        "funnel": {"opened": opened, "acked": acked, "dispatched": dispatched,
+        "funnel": {"opened": opened, "acked": acked, "assigned": assigned, "dispatched": dispatched,
                    "resolved_manual": resolved_manual, "resolved_auto": resolved_auto,
                    "still_open": len(still_open),
-                   "unassigned_ratio": round(1 - acked / opened, 3) if opened else None,
+                   "acked_not_assigned": max(0, acked - assigned),
+                   "unassigned_ratio": round(1 - assigned / opened, 3) if opened else None,
+                   "unacked_ratio": round(1 - acked / opened, 3) if opened else None,
                    "oldest_open_min": round(max(aging), 1) if aging else None},
         "dispatch": {
             "tasks": len(tasks),
@@ -351,8 +375,15 @@ def flow_metrics(alert_log, tasks, now_ts):
             "on_time_stops": on_time_stops,
             "on_time_ratio": round(on_time_stops / all_stops, 3) if all_stops else None,
         },
-        "note": ("本場回放的操作時間：告警開啟與自動解除由觀測與預測觸發，確認／轉調度由人在介面按下，"
+        "note": ("本場回放的操作時間：事件開啟與自動解除由觀測與預測觸發，確認／指派／轉營運由人在介面按下，"
                  "出車、抵達、完成為依假設推進的模擬狀態。非真實派工系統量測。"),
+        "definitions": {
+            "ack": "有人在介面上看到並確認這件事，不代表已經指派給誰，也不代表已經有人到現場。",
+            "assigned": "事件上有指定的負責人（owner）。未指派比例以此計算，不用 ack 代替。",
+            "auto_resolved": "站點恢復有車，條件消失而自動關閉。不代表有人處理過。",
+            "no_patrol_inference": "本系統沒有巡查或人員定位紀錄，任務清單裡沒有這一站，只代表排程沒有涵蓋，"
+                                   "不能據此推論「沒有人去過現場」。",
+        },
     }
 
 

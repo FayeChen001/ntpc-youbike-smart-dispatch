@@ -62,7 +62,7 @@ tr.cur td{background:#eaf2fd;font-weight:600}
     期間 <select id="mx-window"></select>
     類型 <select id="mx-kind"><option value="empty">缺車（無車可借）</option><option value="full">缺位（無位可還）</option></select>
     預測尺度 <select id="mx-horizon"><option value="60">60 分</option><option value="120" selected>120 分</option><option value="180">180 分</option></select>
-    值班可處理 <input id="mx-duty" type="number" value="20" min="1" max="500" step="1"> 則/小時
+    值班可處理 <input id="mx-duty" type="number" value="20" min="1" max="500" step="1"> 候選/小時
     <button class="small" onclick="mxClose()">✕ 關閉</button>
   </div>
   <div class="mxbody" id="mx-body"><div class="muted small">載入中…</div></div>
@@ -81,7 +81,7 @@ function kpis(k){ S.kpi=k; $('clock').textContent = '回放時間 '+k.ts; const 
 /* 事件台帳：分級、觀測時長、負責人、ETA、原因與證據 */
 const LVCLS = {P0:'high', P1:'warn', P2:'info', C:'grey', W:'grey'};
 function lv(a){ const L=(S.ledger&&S.ledger.levels)||{}; const k=a.level||'P2'; return `<span class="badge ${LVCLS[k]||'grey'}" title="${(L[k]||{}).desc||''}">${(L[k]||{}).label||k}</span>`; }
-function dur(o){ if(!o) return ''; const u = o.upper_min==null?'上界未收斂':(o.upper_min>=1440?'超過 24 小時':o.upper_min+' 分'); return `觀測 <b>${o.lower_min} 分</b>（最多 ${u}）`; }
+function dur(o){ if(!o) return ''; const u = o.upper_min==null?'<b>未知</b>':(o.upper_min>=1440?'超過 24 小時':o.upper_min+' 分'); return `零值快照跨度 <b>${o.span_min} 分</b>（可能上界 ${u}）${o.gap_inside?'<span class="badge grey">含缺測</span>':''}`; }
 async function loadAlerts(){
   const d = await API.get('/api/ledger'); S.ledger=d; S.alerts=d.events;
   $('n-alerts').textContent = (d.counts.P0||0)+(d.counts.P1||0);
@@ -121,8 +121,8 @@ async function openEvent(id){
   const o=a.observed, c=a.cause||{}, al=a.alt, th=(S.ledger||{}).thresholds||{};
   dr.innerHTML = `<div class="row between"><b style="font-size:15px">${lv(a)} ${a.station}</b><button class="small ghost" onclick="$('drawer').classList.remove('open')">✕</button></div>
   <div class="small muted">${a.district}・${a.type}・${a.opened} 開啟${a.cluster?`・<span class="badge high">站群同時失效（${a.cluster_n} 站）</span>`:''}</div>
-  ${o?`<div class="compare" style="margin:10px 0"><div><div class="v">${o.lower_min}</div><div class="l">觀測下界（分）</div></div><div><div class="v">${o.upper_min==null?'–':(o.upper_min>=1440?'>24h':o.upper_min)}</div><div class="l">可能上界（分）</div></div><div><div class="v">${o.snapshots}</div><div class="l">零值快照數</div></div><div><div class="v">${al?al.n:'–'}</div><div class="l">500 m 可借替代站</div></div></div>
-  <div class="xs muted">從 ${o.started_obs.slice(5,16)} 起的快照都是零。最後一筆有效觀測 ${o.last_data_ts?o.last_data_ts.slice(5,16):'無'}${o.gap_inside?'・區間內有缺測，上界無法收斂':''}。30 分鐘一筆的快照證明不了中間有沒有短暫恢復。</div>`:`<div class="xs muted" style="margin:10px 0">${a.message}</div>`}
+  ${o?`<div class="compare" style="margin:10px 0"><div><div class="v">${o.span_min}</div><div class="l">觀測跨度（分）</div></div><div><div class="v">${o.upper_min==null?'未知':(o.upper_min>=1440?'>24h':o.upper_min)}</div><div class="l">可能上界（分）</div></div><div><div class="v">${o.snapshots}</div><div class="l">零值快照數</div></div><div><div class="v">${al?al.n:'–'}</div><div class="l">500 m 可借替代站</div></div></div>
+  <div class="xs muted">從 ${o.started_obs.slice(5,16)} 起被觀測到的快照都是零，首末相差 ${o.span_min} 分鐘。<b>這是觀測跨度，不是確定的連續中斷時間</b>——30 分鐘一筆的快照證明不了中間有沒有短暫恢復。最後一筆有效觀測 ${o.last_data_ts?o.last_data_ts.slice(5,16):'無'}${o.gap_inside?'・區間內有缺測，期間狀態不明':''}${o.upper_min==null?'・前面找不到確認正常的觀測，上界未知':''}。</div>`:`<div class="xs muted" style="margin:10px 0">${a.message}</div>`}
   <div style="margin-top:10px"><b class="small">原因與證據</b>
     <div class="alert ${c.confident?'info':'warn'}" style="margin-top:4px"><div class="m">${c.label||'待查'}${c.confident===false?' <span class="badge grey">證據不足</span>':''}</div>
     ${(c.evidence||[]).map(e=>`<div class="xs muted" style="margin-top:3px">・${e.text}${e.ref&&e.ref!=='—'?` <span class="pill">${e.ref}</span>`:''}</div>`).join('')}</div></div>
@@ -134,7 +134,7 @@ async function openEvent(id){
     ${a.escalated?`<tr><td>升級原因</td><td class="xs">${a.escalated}</td></tr>`:''}</table></div>
   <div style="margin-top:10px"><b class="small">事件時間線</b>
     ${(a.timeline||[]).map(t=>`<div class="tl"><span class="xs mono muted">${(t.ts||'').slice(11,16)}</span> <span class="pill">${TLLABEL[t.action]||t.action}</span> <span class="xs">${t.note}</span><span class="xs muted"> — ${t.actor}</span></div>`).join('')}</div>
-  <div class="xs muted" style="margin-top:8px">分級門檻：P1 ≥ ${th.P1_min} 分、P0 ≥ ${th.P0_min} 分且無替代站與恢復計畫、P1 逾 ${th.P0_unacked_min} 分無人確認升級、站群 ${th.cluster_n} 站。${th.note||''}</div>
+  <div class="xs muted" style="margin-top:8px">分級門檻（以觀測跨度計）：P1 跨度 ≥ ${th.P1_min} 分、P0 跨度 ≥ ${th.P0_min} 分且無替代站與恢復計畫、P1 逾 ${th.P0_unacked_min} 分無人確認升級、站群 ${th.cluster_n} 站。${th.note||''}</div>
   <div class="row" style="margin-top:10px"><button class="small primary" onclick="act('${a.id}','dispatch')">轉調度端處理</button><button class="small" onclick="openStation(${a.sid})">看站點</button></div>`;
 }
 async function loadTasks(){ const d = await API.get('/api/tasks'); S.tasks=d.tasks; const lab={planned:'已排定',dispatched:'出車中',en_route:'行進中',done:'完成',too_late:'來不及',needs_cross_district:'需跨區',minor_gap:'缺口小',superseded:'已取代',cancelled:'取消',proposed:'待確認'};
@@ -202,7 +202,7 @@ function mxBars(items, opt={}){
 }
 function mxRender(){
   const s=MX.service, t=MX.thr, f=MX.flow;
-  const c=s.counts, cu=s.counts_upper, r=s.recovery, kl=s.kind_label;
+  const c=s.counts, cu=s.upper, r=s.duration, kl=s.kind_label;
   $('mx-now').textContent = `回放時間 ${s.now}`;
   const kpi=(v,l,sub,color)=>`<div class="kpi"><div class="v" style="color:${color||'inherit'}">${v}</div><div class="l">${l}</div>${sub?`<div class="s">${sub}</div>`:''}</div>`;
 
@@ -211,59 +211,59 @@ function mxRender(){
     <span class="mini">${s.window.label}　${s.window.t0.slice(0,16)} ～ ${s.window.t1.slice(0,16)}　觀測解析度 ${s.window.resolution_min} 分鐘</span></h3>
     <div class="kpis" style="padding:0;margin-bottom:8px">
       ${kpi(c.events.toLocaleString(), `${kl}事件數`, `平均每天 ${s.events_per_day.toLocaleString()} 件・${s.stations_affected} / ${s.stations_total} 站曾發生`)}
-      ${kpi(c.ge30.toLocaleString(), '超過 30 分鐘（確定）', `上界最多 ${cu.ge30.toLocaleString()} 件`, c.ge30?'var(--warn)':'')}
-      ${kpi(c.ge60.toLocaleString(), '超過 60 分鐘（確定）', `上界最多 ${cu.ge60.toLocaleString()} 件`, c.ge60?'var(--bad)':'')}
-      ${kpi(c.ge120.toLocaleString(), '超過 120 分鐘（確定）', `最長 ${r.max_lower} 分鐘`, c.ge120?'var(--bad)':'')}
-      ${kpi(s.over_target_station_min.toLocaleString(), `超過 ${s.target_min} 分鐘目標的站分鐘`, `上界 ${s.over_target_station_min_upper.toLocaleString()} 分鐘`)}
-      ${kpi(r.p50_upper==null?'–':r.p50_upper, '恢復時間中位數（上界）', `P90 ${r.p90_upper??'–'} 分・下界中位數 ${r.p50_lower??'–'} 分`)}
+      ${kpi(c.span_ge30.toLocaleString(), '跨度 ≥30 分的事件', `上界已知者中 ${cu.ge30.toLocaleString()} 件\`, c.span_ge30?'var(--warn)':'')}
+      ${kpi(c.span_ge60.toLocaleString(), '跨度 ≥60 分的事件', `上界已知者中 ${cu.ge60.toLocaleString()} 件\`, c.span_ge60?'var(--bad)':'')}
+      ${kpi(c.span_ge120.toLocaleString(), '跨度 ≥120 分的事件', `最長跨度 ${r.span_max} 分鐘\`, c.span_ge120?'var(--bad)':'')}
+      ${kpi(s.zero_snapshot_station_min.toLocaleString(), '零值快照站‧分鐘', '觀測量，不宣稱期間連續中斷')}
+      ${kpi(r.upper_p50==null?'–':r.upper_p50, '可能上界中位數（分）', `P90 ${r.upper_p90??'–'}・上界未知 ${cu.unknown.toLocaleString()} 件\`)}
       ${kpi(s.data_gaps.runs.toLocaleString(), '資料中斷段', `${s.data_gaps.cells.toLocaleString()} 個站‧分箱缺測`,'var(--grey)')}
     </div>
     <div class="mxcols">
       <div class="card"><div class="row between" style="margin-bottom:4px"><b class="small">事件持續長度分佈</b>
-        <span class="mxlegend"><span><s style="background:var(--brand)"></s>觀測下界</span><span><s style="background:#cfe0f7"></s>可能上界</span></span></div>
-        ${mxBars(s.duration_hist.map(x=>({label:x.label, a:x.lower, b:x.upper, title:`${x.label}：下界 ${x.lower} 件／上界 ${x.upper} 件`})))}
-        <div class="xs muted" style="margin-top:6px">半數事件只出現一筆零車快照（下界 0 分鐘），資料無法證明它持續了多久，只能說不超過 60 分鐘。</div></div>
+        <span class="mxlegend"><span><s style="background:var(--brand)"></s>觀測跨度</span><span><s style="background:#cfe0f7"></s>可能上界（僅已知者）</span></span></div>
+        ${mxBars(s.duration_hist.map(x=>({label:x.label, a:x.span, b:x.upper, title:`${x.label}：觀測跨度 ${x.span} 件／可能上界 ${x.upper} 件`})))}
+        <div class="xs muted" style="margin-top:6px">只出現一筆零值快照的事件，跨度為 0 分鐘——資料無法證明它持續了多久。另有 ${s.upper_unknown.toLocaleString()} 件連上界都未知（事件前後找不到確認正常的觀測），沒有畫進上界那一組，也沒有用其他數字補。</div></div>
       <div class="card"><div class="row between" style="margin-bottom:4px"><b class="small">事件發生時段</b>
-        <span class="mxlegend"><span><s style="background:var(--brand)"></s>全部事件</span><span><s style="background:#cfe0f7"></s>其中 ≥60 分</span></span></div>
-        ${mxBars(s.by_hour.map(x=>({label: x.hour%3===0?String(x.hour):'', a:x.events, b:x.ge60, title:`${x.hour}:00 　${x.events} 件，其中 ≥60 分 ${x.ge60} 件`})))}
+        <span class="mxlegend"><span><s style="background:var(--brand)"></s>全部事件</span><span><s style="background:#cfe0f7"></s>其中跨度 ≥60 分</span></span></div>
+        ${mxBars(s.by_hour.map(x=>({label: x.hour%3===0?String(x.hour):'', a:x.events, b:x.span_ge60, title:`${x.hour}:00 　${x.events} 件，其中跨度 ≥60 分 ${x.span_ge60} 件`})))}
         <div class="xs muted" style="margin-top:6px">橫軸為事件起始的小時（每 3 小時標一次刻度）。</div></div>
     </div>
     <div class="mxnote" style="margin-top:8px">
       <b>這些數字怎麼算的</b>：資料是每 30 分鐘一筆的站點庫存快照，不是借還紀錄。一段連續的零車快照只能給出範圍——
-      <b>觀測下界</b>＝首末兩筆零車快照的間隔（只出現一筆時為 0 分鐘）；<b>可能上界</b>＝前一筆正常觀測到後一筆正常觀測的間隔。
-      缺測不算恢復也不算持續中斷，會切斷事件並標記（本期間 ${r.gap_adjacent} 件相鄰有缺測、${r.open_ended} 件延伸到期間邊界，上界無法收斂）。
+      <b>觀測跨度</b>＝首末兩筆零值快照的間隔（只出現一筆時為 0 分鐘）。<b>跨度不是確定的連續中斷時間</b>：08:00、08:30、09:00 三筆都是零，跨度是 60 分鐘，不能說成確定連續 60 或 90 分鐘。
+      <b>可能上界</b>＝事件前最後一筆確認正常的觀測，到事件後第一筆確認正常的觀測之間的間隔；任一側沒有確認正常的觀測時<b>保留未知</b>，不用跨度加一格之類的數字代替（本期間 ${cu.unknown.toLocaleString()} 件上界未知、${cu.gap_inside.toLocaleString()} 件區間內含缺測）。
       已排除的站‧分箱：雙零 ${s.excluded_cells.both_zero.toLocaleString()}、24 小時無變化 ${s.excluded_cells.stale_flat.toLocaleString()}、容量矛盾 ${s.excluded_cells.cap_conflict.toLocaleString()}、無資料 ${s.excluded_cells.no_data.toLocaleString()}——那是待查狀態，不是服務中斷事件。
       <br><b>不能宣稱</b>：零車快照不等於有人借不到，也不等於失敗旅次；這裡沒有任何一個數字是需求或到站成功率。
     </div></div>`;
 
   /* B 分佈 */
   html += `<div class="mxsec"><h3>二、集中在哪裡 ${REAL}</h3><div class="mxcols">
-    <div class="card"><b class="small">行政區（依超標站分鐘）</b>
-      <table><tr><th>行政區</th><th>事件</th><th>≥60 分</th><th>超標站分鐘</th></tr>
-      ${s.by_district.map(d=>`<tr><td>${d.district}</td><td class="mono">${d.events.toLocaleString()}</td><td class="mono">${d.ge60.toLocaleString()}</td><td class="mono">${d.over_min.toLocaleString()}</td></tr>`).join('')}</table></div>
+    <div class="card"><b class="small">行政區（依零值快照分鐘）</b>
+      <table><tr><th>行政區</th><th>事件</th><th>跨度≥60分</th><th>零值快照分鐘</th></tr>
+      ${s.by_district.map(d=>`<tr><td>${d.district}</td><td class="mono">${d.events.toLocaleString()}</td><td class="mono">${d.span_ge60.toLocaleString()}</td><td class="mono">${d.zero_min.toLocaleString()}</td></tr>`).join('')}</table></div>
     <div class="card"><b class="small">最嚴重站點（點列可開站點抽屜）</b>
-      <table><tr><th>站點</th><th>事件</th><th>最長</th><th>超標分鐘</th></tr>
-      ${s.top_stations.map(x=>`<tr class="trow" onclick="mxClose();openStation(${x.sid})"><td>${x.name}<div class="xs muted">${x.district}</div></td><td class="mono">${x.events}</td><td class="mono">${x.max_lower}</td><td class="mono">${x.over_min.toLocaleString()}</td></tr>`).join('')}</table></div>
+      <table><tr><th>站點</th><th>事件</th><th>最長跨度</th><th>零值快照分鐘</th></tr>
+      ${s.top_stations.map(x=>`<tr class="trow" onclick="mxClose();openStation(${x.sid})"><td>${x.name}<div class="xs muted">${x.district}</div></td><td class="mono">${x.events}</td><td class="mono">${x.max_span}</td><td class="mono">${x.zero_min.toLocaleString()}</td></tr>`).join('')}</table></div>
     <div class="card"><b class="small">最長的單一事件</b>
-      <table><tr><th>站點</th><th>起訖（觀測到的零車快照）</th><th>觀測下界<br>可能上界</th></tr>
-      ${s.longest.map(x=>`<tr class="trow" onclick="mxClose();openStation(${x.sid})"><td>${x.name}<div class="xs muted">${x.district}</div></td><td class="mono xs">${x.start.slice(5,16)} → ${x.end.slice(5,16)}<br>${x.snapshots} 筆快照${x.gap_adjacent?' <span class="badge grey">相鄰缺測</span>':''}</td><td class="mono">${x.lower_min} 分<div class="xs muted">${x.upper_min==null?'上界未收斂':x.upper_min+' 分'}</div></td></tr>`).join('')}</table></div>
+      <table><tr><th>站點</th><th>起訖（觀測到的零車快照）</th><th>觀測跨度<br>可能上界</th></tr>
+      ${s.longest.map(x=>`<tr class="trow" onclick="mxClose();openStation(${x.sid})"><td>${x.name}<div class="xs muted">${x.district}</div></td><td class="mono xs">${x.start.slice(5,16)} → ${x.end.slice(5,16)}<br>${x.snapshots} 筆快照${x.gap_inside?' <span class="badge grey">含缺測</span>':''}</td><td class="mono">${x.span_min} 分<div class="xs muted">${x.upper_min==null?'未知':x.upper_min+' 分'}</div></td></tr>`).join('')}</table></div>
   </div></div>`;
 
   /* C 告警門檻 */
   if(t && !t.error){
     html += `<div class="mxsec"><h3>三、告警門檻取捨 ${REAL}<span class="mini">${t.horizon} 分鐘尺度・${t.kind_label}・六月測試期一次評估</span></h3>
       <div class="mxcols"><div class="card">
-        <table><tr><th>${t.threshold_label||'機率門檻'}</th><th>告警數（六月）</th><th>每小時（全市）</th><th>精準度</th><th>召回</th><th>誤報／小時</th></tr>
-        ${t.rows.map(x=>`<tr class="${x.threshold===t.current_threshold?'cur':''}"><td class="mono">${x.threshold.toFixed(1)}${x.threshold===t.current_threshold?' <span class="badge info">目前</span>':''}${x.threshold===t.suggested_threshold?' <span class="badge ok">可處理量內</span>':''}</td><td class="mono">${x.alerts.toLocaleString()}</td><td class="mono">${x.alerts_per_hour}</td><td class="mono">${fmtP(x.precision)}</td><td class="mono">${fmtP(x.recall)}</td><td class="mono">${x.false_per_hour}</td></tr>`).join('')}</table>
-        <div class="xs muted" style="margin-top:6px">${t.note}</div></div>
+        <table><tr><th>${t.threshold_label||'機率門檻'}</th><th>候選觸發（六月）</th><th>每小時候選量</th><th>精準度</th><th>召回</th><th>誤觸發／小時</th></tr>
+        ${t.rows.map(x=>`<tr class="${x.threshold===t.current_threshold?'cur':''}"><td class="mono">${x.threshold.toFixed(1)}${x.threshold===t.current_threshold?' <span class="badge info">目前</span>':''}${x.threshold===t.suggested_threshold?' <span class="badge ok">可處理量內</span>':''}</td><td class="mono">${x.candidate_cells.toLocaleString()}</td><td class="mono">${x.candidate_cells_per_hour}</td><td class="mono">${fmtP(x.precision)}</td><td class="mono">${fmtP(x.recall)}</td><td class="mono">${x.false_candidates_per_hour}</td></tr>`).join('')}</table>
+        <div class="mxnote" style="margin-top:6px"><b>單位</b>：${t.unit}。${t.dedup_warning}</div><div class="xs muted" style="margin-top:6px">${t.note}</div></div>
         <div class="card"><div class="kpis" style="padding:0;grid-template-columns:1fr 1fr">
           ${kpi(fmtP(t.new_event_recall),'新發生事件召回','@0.5，這才是預警價值','var(--warn)')}
           ${kpi(fmtP(t.new_event_precision),'新發生事件精準度',`PR-AUC ${t.new_event_pr_auc??'–'}`)}
-          ${kpi(t.floor_per_hour,'門檻 0.9 的告警量','每小時／全市','var(--bad)')}
+          ${kpi(t.floor_per_hour,'門檻 0.9 的候選量','每小時／全市站×時點','var(--bad)')}
           ${kpi(t.new_events_per_hour,'實際新發生事件','每小時／全市')}
         </div>
         <div class="mxnote" style="margin-top:8px"><b>結論</b>：${t.conclusion}</div>
-        <div class="xs muted" style="margin-top:6px">輸入「值班可處理 ${t.duty_alerts_per_hour} 則/小時」後：${t.suggested_threshold?`最低可用門檻 ${t.suggested_threshold}`:'<b>九個門檻沒有一個做得到</b>。'}　來源：${t.source}</div>
+        <div class="xs muted" style="margin-top:6px">輸入「值班可處理 ${t.duty_alerts_per_hour} 個候選/小時」後：${t.suggested_threshold?`最低可用門檻 ${t.suggested_threshold}`:'<b>九個門檻沒有一個做得到</b>。'}　來源：${t.source}</div>
       </div></div></div>`;
   }
 
@@ -277,11 +277,11 @@ function mxRender(){
     <div class="card"><b class="small">事件處理漏斗</b>
       <div class="kpis" style="padding:0;grid-template-columns:1fr 1fr">
         ${kpi(fl.opened,'開啟的服務事件','不含待查類')}
-        ${kpi(fl.acked,'已確認',`轉調度 ${fl.dispatched}`)}
-        ${kpi(fmtP(fl.unassigned_ratio),'未指派比例', fl.oldest_open_min!=null?`最久未處理 ${fl.oldest_open_min} 分`:'', fl.unassigned_ratio>0.5?'var(--bad)':'')}
+        ${kpi(fl.acked,'已確認（ack）',`其中 ${fl.acked_not_assigned} 件確認了但沒指派\`)}
+        ${kpi(fmtP(fl.unassigned_ratio),'未指派比例（以負責人計）', `未確認比例 ${fmtP(fl.unacked_ratio)}\`+(fl.oldest_open_min!=null?`・最久未處理 ${fl.oldest_open_min} 分`:''), fl.unassigned_ratio>0.5?'var(--bad)':'')}
         ${kpi(fl.resolved_auto,'條件自動解除',`人工結案 ${fl.resolved_manual}`,'var(--grey)')}
       </div>
-      <div class="xs muted" style="margin-top:6px">條件自動解除＝站點恢復有車，不代表有人去處理過。</div></div>
+      <div class="xs muted" style="margin-top:6px">${f.definitions.ack}<br>${f.definitions.auto_resolved}<br>${f.definitions.no_patrol_inference}</div></div>
     <div class="card"><b class="small">調度方案（planner 計算，未接真實派工）</b>
       <div class="kpis" style="padding:0;grid-template-columns:1fr 1fr">
         ${kpi(dp.planned,'可行任務',`來不及 ${dp.too_late}・需跨區 ${dp.needs_cross_district}・缺口過小 ${dp.minor_gap}`)}
