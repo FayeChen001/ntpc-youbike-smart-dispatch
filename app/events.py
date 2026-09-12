@@ -207,11 +207,13 @@ def refresh(state, pred, pred_df, now_ts, iso):
     ctx, bins, t_idx = pred.ctx, pred.bins, state["clock"]["t_idx"]
     live = [a for a in state["alerts"].values() if a.get("status") != "resolved"]
     base = {}
+    state["_a_overview"] = overview(state, pred, pred_df, now_ts)
 
     # 第一段：基準分級（不看站群）
     for a in live:
         a.setdefault("timeline", [{"ts": a["opened"], "action": "opened", "actor": "系統", "note": a["message"]}])
         a.setdefault("owner", None)
+        ensure_version(a)
         a["escalated"] = None
         if a["type"] in WATCH_TYPES:
             base[a["id"]] = "W"
@@ -298,6 +300,7 @@ def ledger(state, now_ts):
     closed = [a for a in state["alert_log"] if a.get("status") == "resolved"]
     counts = {k: sum(1 for a in items if a.get("level") == k) for k in LEVELS}
     unowned = sum(1 for a in items if a.get("level") in ("P0", "P1") and not a.get("owner"))
+    acked_not_assigned = sum(1 for a in items if a.get("acked") and not a.get("owner"))
     no_plan = sum(1 for a in items if a.get("level") in ("P0", "P1") and not a.get("covered_by"))
     return {
         "events": items[:200],
@@ -305,6 +308,8 @@ def ledger(state, now_ts):
         "open_total": len(items),
         "closed_total": len(closed),
         "unowned_p01": unowned,
+        "acked_not_assigned": acked_not_assigned,
+        "ack_note": "ack 只代表有人看到，不代表已指派負責人，也不代表有人到現場。",
         "no_plan_p01": no_plan,
         "planned_districts": sorted({t["district"] for t in state["tasks"] if t.get("district")}),
         "coverage_note": ("排程目前只涵蓋重點行政區，其他行政區的事件不會自動產生任務，"
@@ -312,6 +317,8 @@ def ledger(state, now_ts):
         "auto_resolved": sum(1 for a in closed if "自動" in (a.get("resolve_reason") or "")),
         "manual_resolved": sum(1 for a in closed if a.get("resolve_reason") and "自動" not in a["resolve_reason"]),
         "levels": LEVELS,
+        "overview": state.get("_a_overview"),
+        "actions": {k: v["label"] for k, v in ACTIONS.items()},
         "thresholds": {"P1_min": P1_MIN, "P0_min": P0_MIN, "P0_unacked_min": P0_UNACKED_MIN, "cluster_n": CLUSTER_N,
                        "note": ("試行門檻，待主管確認，非官方標準。訪談提到的「觀測空站 20 分鐘」在 30 分鐘解析度下量不到，"
                                 "這裡改用 30 分鐘並標示；60 分鐘的恢復目標同樣待確認是否全站適用。")},
@@ -320,3 +327,302 @@ def ledger(state, now_ts):
 
 
 OWNERS = ["值班調度 A", "值班調度 B", "板橋維運組", "新莊維運組", "土城維運組", "值班主管"]
+
+
+# ---------------------------------------------------------------- 版本、冪等與政府端動作
+# 政府端只做「追蹤／要求處理／協調／指派」。不建立任務、不改任務、不碰資源帳——
+# 派工是 B 主線的職責，政府端插手會變成第二套派車邏輯。
+ACTIONS = {
+    "ack": {"label": "確認看到", "sets_owner": False},
+    "assign": {"label": "指派負責人", "sets_owner": True},
+    "request_ops": {"label": "要求營運處理", "sets_owner": False},
+    "track": {"label": "列入追蹤", "sets_owner": False},
+    "coordinate": {"label": "跨區協調", "sets_owner": False},
+    "note": {"label": "處理紀錄", "sets_owner": False},
+}
+
+
+def ensure_version(ev):
+    ev.setdefault("version", 1)
+    ev.setdefault("applied_requests", {})
+    return ev
+
+
+def _summary(ev):
+    return {"event_id": ev["id"], "version": ev["version"], "level": ev.get("level"),
+            "owner": ev.get("owner"), "status": ev.get("status"),
+            "acked": ev.get("acked"), "assigned_at": ev.get("assigned_at"),
+            "ops_requested_at": ev.get("ops_requested_at"), "tracked": bool(ev.get("tracked"))}
+
+
+def apply_action(ev, action, payload, now_ts, iso, actor="政府端"):
+    """
+    回傳 (body, http_status)。
+    冪等：同一個 request_id 重送直接回上次結果，不重複執行，也不再撞版本。
+    版本：帶了 version 且與現況不符回 409，重送不會造成第二次動作。
+    """
+    ensure_version(ev)
+    payload = payload or {}
+    req = payload.get("request_id")
+
+    # 冪等優先於版本檢查：重送本來就會帶舊版本，那是重送不是衝突。
+    if req and req in ev["applied_requests"]:
+        prev = ev["applied_requests"][req]
+        return {"ok": True, "idempotent": True, "replayed_from": prev["ts"],
+                "action": prev["action"], "event": _summary(ev),
+                "note": "同一個 request_id 已處理過，沒有重複執行"}, 200
+
+    if action not in ACTIONS:
+        return {"error": "unknown_action", "allowed": sorted(ACTIONS)}, 400
+
+    want = payload.get("version")
+    if want is not None and int(want) != ev["version"]:
+        return {"error": "version_conflict",
+                "message": "這個事件在你操作前已經被更新過，請重新讀取後再送一次",
+                "expected_version": ev["version"], "your_version": int(want),
+                "event": _summary(ev)}, 409
+
+    ts = iso(now_ts)
+    note = (payload.get("note") or "").strip()
+    tl = ev.setdefault("timeline", [])
+
+    if action == "ack":
+        if not ev.get("acked"):
+            ev["acked"] = ts
+        if ev.get("status") == "open":
+            ev["status"] = "acked"
+        tl.append({"ts": ts, "action": "ack", "actor": actor,
+                   "note": "確認看到。這不代表已經指派給誰，也不代表有人到現場。"})
+    elif action == "assign":
+        owner = (payload.get("owner") or "").strip()
+        if not owner:
+            return {"error": "owner_required"}, 400
+        prev_owner = ev.get("owner")
+        ev["owner"] = owner
+        ev["assigned_at"] = ts
+        if not ev.get("acked"):
+            ev["acked"] = ts
+        if ev.get("status") == "open":
+            ev["status"] = "acked"
+        tl.append({"ts": ts, "action": "assign", "actor": actor,
+                   "note": (f"負責人 {prev_owner} → {owner}" if prev_owner else f"指派負責人：{owner}")})
+    elif action == "request_ops":
+        ev["ops_requested_at"] = ts
+        ev.setdefault("ops_requests", []).append({"ts": ts, "actor": actor, "note": note})
+        tl.append({"ts": ts, "action": "request_ops", "actor": actor,
+                   "note": ("要求營運端處理" + (f"：{note}" if note else "")
+                            + "。政府端只提出要求與追蹤，派工方案與人車由營運端決定。")})
+    elif action == "track":
+        ev["tracked"] = True
+        tl.append({"ts": ts, "action": "track", "actor": actor,
+                   "note": "列入追蹤" + (f"：{note}" if note else "")})
+    elif action == "coordinate":
+        targets = payload.get("districts") or []
+        ev.setdefault("coordination", []).append({"ts": ts, "actor": actor, "districts": targets, "note": note})
+        tl.append({"ts": ts, "action": "coordinate", "actor": actor,
+                   "note": (f"跨區協調（{'、'.join(targets) or '未指定行政區'}）" + (f"：{note}" if note else "")
+                            + "。這是協調紀錄，不是派車任務。")})
+    elif action == "note":
+        if not note:
+            return {"error": "note_required"}, 400
+        tl.append({"ts": ts, "action": "note", "actor": actor, "note": note})
+
+    ev["version"] += 1
+    ev["timeline"] = tl[-40:]
+    if req:
+        ev["applied_requests"][req] = {"ts": ts, "action": action, "version": ev["version"]}
+        if len(ev["applied_requests"]) > 50:
+            ev["applied_requests"].pop(next(iter(ev["applied_requests"])))
+    return {"ok": True, "idempotent": False, "action": action, "event": _summary(ev)}, 200
+
+
+# ---------------------------------------------------------------- 全域儀表板
+STALE_WARN_MIN = 60          # 最後一筆有效觀測超過這個時間，視為資料過期
+FRESH_WINDOW_BINS = 48       # 往回看 24 小時找最後一筆有效觀測
+
+
+def data_freshness(pred, t_idx):
+    """每站最後一筆有效觀測距今多久。缺測不是恢復，也不是中斷，要單獨看得見。"""
+    ctx = pred.ctx
+    t0 = max(0, t_idx - FRESH_WINDOW_BINS + 1)
+    W = ctx.B[t0:t_idx + 1]
+    valid = ~np.isnan(W)
+    T = W.shape[0]
+    idx = np.arange(T, dtype=np.int32)[:, None]
+    last = np.where(valid, idx, np.int32(-1))
+    np.maximum.accumulate(last, axis=0, out=last)
+    last_row = last[-1]                                   # 每站最後一筆有效觀測的列號，-1 代表窗內全無
+    age = np.where(last_row < 0, -1, (T - 1 - last_row) * BIN_MIN)
+    return {
+        "fresh": int(((age >= 0) & (age == 0)).sum()),
+        "lag_30": int(((age > 0) & (age < STALE_WARN_MIN)).sum()),
+        "stale_60": int((age >= STALE_WARN_MIN).sum()),
+        "no_data_24h": int((age < 0).sum()),
+        "window_hours": round(FRESH_WINDOW_BINS * BIN_MIN / 60, 1),
+        "note": ("以回放時鐘往回看 24 小時。缺測期間站點狀態不明，"
+                 "不能當成恢復，也不能當成持續中斷。"),
+    }
+
+
+def supply_demand(pred_df):
+    """供需現況。全部來自觀測快照與模型預測，沒有需求資料。"""
+    p = pred_df
+    ok = p[p.status.isin(("normal", "empty", "full"))]
+    by_d = []
+    for d, g in p.groupby("district"):
+        by_d.append({"district": d, "stations": int(len(g)),
+                     "empty": int((g.status == "empty").sum()),
+                     "full": int((g.status == "full").sum()),
+                     "bikes": int(g.bikes.fillna(0).sum()),
+                     "spaces": int(g.spaces.fillna(0).sum()),
+                     "risk_empty_120": int((g.pe_120.fillna(0) >= 0.5).sum()),
+                     "risk_full_120": int((g.pf_120.fillna(0) >= 0.5).sum())})
+    by_d.sort(key=lambda r: -(r["empty"] + r["risk_empty_120"]))
+    return {
+        "stations": int(len(p)),
+        "empty_now": int((p.status == "empty").sum()),
+        "full_now": int((p.status == "full").sum()),
+        "bikes_total": int(ok.bikes.fillna(0).sum()),
+        "spaces_total": int(ok.spaces.fillna(0).sum()),
+        "risk_empty_120": int((ok.pe_120.fillna(0) >= 0.5).sum()),
+        "risk_full_120": int((ok.pf_120.fillna(0) >= 0.5).sum()),
+        "watch": {"both_zero": int((p.status == "both_zero").sum()),
+                  "stale_flat": int((p.status == "stale_flat").sum()),
+                  "cap_conflict": int((p.status == "cap_conflict").sum()),
+                  "no_data": int((p.status == "no_data").sum())},
+        "by_district": by_d[:14],
+        "not_claimed": "這裡是庫存與風險，不是需求。沒有借還交易資料，算不出有多少人想借而借不到。",
+    }
+
+
+# B 主線 app/tickets.py 公布的詞彙。A 只讀不改；B 改了這裡要跟著改。
+TICKET_FLOW_LABEL = {"reported": "已受理", "accepted": "維修班組接單", "on_site": "現場檢查中",
+                     "recovered": "已處理／回收", "verified": "驗收復役", "closed": "結案"}
+SERVICE_STATE_LABEL = {"unknown": "服務狀態未知", "degraded": "服務未恢復", "restored": "服務已恢復"}
+ASSET_STATE_LABEL = {"suspect": "疑似故障", "confirmed_faulty": "已確認故障", "repaired": "已維修",
+                     "verified_ok": "驗收正常", "not_applicable": "不適用"}
+SADDLE_LABEL = {"unknown": "未回報", "done": "已完成", "skipped": "略過", "not_applicable": "不適用"}
+FIELD_CONFIRMED = ("on_site", "recovered", "verified", "closed")
+
+
+def _divergence(tk):
+    """
+    A 任務 5：把容易被混為一談的狀態差異挑出來。
+    工單流程、服務是否恢復、設備是否修好是三件事，任何一件都不能代表另外兩件。
+    """
+    st, svc, ast = tk.get("status"), tk.get("service_state", "unknown"), tk.get("asset_state", "suspect")
+    out = []
+    if st in ("recovered", "verified") and svc != "restored":
+        out.append({"code": "handled_not_restored", "label": "已處理但服務未恢復",
+                    "why": f"工單已到「{TICKET_FLOW_LABEL.get(st, st)}」，但服務狀態是「{SERVICE_STATE_LABEL.get(svc, svc)}」。"
+                           "維修完成不等於這一站借得到車。"})
+    if svc == "restored" and st not in ("verified", "closed"):
+        out.append({"code": "restored_not_closed", "label": "服務已恢復但維修未結案",
+                    "why": f"站點服務已恢復，但工單還在「{TICKET_FLOW_LABEL.get(st, st)}」。"
+                           "站點有車不代表那台壞車已經修好或驗收。"})
+    if ast == "suspect" and st in ("recovered", "verified"):
+        out.append({"code": "repaired_but_unconfirmed", "label": "流程已推進但設備仍是疑似",
+                    "why": "設備狀態還停在疑似故障，沒有現場確認的根因。"})
+    if not tk.get("bike_no") and not tk.get("dock_id"):
+        out.append({"code": "no_asset_id", "label": "沒有資產識別",
+                    "why": "沒有車號也沒有柱號，只能關聯到站點，不能斷定是哪一台設備，也不能跟別的回報合併。"})
+    return out
+
+
+def equipment_board(state):
+    """
+    設備待查：用戶選項、AI 圖片觀察、現場確認分三欄呈現，不把 AI 推測寫進已確認原因。
+    欄位對齊 B 主線 app/tickets.py 的工單契約；B 沒提供的一律顯示未提供，不自行填補。
+    """
+    rows, by_asset, unidentified, diverge = [], {}, 0, 0
+    for tk in state.get("tickets", []):
+        if tk.get("status") == "closed":
+            continue
+        asset = tk.get("asset_type") or "unknown"
+        by_asset[asset] = by_asset.get(asset, 0) + 1
+        dock = tk.get("dock_id") or tk.get("dock_no")
+        if not tk.get("bike_no") and not dock:
+            unidentified += 1
+        field = [h for h in tk.get("history", []) if h.get("status") in FIELD_CONFIRMED]
+        ev = tk.get("evidence") or []
+        img = [e for e in ev if (e.get("kind") or e.get("type")) in ("image", "image_observation", "vision")]
+        srcs = tk.get("sources") or []
+        d = _divergence(tk)
+        if d:
+            diverge += 1
+        sm = tk.get("saddle_marker") or {}
+        rows.append({
+            "ticket_id": tk.get("id"), "ticket_version": tk.get("version"), "sid": tk.get("sid"),
+            "station": tk.get("station"), "asset_type": asset,
+            "bike_no": tk.get("bike_no") or None, "dock_id": dock or None,
+            "error_codes": tk.get("error_codes") or ([tk["error_code"]] if tk.get("error_code") else []),
+            "status": tk.get("status"), "status_label": TICKET_FLOW_LABEL.get(tk.get("status"), tk.get("status")),
+            "service_state": SERVICE_STATE_LABEL.get(tk.get("service_state", "unknown"), tk.get("service_state")),
+            "asset_state": ASSET_STATE_LABEL.get(tk.get("asset_state", "suspect"), tk.get("asset_state")),
+            "reports": tk.get("reports", 1), "report_ids": tk.get("report_ids") or [],
+            "saddle_marker": {"status": sm.get("status", "unknown"),
+                              "label": SADDLE_LABEL.get(sm.get("status", "unknown"), sm.get("status")),
+                              "source": sm.get("source"), "ts": sm.get("ts")},
+            "operator": {"assignee": tk.get("assignee"), "crew": tk.get("crew"), "eta": tk.get("eta")},
+            "divergence": d,
+            # 三欄分開，不合併
+            "user_report": {"provided": bool(tk.get("issue")), "text": tk.get("issue") or None,
+                            "note": tk.get("note") or None,
+                            "sources": [{"source": x.get("source"), "certainty": x.get("certainty"), "ts": x.get("ts")}
+                                        for x in srcs]},
+            "ai_observation": ({"provided": True, "observations": img}
+                               if img else {"provided": False,
+                                            "why": "這張單的 evidence 沒有圖片辨識結果（C 主線的 report_image 尚未附上）"}),
+            "field_check": ({"provided": True, "steps": [{"ts": h["ts"], "label": h.get("label")} for h in field]}
+                            if field else {"provided": False, "why": "現場尚未回報確認"}),
+        })
+    return {
+        "open_tickets": len(rows),
+        "by_asset": by_asset,
+        "without_asset_id": unidentified,
+        "with_divergence": diverge,
+        "rows": rows[:40],
+        "rule": ("用戶描述、AI 圖片觀察、現場確認分開呈現。AI 觀察是推測，不能當成已確認原因；"
+                 "沒有現場確認之前，設備故障一律是疑似。坐墊標記只是給下一位使用者的現場提醒，"
+                 "不代表維修完成，也不會結束工單。"),
+        "owner": "維修與派工由營運端（B 主線）主責，政府端只看進度與責任歸屬。",
+        "state_note": ("工單流程、服務是否恢復、設備是否修好是三件事。"
+                       "已處理不等於服務恢復；站點恢復有車也不等於那台壞車已經修好或驗收。"),
+    }
+
+
+def task_board(state):
+    """人車任務摘要與未覆蓋缺口。只讀 B 主線的任務，不建立也不修改。"""
+    tasks = state.get("tasks", [])
+    by_status = {}
+    for t in tasks:
+        by_status[t.get("status", "unknown")] = by_status.get(t.get("status", "unknown"), 0) + 1
+    gaps = [{"district": t.get("district"), "horizon": t.get("horizon"),
+             "deficit": t.get("deficit_total"), "reason": t.get("reason"), "status": t.get("status")}
+            for t in tasks if t.get("status") in ("gap_summary", "needs_cross_district", "minor_gap", "too_late")]
+    active = [t for t in tasks if t.get("status") in ("planned", "dispatched", "en_route")]
+    missing = [k for k in ("version", "cycle_id", "event_id", "operator_owner", "uncovered_gap")
+               if not any(k in t for t in tasks)] if tasks else []
+    return {
+        "by_status": by_status,
+        "active": len(active),
+        "uncovered": gaps[:20],
+        "uncovered_count": len(gaps),
+        "planned_districts": sorted({t["district"] for t in tasks if t.get("district")}),
+        "contract_missing": missing,
+        "contract_note": ("以下欄位尚未由 B 主線提供，政府端顯示為未提供，不自行推算："
+                          + "、".join(missing)) if missing else "B 主線已提供所需欄位。",
+        "owner": "任務由營運端建立與調整。政府端可要求處理與跨區協調，但不建立第二套派車任務。",
+    }
+
+
+def overview(state, pred, pred_df, now_ts):
+    return {
+        "data_ts": str(now_ts),
+        "clock_source": "replay",
+        "clock_source_label": "回放（2026 年 1–6 月歷史快照），不是真實時鐘",
+        "supply_demand": supply_demand(pred_df),
+        "freshness": data_freshness(pred, state["clock"]["t_idx"]),
+        "equipment": equipment_board(state),
+        "tasks": task_board(state),
+    }

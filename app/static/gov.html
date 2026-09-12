@@ -39,10 +39,30 @@ main{flex:1;display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,40
 .mxcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
 tr.cur td{background:#eaf2fd;font-weight:600}
 .mxrange{font-size:11px;color:var(--muted)}
+/* 三分欄證據 */
+.ev3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:4px}
+.ev3 .c{background:#f6f8fb;border-radius:8px;padding:6px 8px;min-width:0}
+.ev3 .c h5{margin:0 0 3px;font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.03em}
+.ev3 .c.ai{background:#f3efff}.ev3 .c.field{background:#eef7f1}
+.ev3 .c .na{color:var(--muted);font-size:11px}
+/* 手機通知情境 */
+.phone{position:fixed;inset:0;background:rgba(18,24,34,.55);z-index:1400;display:none;align-items:center;justify-content:center}
+.phone.open{display:flex}
+.phone .fr{width:330px;max-width:92vw;background:linear-gradient(170deg,#243447,#111a26);border-radius:36px;padding:18px 12px 14px;box-shadow:0 24px 60px rgba(0,0,0,.45);color:#fff}
+.phone .simbar{background:var(--sim);color:#fff;font-size:10px;text-align:center;border-radius:999px;padding:3px 8px;margin-bottom:10px}
+.phone .time{text-align:center;font-size:34px;font-weight:300;letter-spacing:.02em}
+.phone .date{text-align:center;font-size:11px;opacity:.7;margin-bottom:14px}
+.phone .nc{background:rgba(255,255,255,.94);color:var(--ink);border-radius:16px;padding:9px 11px;margin-bottom:8px;cursor:pointer;transition:.12s}
+.phone .nc:hover{transform:scale(1.02)}
+.phone .nc .ap{font-size:10px;color:var(--muted);display:flex;justify-content:space-between}
+.phone .nc .ti{font-weight:600;font-size:13px;margin-top:2px}
+.phone .nc .bo{font-size:11px;color:#3a4553;margin-top:2px;line-height:1.5}
+.phone .foot{font-size:10px;opacity:.75;line-height:1.7;margin-top:10px}
+.phone .none{background:rgba(255,255,255,.12);border-radius:12px;padding:10px;font-size:11px;text-align:center}
 </style></head><body>
 <header><h1>新北市交通局｜YouBike 預警與調度儀表板</h1><span class="badge grey">政府端</span><span class="clock" id="clock">–</span><span class="mini" id="src"></span>
   <span style="flex:1"></span>
-  <div class="ctl">圖層 <select id="layer"><option value="empty">缺車風險（零車機率）</option><option value="full">缺位風險（零位機率）</option></select> 尺度 <select id="horizon"><option value="60">60 分</option><option value="120" selected>120 分</option><option value="180">180 分</option></select> 行政區 <select id="district"><option value="">全市</option></select> <label><input type="checkbox" id="adj" checked> 含民眾意向修正</label> <button class="small" onclick="toggleLive()" id="livebtn">看即時現況</button> <button class="small primary" onclick="mxOpen()">驗收指標</button></div>
+  <div class="ctl">圖層 <select id="layer"><option value="empty">缺車風險（零車機率）</option><option value="full">缺位風險（零位機率）</option></select> 尺度 <select id="horizon"><option value="60">60 分</option><option value="120" selected>120 分</option><option value="180">180 分</option></select> 行政區 <select id="district"><option value="">全市</option></select> <label><input type="checkbox" id="adj" checked> 含民眾意向修正</label> <button class="small" onclick="toggleLive()" id="livebtn">看即時現況</button> <button class="small" onclick="ovOpen()">全域儀表板</button> <button class="small" onclick="phoneOpen()">通知情境</button> <button class="small primary" onclick="mxOpen()">驗收指標</button></div>
 </header>
 <div class="kpis" id="kpis"></div>
 <main>
@@ -66,6 +86,19 @@ tr.cur td{background:#eaf2fd;font-weight:600}
     <button class="small" onclick="mxClose()">✕ 關閉</button>
   </div>
   <div class="mxbody" id="mx-body"><div class="muted small">載入中…</div></div>
+</div>
+<div class="mx" id="ov">
+  <div class="mxhead"><b style="font-size:14px">全域儀表板</b><span class="badge grey">政府端</span><span class="mini" id="ov-clock"></span>
+    <span style="flex:1"></span><button class="small" onclick="ovClose()">✕ 關閉</button></div>
+  <div class="mxbody" id="ov-body"><div class="muted small">載入中…</div></div>
+</div>
+<div class="phone" id="phone" onclick="if(event.target===this)phoneClose()">
+  <div class="fr">
+    <div class="simbar">模擬情境畫面：這是應用內的示意，不是真的 iOS 鎖定畫面，也沒有背景推播</div>
+    <div class="time" id="ph-time">–</div><div class="date" id="ph-date"></div>
+    <div id="ph-list"></div>
+    <div class="foot" id="ph-foot"></div>
+  </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script><script src="/static/common.js"></script>
 <script>
@@ -170,7 +203,7 @@ async function openStation(sid){ const d = await API.get('/api/station/'+sid); c
   sparkline($('spk'), d.history.map(h=>h.bikes), '#0f5fa8', s.cap); map.setView([s.lat,s.lon], Math.max(map.getZoom(),15)); }
 async function brief(){ try{ const b = await API.get('/api/briefing?scope=gov'); $('brief').textContent=b.text.replace(/\*\*/g,''); $('brief-src').innerHTML = srcBadge(b.source)+(b.model?`<span class="xs muted"> ${b.model.split('.').pop()}・${b.ms} ms</span>`:''); }catch(e){} }
 ['layer','horizon','district'].forEach(id=>$(id).addEventListener('change',()=>{draw(); renderAlerts();})); $('adj').addEventListener('change',loadStations);
-connectEvents({ tick:(p)=>{ kpis(p.kpi); loadStations(); loadAlerts(); brief(); if($('side-tasks').style.display!=='none') loadTasks(); if(MX.open) mxLoad(); },
+connectEvents({ tick:(p)=>{ kpis(p.kpi); loadStations(); loadAlerts(); brief(); if($('side-tasks').style.display!=='none') loadTasks(); if(MX.open) mxLoad(); if($('ov').classList.contains('open')) ovRender(); if($('phone').classList.contains('open')) phoneRender(); },
   alert:(a)=>{ if(a.status==='open' && a.severity!=='info'){ Toasts.show(`${a.severity==='high'?'🔴':'🟠'} ${a.station}`, a.message, a.severity, `${a.opened.slice(11)}・${a.route}`); } loadAlerts(); },
   alert_digest:(d)=>Toasts.show('告警節流', d.message, 'info'),
   notify:(n)=>{ if(n.channel==='gov') Toasts.show(n.title, n.body, n.kind, n.ts); },
@@ -211,11 +244,11 @@ function mxRender(){
     <span class="mini">${s.window.label}　${s.window.t0.slice(0,16)} ～ ${s.window.t1.slice(0,16)}　觀測解析度 ${s.window.resolution_min} 分鐘</span></h3>
     <div class="kpis" style="padding:0;margin-bottom:8px">
       ${kpi(c.events.toLocaleString(), `${kl}事件數`, `平均每天 ${s.events_per_day.toLocaleString()} 件・${s.stations_affected} / ${s.stations_total} 站曾發生`)}
-      ${kpi(c.span_ge30.toLocaleString(), '跨度 ≥30 分的事件', `上界已知者中 ${cu.ge30.toLocaleString()} 件\`, c.span_ge30?'var(--warn)':'')}
-      ${kpi(c.span_ge60.toLocaleString(), '跨度 ≥60 分的事件', `上界已知者中 ${cu.ge60.toLocaleString()} 件\`, c.span_ge60?'var(--bad)':'')}
-      ${kpi(c.span_ge120.toLocaleString(), '跨度 ≥120 分的事件', `最長跨度 ${r.span_max} 分鐘\`, c.span_ge120?'var(--bad)':'')}
+      ${kpi(c.span_ge30.toLocaleString(), '跨度 ≥30 分的事件', `上界已知者中 ${cu.ge30.toLocaleString()} 件`, c.span_ge30?'var(--warn)':'')}
+      ${kpi(c.span_ge60.toLocaleString(), '跨度 ≥60 分的事件', `上界已知者中 ${cu.ge60.toLocaleString()} 件`, c.span_ge60?'var(--bad)':'')}
+      ${kpi(c.span_ge120.toLocaleString(), '跨度 ≥120 分的事件', `最長跨度 ${r.span_max} 分鐘`, c.span_ge120?'var(--bad)':'')}
       ${kpi(s.zero_snapshot_station_min.toLocaleString(), '零值快照站‧分鐘', '觀測量，不宣稱期間連續中斷')}
-      ${kpi(r.upper_p50==null?'–':r.upper_p50, '可能上界中位數（分）', `P90 ${r.upper_p90??'–'}・上界未知 ${cu.unknown.toLocaleString()} 件\`)}
+      ${kpi(r.upper_p50==null?'–':r.upper_p50, '可能上界中位數（分）', `P90 ${r.upper_p90??'–'}・上界未知 ${cu.unknown.toLocaleString()} 件`)}
       ${kpi(s.data_gaps.runs.toLocaleString(), '資料中斷段', `${s.data_gaps.cells.toLocaleString()} 個站‧分箱缺測`,'var(--grey)')}
     </div>
     <div class="mxcols">
@@ -277,8 +310,8 @@ function mxRender(){
     <div class="card"><b class="small">事件處理漏斗</b>
       <div class="kpis" style="padding:0;grid-template-columns:1fr 1fr">
         ${kpi(fl.opened,'開啟的服務事件','不含待查類')}
-        ${kpi(fl.acked,'已確認（ack）',`其中 ${fl.acked_not_assigned} 件確認了但沒指派\`)}
-        ${kpi(fmtP(fl.unassigned_ratio),'未指派比例（以負責人計）', `未確認比例 ${fmtP(fl.unacked_ratio)}\`+(fl.oldest_open_min!=null?`・最久未處理 ${fl.oldest_open_min} 分`:''), fl.unassigned_ratio>0.5?'var(--bad)':'')}
+        ${kpi(fl.acked,'已確認（ack）',`其中 ${fl.acked_not_assigned} 件確認了但沒指派`)}
+        ${kpi(fmtP(fl.unassigned_ratio),'未指派比例（以負責人計）', `未確認比例 ${fmtP(fl.unacked_ratio)}`+(fl.oldest_open_min!=null?`・最久未處理 ${fl.oldest_open_min} 分`:''), fl.unassigned_ratio>0.5?'var(--bad)':'')}
         ${kpi(fl.resolved_auto,'條件自動解除',`人工結案 ${fl.resolved_manual}`,'var(--grey)')}
       </div>
       <div class="xs muted" style="margin-top:6px">${f.definitions.ack}<br>${f.definitions.auto_resolved}<br>${f.definitions.no_patrol_inference}</div></div>
@@ -301,7 +334,102 @@ function mxRender(){
   $('mx-body').innerHTML = html;
 }
 ['mx-window','mx-kind','mx-horizon','mx-duty'].forEach(id=>$(id).addEventListener('change', mxLoad));
-document.addEventListener('keydown', e=>{ if(e.key==='Escape' && MX.open) mxClose(); });
+document.addEventListener('keydown', e=>{ if(e.key!=='Escape') return; if($('phone').classList.contains('open')) return phoneClose(); if($('ov').classList.contains('open')) return ovClose(); if(MX.open) mxClose(); });
 
-(async()=>{ const st = await API.get('/api/state'); kpis(st.kpi); await loadStations(); loadAlerts(); brief(); })();
+/* ---------------------------------------------- 全域儀表板 */
+function ovOpen(){ $('ov').classList.add('open'); ovRender(); }
+function ovClose(){ $('ov').classList.remove('open'); }
+function na(why){ return `<div class="na">未提供<div class="xs">${why||''}</div></div>`; }
+function ovRender(){
+  const d=S.ledger; if(!d||!d.overview){ $('ov-body').innerHTML='<div class="mxnote">台帳尚未載入</div>'; return; }
+  const o=d.overview, sd=o.supply_demand, fr=o.freshness, eq=o.equipment, tb=o.tasks;
+  $('ov-clock').textContent = `資料時間 ${o.data_ts.slice(0,16)}・時鐘來源：${o.clock_source_label}`;
+  const kpi=(v,l,sub,color)=>`<div class="kpi"><div class="v" style="color:${color||'inherit'}">${v}</div><div class="l">${l}</div>${sub?`<div class="s">${sub}</div>`:''}</div>`;
+  let h = `<div class="mxsec"><h3>一、供需現況 ${REAL}<span class="mini">回放快照＋模型預測</span></h3>
+    <div class="kpis" style="padding:0;margin-bottom:8px">
+      ${kpi(sd.empty_now,'現在無車站', `${sd.stations} 站中`, sd.empty_now?'var(--bad)':'')}
+      ${kpi(sd.full_now,'現在無位站','', sd.full_now?'var(--warn)':'')}
+      ${kpi(sd.bikes_total.toLocaleString(),'車柱內可借車輛','快照加總')}
+      ${kpi(sd.spaces_total.toLocaleString(),'可還車位','快照加總')}
+      ${kpi(sd.risk_empty_120,'120 分高風險缺車','模型機率 ≥50%','var(--warn)')}
+      ${kpi(sd.risk_full_120,'120 分高風險缺位','模型機率 ≥50%')}
+      ${kpi(sd.watch.both_zero+sd.watch.stale_flat+sd.watch.cap_conflict,'待查站','雙零／長期不變／容量矛盾','var(--grey)')}
+    </div>
+    <div class="mxcols"><div class="card"><b class="small">行政區（依缺車與風險排序）</b>
+      <table><tr><th>行政區</th><th>站</th><th>無車</th><th>無位</th><th>可借</th><th>120分風險</th></tr>
+      ${sd.by_district.map(x=>`<tr><td>${x.district}</td><td class="mono">${x.stations}</td><td class="mono">${x.empty}</td><td class="mono">${x.full}</td><td class="mono">${x.bikes.toLocaleString()}</td><td class="mono">${x.risk_empty_120}</td></tr>`).join('')}</table></div>
+      <div class="card"><b class="small">資料新鮮度</b>
+      <div class="kpis" style="padding:0;grid-template-columns:1fr 1fr">
+        ${kpi(fr.fresh.toLocaleString(),'本分箱有觀測','')}
+        ${kpi(fr.lag_30,'落後未達 60 分','')}
+        ${kpi(fr.stale_60,'資料過期 ≥60 分','', fr.stale_60?'var(--warn)':'')}
+        ${kpi(fr.no_data_24h,'24 小時內無觀測','', fr.no_data_24h?'var(--bad)':'')}
+      </div><div class="xs muted" style="margin-top:6px">${fr.note}</div></div></div>
+    <div class="mxnote" style="margin-top:8px">${sd.not_claimed}</div></div>`;
+
+  h += `<div class="mxsec"><h3>二、設備待查 <span class="badge grey">用戶／AI／現場分開</span><span class="mini">${eq.owner}</span></h3>
+    <div class="kpis" style="padding:0;margin-bottom:8px">
+      ${kpi(eq.open_tickets,'未結案工單','')}
+      ${kpi(eq.without_asset_id,'無車號也無柱號','只能關聯，不能合併成同一設備','var(--warn)')}
+      ${kpi(eq.with_divergence,'狀態有差異的工單','已處理未恢復／已恢復未結案等', eq.with_divergence?'var(--warn)':'')}
+      ${Object.entries(eq.by_asset).map(([k,v])=>kpi(v,{bike:'車輛',dock:'車柱',station:'站端系統',unknown:'待判定'}[k]||k,'')).join('')}
+    </div>
+    ${eq.rows.length?eq.rows.map(r=>`<div class="card" style="margin-bottom:8px">
+      <div class="row between"><b class="small">${r.ticket_id}<span class="xs muted"> v${r.ticket_version??'?'}</span>｜${r.station}</b>
+        <span><span class="badge ${r.asset_type==='unknown'?'grey':'info'}">${{bike:'車輛',dock:'車柱',station:'站端系統',unknown:'待判定'}[r.asset_type]||r.asset_type}</span>
+        <span class="pill">${r.status_label}</span>${r.reports>1?`<span class="pill">回報 ${r.reports} 次</span>`:''}</span></div>
+      <div class="xs muted">車號 ${r.bike_no||'未提供'}・柱號 ${r.dock_id||'未提供'}・錯誤碼 ${r.error_codes.length?r.error_codes.join('、'):'未提供'}</div>
+      <div class="xs muted">服務：${r.service_state}・設備：${r.asset_state}・坐墊標記：${r.saddle_marker.label}${r.saddle_marker.source?`（${r.saddle_marker.source}）`:''}</div>
+      <div class="xs muted">營運負責：${r.operator.assignee||r.operator.crew||'<b style="color:var(--bad)">未指派</b>'}・ETA：${r.operator.eta?String(r.operator.eta).slice(11,16):'未提供'}</div>
+      ${r.divergence.length?r.divergence.map(x=>`<div class="alert warn" style="margin-top:5px"><div class="m"><span class="badge warn">差異</span> ${x.label}</div><div class="xs muted">${x.why}</div></div>`).join(''):''}
+      <div class="ev3">
+        <div class="c"><h5>① 用戶描述（自述）</h5>${r.user_report.provided?`<div class="xs">${r.user_report.text}</div>${r.user_report.note?`<div class="xs muted">${r.user_report.note}</div>`:''}${r.user_report.sources.map(x=>`<div class="xs muted">來源 ${x.source||'未標示'}・${x.certainty||''}</div>`).join('')}`:na()}</div>
+        <div class="c ai"><h5>② AI 圖片觀察（推測，非已確認）</h5>${r.ai_observation.provided?(r.ai_observation.observations||[]).map(x=>`<div class="xs">・${x.text||x.note||JSON.stringify(x)}</div>`).join(''):na(r.ai_observation.why)}</div>
+        <div class="c field"><h5>③ 現場確認</h5>${r.field_check.provided?r.field_check.steps.map(x=>`<div class="xs">${String(x.ts).slice(11,16)} ${x.label}</div>`).join(''):na(r.field_check.why)}</div>
+      </div></div>`).join(''):'<div class="mxnote">目前沒有未結案的設備工單。</div>'}
+    <div class="mxnote">${eq.rule}<br>${eq.state_note}</div></div>`;
+
+  h += `<div class="mxsec"><h3>三、人車任務與未覆蓋缺口 <span class="badge sim">模擬派工狀態</span></h3>
+    <div class="mxcols"><div class="card"><b class="small">任務狀態</b>
+      <table>${Object.entries(tb.by_status).map(([k,v])=>`<tr><td>${k}</td><td class="mono">${v}</td></tr>`).join('')}</table>
+      <div class="xs muted" style="margin-top:6px">排程涵蓋 ${tb.planned_districts.join('、')||'無'}。${tb.owner}</div></div>
+      <div class="card"><b class="small">未覆蓋缺口（${tb.uncovered_count}）</b>
+      <table><tr><th>行政區</th><th>尺度</th><th>缺口</th><th>狀態</th></tr>
+      ${tb.uncovered.map(g=>`<tr><td>${g.district||'—'}</td><td class="mono">${g.horizon||'—'}</td><td class="mono">${g.deficit??'未提供'}</td><td class="xs">${g.status}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">無</td></tr>'}</table></div></div>
+    <div class="mxnote" style="margin-top:8px"><b>契約狀態</b>：${tb.contract_note}</div></div>`;
+
+  h += `<div class="mxsec"><h3>四、責任與處理進度</h3><div class="card">
+    <div class="kpis" style="padding:0">
+      ${kpi(d.counts.P0||0,'P0','','var(--bad)')}${kpi(d.counts.P1||0,'P1','','var(--warn)')}
+      ${kpi(d.unowned_p01,'P0/P1 未指派負責人','', d.unowned_p01?'var(--bad)':'')}
+      ${kpi(d.acked_not_assigned,'已確認但未指派','ack 不等於指派')}
+      ${kpi(d.no_plan_p01,'P0/P1 沒有恢復計畫','')}
+    </div>
+    <div class="xs muted" style="margin-top:6px">${d.ack_note}<br>${d.coverage_note}</div></div></div>`;
+  $('ov-body').innerHTML = h;
+}
+
+/* ---------------------------------------------- 通知情境預覽（明示模擬） */
+function phoneOpen(){ $('phone').classList.add('open'); phoneRender(); }
+function phoneClose(){ $('phone').classList.remove('open'); }
+function phoneRender(){
+  const d=S.ledger; if(!d) return;
+  const ts = (d.overview&&d.overview.data_ts)||'';
+  $('ph-time').textContent = ts.slice(11,16)||'--:--';
+  $('ph-date').textContent = ts.slice(0,10)+'（回放時間）';
+  const items = d.events.filter(a=>a.level==='P0').slice(0,3);
+  $('ph-list').innerHTML = items.length? items.map(a=>`<div class="nc" onclick="phoneGo('${a.id}')">
+      <div class="ap"><span>新北交通局 · YouBike 預警</span><span>${(a.opened||'').slice(11,16)}</span></div>
+      <div class="ti">${{P0:'P0',P1:'P1'}[a.level]||a.level}｜${a.station}</div>
+      <div class="bo">${a.observed?`零值快照跨度 ${a.observed.span_min} 分`:a.message}${a.cluster?`・站群 ${a.cluster_n} 站同時無法服務`:''}${a.owner?`・負責人 ${a.owner}`:'・尚未指派負責人'}</div>
+    </div>`).join('') : '<div class="none">目前沒有 P0 事件。這個畫面只在有 P0 時會有通知卡。</div>';
+  $('ph-foot').innerHTML = `點通知卡會直接打開 /gov 的這一件事件。<br>
+    本輪為<b>明示模擬</b>：沒有 Web Push、沒有 APNs、關掉分頁不會收到任何東西。<br>
+    營運端會收到同一件事件的警示（政府端按「要求營運處理」時送出）。`;
+}
+function phoneGo(id){ phoneClose(); ovClose(); mxClose(); openEvent(id); }
+/* 深連結：/gov?event=<id> */
+function deepLink(){ const q=new URLSearchParams(location.search); const id=q.get('event'); if(id) openEvent(id); }
+
+(async()=>{ const st = await API.get('/api/state'); kpis(st.kpi); await loadStations(); await loadAlerts(); brief(); deepLink(); })();
 </script></body></html>
