@@ -1,6 +1,6 @@
 # HANDOFF_A — 政府端（A 主線）第二輪交付
 
-基準 `a1c6dbb`。本輪 commit：`12ca2d8`、`9d64929`，以及本文件所屬的接線 commit。
+基準 `a1c6dbb`。本輪 commit：`12ca2d8`、`9d64929`、`320547c`、`7bca386`。
 時間戳一律台灣時間；畫面上的時間是**回放時鐘**（2026 年 1–6 月歷史快照），不是真實時鐘。
 
 ## 一、這輪做了什麼
@@ -14,6 +14,9 @@
 | 設備事件三欄分開（用戶描述／AI 觀察／現場確認） | 完成（AI 欄位待 C 提供） | 同上 |
 | 狀態差異判定（已處理未恢復／已恢復未結案／仍是疑似／無資產識別） | 完成並測 | 同上 |
 | 通知情境預覽（明示模擬）＋深連結 | 完成並測 | `app/static/gov.html` |
+| 缺車/dropoff、缺位/pickup 分開判定覆蓋 | 完成並測（含真資料） | `app/events.py` |
+| 服務可用性（消費 B 的 `/api/ops/availability`） | 完成 | `app/server.py`、`app/static/gov.html` |
+| 任務欄位對齊 B（cycle／reservation_state／逐站期限） | 完成 | `app/events.py`、`app/static/gov.html` |
 | 事件台帳與原因時間線（第一輪） | 沿用 | `app/events.py` |
 | 驗收指標面板（第一輪） | 沿用並修正口徑 | `app/metrics.py` |
 
@@ -66,6 +69,22 @@ python3 tests/test_a_actions.py    # 38 項
 | A-5 | 將 R001 推進到 `recovered` | A 端顯示差異「已處理但服務未恢復」；另偵測到 R003「沒有資產識別」 **通過** |
 | A-3 | 通知情境卡點擊 | 關閉手機框並開啟該事件抽屜；`/gov?event=<id>` 深連結亦可 **通過** |
 
+### 第二批（`7bca386`）
+
+```bash
+python3 tests/test_a_coverage.py   # 15 項
+```
+
+| 項目 | 結果 |
+|---|---|
+| 缺車事件只認 dropoff 任務、缺位事件只認 pickup 任務，兩者不互認 | **通過** |
+| 兩種任務並存時各自對到正確那一張 | **通過** |
+| 缺位理由文字用「運出騰位」、缺車用「送車補給」，但書仍保留 | **通過** |
+| 真資料：回放時鐘設到 `2026-06-01 01:30`（該時點有連續滿站），8 件缺位事件全部 `cover_action=pickup` | **通過** |
+| 真資料：分級理由可解釋（捷運竹圍站替代站 0 且無計畫→P0；新市一路兩站站群失效→P0） | **通過** |
+| 服務可用性由 `/api/ops/availability` 取得，A 不另算（實測 新北市立圖書館三重分館 官方可借 0、已確認不可用 2 台 YB-A1／YB-A2、`may_need_service_event=true`） | **通過** |
+| 任務欄位讀到 B 的 `cycle`（5 個 cycle）、`reservation_state`（candidate 20）、逐站期限（準時 26／來不及 55） | **通過** |
+
 ### 瀏覽器實測
 
 - `node --check` 對 `gov.html` 的 inline script 語法檢查：**通過**
@@ -80,6 +99,22 @@ python3 tests/test_a_actions.py    # 38 項
    改成三段式：先算基準級 → 再認定站群 → 最後定案並留痕。
 4. **站群以行政區認定**（第一輪）：一個行政區一兩百站，三件同級就全升 P0（29 件全 P0）。
    改以 500 公尺鄰站關係認定後降為 4 件。
+
+## 四之二、發現的共用程式缺陷（不是 A 的檔案，未自行修改）
+
+**`app/server.py` 的 `progress_tickets()` 在回放時鐘往回跳時會 `IndexError`，整個 `on_tick` 回 500。**
+
+```python
+steps = int((now_ts() - pd.Timestamp(tk["ts"])).total_seconds() / 1800)
+want = TICKET_FLOW[min(len(TICKET_FLOW) - 1, steps)]   # steps 為負數時索引越界
+```
+
+重現：先建立任何工單，再 `POST /api/clock {"action":"set","ts":"<比工單建立時間更早的時刻>"}`。
+時鐘實際上會前進，但回應是 500，且該次 tick 的後續步驟（`check_reminders` 等）不會執行。
+
+影響三端。修法是把 `steps` 夾在 0 以上（例如 `max(0, steps)`），或在時鐘回捲時重置工單時間戳。
+依分工規則這屬於共用邏輯，我沒有自行修改，請 B 或當輪整合者處理。
+我的驗證改以「重啟後先設時鐘、再建工單」繞過。
 
 ## 五、模擬與界線（畫面上都有標示）
 
@@ -100,8 +135,8 @@ python3 tests/test_a_actions.py    # 38 項
 | **I01 三端同事件閉環** | **未驗證** | 只驗到「B 建單 → A 顯示同一 ticket 與狀態差異」。C 的 `report_id` → B 的 `ticket_id` → A 三欄的完整串接尚未跑過 |
 | **AI 圖片觀察實際顯示** | **未驗證** | C 的 `report_image.py` 尚未把 `evidence` 裡的圖片辨識結果寫進工單。A 端已實作讀取與降級，但沒有真資料跑過 |
 | **B 端是否顯示政府端要求** | **未驗證** | A 已送出帶 `event_id`／`event_version` 的 ops 通知並確認進入 `/api/notifications?channel=ops`；B 畫面是否呈現、是否回填處理方案，需 B 確認 |
-| **task 的 `version`／`cycle_id`／`event_id`／`operator_owner`／`uncovered_gap`** | **阻擋** | `GET /api/ledger` 的 `overview.tasks.contract_missing` 會如實列出。A 顯示「未提供」，不自行推算 |
-| **`GET /api/ops/cycle` 的資源帳** | **未串接** | B 已有端點，A 尚未把 planning cycle 與候選/確認/在途顯示到儀表板 |
+| **task 的 `version`／`event_id`／`operator_owner`** | **阻擋（已縮小）** | B 已提供 `cycle`、`reservation_state`、`late_stops`、`on_time_stops`，A 已接。剩下三個欄位 `overview.tasks.contract_missing` 會如實列出，A 顯示「未提供」不自行推算 |
+| **`app/server.py` 的 availability 接線** | **未提交** | 該檔目前有 C 主線未提交的改動，依規則不能 `git add`。介面對 availability 缺失有降級處理。待 C 提交後我再串行提交這一段 |
 | **獨立把關兩輪** | **未執行** | 本文件只是 A 端自測，不等於整合驗收 |
 | **真實背景推播** | **不做** | 依任務書本輪接受明示模擬 |
 
