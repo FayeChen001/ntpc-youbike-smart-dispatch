@@ -1,6 +1,6 @@
 # HANDOFF_A — 政府端（A 主線）第二輪交付
 
-基準 `a1c6dbb`。本輪 commit：`12ca2d8`、`9d64929`、`320547c`、`7bca386`、`381de3e`。
+基準 `a1c6dbb`。本輪 commit：`12ca2d8`、`9d64929`、`320547c`、`7bca386`、`381de3e`、`78fd521`、`c523bc0`。
 時間戳一律台灣時間；畫面上的時間是**回放時鐘**（2026 年 1–6 月歷史快照），不是真實時鐘。
 
 ## 一、這輪做了什麼
@@ -18,6 +18,9 @@
 | 服務可用性（消費 B 的 `/api/ops/availability`） | 完成 | `app/server.py`、`app/static/gov.html` |
 | 任務欄位對齊 B（cycle／reservation_state／逐站期限） | 完成 | `app/events.py`、`app/static/gov.html` |
 | **主管決策卡**（方案只採營運端資料、決策留痕、防雙重派工） | 完成並測 | `app/events.py`、`app/static/gov.html` |
+| **I01 三端閉環驗證**（C 回報 → B 工單 → A 顯示 → 修復 → 驗收） | 完成並測 | `tests/test_a_i01_loop.py` |
+| **AI 圖片觀察欄位**（對齊 C 的 evidence 種類，觀察與不確定分開） | 完成並測 | `app/events.py`、`app/static/gov.html` |
+| **營運端資源帳**（候選／確認／在途／已釋放） | 完成 | `app/events.py`、`app/server.py`、`app/static/gov.html` |
 | 事件台帳與原因時間線（第一輪） | 沿用 | `app/events.py` |
 | 驗收指標面板（第一輪） | 沿用並修正口徑 | `app/metrics.py` |
 
@@ -106,6 +109,34 @@ python3 tests/test_a_decision.py   # 38 項
 | HTTP 實測：送出決策 200 → 重複 409 → 重送冪等 → `tasks` 數 34 未變 | **通過** |
 | 瀏覽器實測：卡片渲染，顯示營運端真實代價（「2 站趕不上自己的服務時限，最緊 30 分鐘」）與「跨區支援 未提供」 | **通過** |
 
+### 第四批 — I01 三端閉環（`78fd521`）
+
+```bash
+YB_BASE=http://127.0.0.1:8788 python3 tests/test_a_i01_loop.py   # 41 項，打真實 HTTP
+```
+
+從 A 的視角跑完整閉環，不繞過任何一端的實作。測試對伺服器既有狀態無依賴
+（每次用唯一車號），連跑兩次都 ALL PASS。
+
+| 步驟 | 驗到什麼 | 結果 |
+|---|---|---|
+| 1 | C 送出機械症狀回報 → 直接開出工單，回傳 `report_id` 與 `ticket_id` | **通過** |
+| 1b | 同 `request_id` 重送 → 冪等，仍是同一個 `ticket_id`，不重複建單 | **通過** |
+| 2 | A 端看到同一個 `ticket_id`、車號、`dock_id`；三欄分開（①有②無③無）；設備＝疑似故障、服務＝未知；`report_ids` 有回連 | **通過** |
+| 3 | B 推進 `accepted`→`on_site`：A 端流程狀態同步、看到營運負責人、③現場確認出現 | **通過** |
+| 4 | B 推進 `recovered`：設備＝已維修但**不是驗收正常**、服務仍未知、A 端標出「已處理但服務未恢復」 | **通過** |
+| 5 | B 推進 `verified` 才是 `verified_ok` | **通過** |
+| 6 | 全程同一個 `ticket_id` 只出現一次，去重依據是車號 | **通過** |
+| 7 | 同站不同車另開一張單，A 端兩張並存（I02） | **通過** |
+| 8 | 重複 GET `/api/ledger` 後工單列數與事件數不變（I03） | **通過** |
+| AI | 附圖回報：AI 欄顯示觀察兩項、「照片無法確認」獨立一項、標示模型來源、附界線說明；設備狀態仍是疑似（**AI 推測不得升格為已確認**） | **通過** |
+
+### 第五批 — 營運端資源帳（`c523bc0`）
+
+直接呼叫 `GET /api/ops/cycle`，政府端只呈現不重算。實測 cycle `CY-2026-06-16T07:00-1`：
+預約 68、候選 341 輛、需求站 45／供給站 10。畫面上寫明候選／確認／在途／已釋放
+四者都不代表車已經到站。
+
 ### 瀏覽器實測
 
 - `node --check` 對 `gov.html` 的 inline script 語法檢查：**通過**
@@ -164,12 +195,14 @@ want = TICKET_FLOW[min(len(TICKET_FLOW) - 1, steps)]   # steps 為負數時索�
 
 | 項目 | 狀態 | 說明 |
 |---|---|---|
-| **I01 三端同事件閉環** | **未驗證** | 只驗到「B 建單 → A 顯示同一 ticket 與狀態差異」。C 的 `report_id` → B 的 `ticket_id` → A 三欄的完整串接尚未跑過 |
-| **AI 圖片觀察實際顯示** | **未驗證** | C 的 `report_image.py` 尚未把 `evidence` 裡的圖片辨識結果寫進工單。A 端已實作讀取與降級，但沒有真資料跑過 |
+| ~~I01 三端同事件閉環~~ | **已驗證**（`78fd521`） | 見第四批。41 項全過，可重複執行 |
+| ~~AI 圖片觀察實際顯示~~ | **已驗證**（`78fd521`） | 以 C 的 `image_analysis` 介面送入測試樁資料驗過欄位切分。**尚未用真實 Bedrock 視覺模型跑過** |
+| **真實視覺模型** | **未驗證** | 上述測試用的是測試樁；C 的 `report_image` 接真模型後需再驗一次 |
 | **B 端是否顯示政府端要求** | **未驗證** | A 已送出帶 `event_id`／`event_version` 的 ops 通知並確認進入 `/api/notifications?channel=ops`；B 畫面是否呈現、是否回填處理方案，需 B 確認 |
 | **task 的 `version`／`event_id`／`operator_owner`** | **阻擋（已縮小）** | B 已提供 `cycle`、`reservation_state`、`late_stops`、`on_time_stops`，A 已接。剩下三個欄位 `overview.tasks.contract_missing` 會如實列出，A 顯示「未提供」不自行推算 |
 | **`app/server.py` 的 availability 接線** | **未提交** | 該檔目前有 C 主線未提交的改動，依規則不能 `git add`。介面對 availability 缺失有降級處理。待 C 提交後我再串行提交這一段 |
-| **獨立把關兩輪** | **未執行** | 本文件只是 A 端自測，不等於整合驗收 |
+| **獨立把關兩輪** | **未執行** | 本文件是 A 端自測加一條真實三端閉環，仍不等於獨立把關 |
+| **B 端畫面是否呈現政府端決策** | **未驗證** | A 的決策留在事件上並送 ops 通知，B 是否顯示需 B 確認 |
 | **真實背景推播** | **不做** | 依任務書本輪接受明示模擬 |
 
 ### 需要 B 提供
