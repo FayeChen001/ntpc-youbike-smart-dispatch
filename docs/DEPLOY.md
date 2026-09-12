@@ -15,6 +15,35 @@
 | 執行個體角色 | `NTPCYouBikeAppRole`，程式用執行個體角色取得 AWS 權限，機器上沒有任何金鑰 |
 | 服務 | systemd `youbike.service`，uvicorn 監聽 80 |
 
+## v2 一站式要多帶的檔案
+
+`deploy.sh` 已經包含，這裡列出來是為了出事時知道要查什麼：
+
+| 檔案 | 少了會怎樣 |
+|---|---|
+| `data/analytics/{slot_risk.parquet,summary.json,stations.json}` | `/api/v2/analytics` 回 503，整個一站式頁面載不出來 |
+| `data/live_history.parquet` | 不會壞，但線上要從零累積 2.5 小時才有完整的模型落後特徵 |
+| `analytics/`、`tests/` | 線上無法重算與複驗 |
+
+部署後根網址 `/` 是一站式；情境回放在 `/replay`。
+
+## 公開的唯讀 demo 網址
+
+現況只有四個現場 IP 打得開。要讓評審與主辦也能看：
+
+```bash
+./scripts/setup_public_demo.sh            # dry-run，先看會怎麼改
+./scripts/setup_public_demo.sh --apply    # 套用
+./scripts/setup_public_demo.sh --remove   # 收回
+```
+
+它在既有 Web ACL 上**只新增一條**規則：`GET`／`HEAD` 到 `/`、`/v2`、`/api/v2/*`、`/static/*`
+一律放行；其餘維持原本的預設 Block。也就是**任何人都能讀，但寫不了**——
+建單、指派、結案、領取獎勵這些 POST，以及 `/gov`、`/ops`、`/citizen`、`/replay`，
+仍然只有白名單四個現場 IP 進得來。
+
+WAF 規則傳播到全部邊緣節點要幾分鐘。驗證要用**不在白名單的網路**（例如手機 4G）。
+
 ## 重新部署
 
 ```bash
