@@ -593,9 +593,19 @@ done
 
 # 三十九、接手指南（最新，取代第二十一節）
 
+## 三條線的稱呼（使用者指定，對談時不要用 A／B／C）
+
+| 舊代號 | 請這樣稱呼 | 對應畫面 |
+|---|---|---|
+| A | **政府端** | `/gov`，新北市交通局 |
+| B | **微笑單車端** | `/ops`，營運調度與維修派工 |
+| C | **用戶端** | `/citizen`，民眾手機 |
+
+檔名與既有 commit 訊息裡的 A／B／C 不追改，但**和使用者對談、寫新文件時一律用中文名稱**。
+
 ## 你是誰
 
-你負責 `/Users/chenhongfei/CC/ntpc-youbike` 的 **C 用戶端主線**。
+你負責 `/Users/chenhongfei/CC/ntpc-youbike` 的 **用戶端主線**（舊稱 C）。
 先讀 `docs/WORKSTREAMS.md` 的檔案歸屬與 git 硬規則（三個 session 共用同一個工作目錄與
 HEAD，**禁止** `git add -A`、`git add .`、`commit -a`、`stash`、`reset --hard`、`switch`、
 `checkout .`、`restore`、`clean`）。任務書在
