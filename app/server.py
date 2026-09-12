@@ -1728,3 +1728,54 @@ def api_ops_task_action(tid: str, action: str, body: dict = None):
         tk.setdefault("history", []).append({"ts": now, "status": "cancelled", "note": b.get("reason") or "調度員取消，資源已釋放"})
     ddb_put("yb_tasks", tk); broadcast("task", tk)
     return {**tk, "reservations_changed": moved}
+
+@app.get("/api/ops/availability")
+def api_ops_availability(district: str = "", sid: int = -1, only_flagged: int = 0):
+    """服務可用性彙總（給 A 的事件台帳與 B 的待查清單用）。唯讀。
+
+    誠實界線，這支端點不做以下任何一件事：
+    - **不把本工具的工單從官方可借數扣掉**。我們沒有營運商的庫存介接，不知道官方是否已經扣除；
+      兩個數字並列，不可相加也不可相減。
+    - **不把整站判成不可用**。只有在「已知不可用車數 ≥ 官方可借數，且每一台都有車號識別」時
+      才給一個 may_need_service_event 建議旗標，仍需人工確認。
+    - **不聲稱已鎖車**。沒有遠端停租介接，工單只代表本工具排除推薦。
+    """
+    p = current_pred()
+    rows = []
+    open_tk = [t for t in STATE["tickets"] if t.get("status") not in ("closed", "verified")]
+    by_sid = {}
+    for t in open_tk:
+        by_sid.setdefault(t["sid"], []).append(t)
+    for r in p.itertuples():
+        if district and r.district != district: continue
+        if sid >= 0 and int(r.sid) != sid: continue
+        tks = by_sid.get(int(r.sid), [])
+        if not tks and (district or sid >= 0 or only_flagged): 
+            if only_flagged or not (district or sid >= 0): continue
+        bikes = None if (r.bikes is None or (isinstance(r.bikes, float) and np.isnan(r.bikes))) else int(r.bikes)
+        unusable_bikes = sorted({t["bike_no"] for t in tks if t.get("asset_type") == "bike" and t.get("bike_no")})
+        unusable_docks = sorted({t["dock_id"] for t in tks if t.get("asset_type") == "dock" and t.get("dock_id")})
+        suspected = [t["id"] for t in tks if t.get("diagnosis") == "pending_triage" or not (t.get("bike_no") or t.get("dock_id"))]
+        flag = bool(bikes is not None and unusable_bikes and len(unusable_bikes) >= bikes)
+        row = {
+            "sid": int(r.sid), "station": r.name, "district": r.district,
+            "official_bikes": bikes, "official_spaces": None if r.spaces is None else int(r.spaces),
+            "known_unusable_bikes": len(unusable_bikes), "known_unusable_bike_nos": unusable_bikes,
+            "known_unusable_docks": len(unusable_docks), "known_unusable_dock_ids": unusable_docks,
+            "suspected_tickets": suspected, "open_tickets": [t["id"] for t in tks],
+            "excluded_from_recommendation": bool(unusable_bikes or unusable_docks),
+            "may_need_service_event": flag,
+            "confirmed_at": iso(now_ts()) if tks else None,
+        }
+        if only_flagged and not (flag or suspected): continue
+        rows.append(row)
+    return {
+        "stations": rows[:400], "count": len(rows), "clock_source": "replay", "ts": iso(now_ts()),
+        "semantics": {
+            "official_bikes": "站點快照的可借車數，未扣除本工具的工單",
+            "known_unusable_bikes": "本工具有未結案工單且帶車號的不同車輛數；不代表官方已扣除，兩者不可相加",
+            "suspected_tickets": "證據不足或沒有資產識別的工單，不計入不可用",
+            "may_need_service_event": "僅為建議旗標，需人工確認才可開服務中斷事件",
+            "excluded_from_recommendation": "本工具不再推薦這些設備；沒有遠端停租介接，不代表已鎖車",
+        },
+    }

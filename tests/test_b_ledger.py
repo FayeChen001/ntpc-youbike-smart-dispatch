@@ -122,6 +122,34 @@ check("N05 可如期站數為 1，不是全部", trip["on_time_stops"], 1)
 check("N05 理由不可宣稱全部準時", "都能在各自的服務時限前抵達" in trip["reason"], False)
 check("N05 理由要說出有幾站趕不上", "趕不上自己的服務時限" in trip["reason"], True)
 
+# ============ 逐段載量守恆：路途中任何一刻都不可超過車容量，也不可為負 ============
+print("\n== 逐段載量 ==")
+PL.ledger_reset()
+pred3 = pd.DataFrame([
+    stn(0, "供給甲", 25.000, 121.400, 60, 50, 50, 0.0),
+    stn(1, "供給乙", 25.002, 121.401, 60, 45, 45, 0.0),
+    stn(2, "缺車甲", 25.004, 121.402, 60, 1, 1, 0.9),
+    stn(3, "缺車乙", 25.006, 121.403, 60, 1, 1, 0.9),
+    stn(4, "缺車丙", 25.008, 121.404, 60, 1, 1, 0.9),
+])
+tk3 = PL.plan_dispatch(pred3, NOW, 120, None, districts=["測試區"], existing_locked=set())
+bad = []
+for t in [x for x in tk3 if x["stops"]]:
+    load = 0; trace = []
+    for s_ in t["stops"]:
+        load += s_["qty"] if s_["action"] == "pickup" else -s_["qty"]
+        trace.append(load)
+        if load < 0 or load > A["truck_capacity"]: bad.append((t.get("trip"), s_["name"], load))
+    if load != 0: bad.append((t.get("trip"), "結束時未清空", load))
+check("逐段載量never超過車容量也不為負，且回場時清空", bad, [])
+check("每趟載量都在 0..上限之間", all(0 <= x["load"] <= A["truck_capacity"] for x in tk3 if x["stops"]), True)
+
+# ============ 前置時間拆段：新動員與在勤改道是兩個不同的值 ============
+print("\n== 前置拆段 ==")
+check("新動員前置存在且為情境值 15 分", A.get("lead_prepare_min"), 15)
+check("在勤改道前置存在且較短", A.get("divert_prepare_min") < A.get("lead_prepare_min"), True)
+check("訪談的 60 分總量仍保留給三端顯示", A.get("lead_time_min"), 60)
+
 print()
 print("全部通過" if not fails else f"未通過 {len(fails)} 項：{fails}")
 sys.exit(1 if fails else 0)

@@ -63,6 +63,7 @@ function moverTasks() { return S.manual.filter(m => m.status !== 'done' && m.sta
 function repairTasks() { return S.tickets.filter(t => t.status !== 'closed'); }
 
 /* ---------------- 排班：把每一趟指派到在勤車組 ---------------- */
+function prepMin(first) { const A = S.A || {}; return first ? (A.lead_prepare_min ?? 15) : (A.divert_prepare_min ?? 3); }
 function scheduleDistrict(trips, crewIds, now) {
   const veh = crewIds.map(id => ({ id, free: now, trips: [] }));
   const out = { veh, late: 0, lateLoad: 0, onTime: 0, busy: 0 };
@@ -70,9 +71,11 @@ function scheduleDistrict(trips, crewIds, now) {
   for (const t of sorted) {
     if (!veh.length) { out.late++; out.lateLoad += t.load; continue; }
     const v = veh.reduce((a, b) => b.free < a.free ? b : a);
-    const start = moving(t) ? Math.min(T(t.depart_by), now) : Math.max(v.free, now);
+    const first = v.trips.length === 0;                       // 這一趟是不是該組今天的第一趟
+    const prep = prepMin(first) * 60000;
+    const start = moving(t) ? Math.min(T(t.depart_by), now) : Math.max(v.free + (first ? prep : 0), now + (first ? prep : 0));
     const end = start + t.route_minutes * 60000, late = start > T(t.depart_by) + 60000;
-    v.trips.push({ t, start, end, late, slack: MIN(T(t.depart_by) - start) });
+    v.trips.push({ t, start, end, late, slack: MIN(T(t.depart_by) - start), first, prep: prepMin(first) });
     v.free = end + HANDOVER * 60000; out.busy += t.route_minutes + HANDOVER;
     if (late) { out.late++; out.lateLoad += t.load; } else out.onTime++;
   }
@@ -546,7 +549,7 @@ async function detailTruck(t, fetchRoute) {
     <div><div class="v">${hhmm(t.target_ts)}</div><div class="l">目標時間（提前 ${t.horizon} 分排定）</div></div>
     <div><div class="v">${doneN}<span style="font-size:12px;color:var(--muted)">/${t.stops.length}</span></div><div class="l">已回報站數（實搬 ${gotQty}/${moveQty} 輛）</div></div></div>
   ${chainRow(t, x, start)}
-  <div class="eff"><span>行駛 ${drive} 分／${t.route_km} km</span><span>站上作業 ${work} 分</span><span>載量 ${t.load}/${cap()}（${Math.round(t.load / cap() * 100)}%）</span><span>回場 ${hm(start + t.route_minutes * 60000)}</span><span>碳排 ${(t.route_km * CO2_TRUCK).toFixed(1)} kg</span>${x ? `<span>${x.late ? `比最遲出發晚 ${-x.slack} 分` : `出發餘裕 ${x.slack} 分`}</span>` : ''}</div>
+  <div class="eff"><span>行駛 ${drive} 分／${t.route_km} km</span><span>站上作業 ${work} 分</span><span>載量 ${t.load}/${cap()}（${Math.round(t.load / cap() * 100)}%）</span><span>回場 ${hm(start + t.route_minutes * 60000)}</span><span>${x ? (x.first ? `新動員前置 ${x.prep} 分` : `在勤改道前置 ${x.prep} 分`) : ''}</span><span>碳排 ${(t.route_km * CO2_TRUCK).toFixed(1)} kg</span>${x ? `<span>${x.late ? `比最遲出發晚 ${-x.slack} 分` : `出發餘裕 ${x.slack} 分`}</span>` : ''}</div>
   <div class="row" style="margin-top:8px;align-items:flex-start"><div class="brief" style="flex:1" id="brief">${(S.briefs[bk] || {}).text || t.reason}</div><span id="brief-src">${srcBadge((S.briefs[bk] || {}).source)}</span></div>
   <div style="margin-top:10px"><b class="small">站點順序與現場回報</b> <span class="badge real">順序與載量為真實計算</span> <span class="badge sim">回報為示範，重整即消失</span></div>
   ${t.stops.map((s, i) => stopRow(t, s, i)).join('')}
@@ -557,7 +560,7 @@ async function detailTruck(t, fetchRoute) {
     ${perStopDue()
       ? `<li><b>每個送車站有自己的服務時限</b>：時限＝該站最早同時滿足「零車機率 ≥ ${Math.round(S.A.risk_threshold * 100)}%」與「預測庫存低於目標下限」的尺度（30／60／120／180 分）。本趟最緊的是 ${t.tightest_due_min ?? '–'} 分鐘後。</li>
          <li>最遲出發 ${hhmm(t.depart_by)} ＝ 對每個<b>來得及</b>的送站各自回推，取最緊的那一個（不是只看第一站）。${t.late_stops && t.late_stops.length ? `<b>${t.late_stops.length} 站趕不上自己的時限</b>：${t.late_stops.slice(0, 3).join('、')}，那幾站要改人力就近補或民眾分流。` : ''}</li>
-         <li>決策到抵達拆段：人員準備與車輛出場 ${S.A.lead_prepare_min ?? 15} 分，行車與裝卸已計入路線與站點作業時間（舊版把 60 分再加一次路程，會重複計算）。最早可抵達第一站 ${hhmm(t.earliest_arrival)}。</li>`
+         <li>決策到抵達拆段：<b>新動員</b>（該組第一趟）要人員到位與車輛出場 ${S.A.lead_prepare_min ?? 15} 分；<b>在勤改道</b>（車已在路上）只需 ${S.A.divert_prepare_min ?? 3} 分切換目的地。行車與裝卸已計入路線與站點作業時間（舊版把 60 分再加一次路程，會重複計算）。兩個前置值都是情境假設，不是實測。最早可抵達第一站 ${hhmm(t.earliest_arrival)}。</li>`
       : `<li>最遲出發 ${hhmm(t.depart_by)} ＝ 目標 ${hhmm(t.target_ts)} − 到<b>第一個</b>送車站的行駛與作業時間。後段站點不保證同樣準時。</li>
          <li>決策到抵達至少 ${S.A.lead_time_min} 分；最早可抵達 ${hhmm(t.earliest_arrival)}。<span style="color:var(--bad)">（逐站服務時限與前置拆段需重啟伺服器後生效）</span></li>`}
     </ul></details>`;
@@ -821,6 +824,8 @@ function openInfo(k) {
     <tr><td>站上作業</td><td>${A.handling_fixed_min} 分＋${A.handling_per_bike_min} 分/輛</td><td>每台 YouBike 重 21.3 公斤（公開）</td></tr>
     <tr><td>決策到抵達</td><td>≥ ${A.lead_time_min} 分</td><td>使用者確認的現場前置時間</td></tr>
     <tr><td>趟次間整備</td><td>${HANDOVER} 分</td><td>本頁排班用</td></tr>
+    <tr><td>新動員前置</td><td>${A.lead_prepare_min ?? 15} 分</td><td>該組第一趟：人員到位＋車輛出場。<b>情境值，非實測</b></td></tr>
+    <tr><td>在勤改道前置</td><td>${A.divert_prepare_min ?? 3} 分</td><td>車已在路上，只切換目的地。<b>情境值，非實測</b></td></tr>
     <tr><td>調度車碳排</td><td>${CO2_TRUCK} kg CO2e/km</td><td>3.5 噸級柴油貨車概估，正式數字須引用環境部公告</td></tr>
     <tr><td>車與人的位置</td><td>沿排定路線推算</td><td>未接車機 GPS</td></tr>
     <tr><td>現場回報</td><td>本機示範</td><td>重新整理即消失；正式版應寫入後端與 DynamoDB</td></tr></table>`);
