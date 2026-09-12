@@ -17,12 +17,17 @@ const ISSUES = [
   { k: 'traffic', t: '交通壅塞', asset: null, ticket: false },
   { k: 'weather', t: '天候中斷', asset: null, ticket: false }];
 const CREW_ST = { on: '在勤', meal: '用餐', rest: '休息', off: '下班' };
+const TK_FLOW = ['reported', 'accepted', 'on_site', 'recovered', 'verified', 'closed'];
+const TK_LABEL = { reported: '已受理', accepted: '班組接單', on_site: '現場檢查', recovered: '已處理', verified: '驗收復役', closed: '結案' };
+const TK_NEXT = { reported: 'accepted', accepted: 'on_site', on_site: 'recovered', recovered: 'verified', verified: 'closed' };
+const ASSET_TXT = { bike: '車輛', dock: '車柱', station: '站端系統', unknown: '待判定' };
+const ESCALATE = { cross_district: '跨區支援', accept_delay: '接受延誤並通知', divert_only: '無可派資源，改民眾分流' };
 const SERVICE_TARGET_MIN = 30;   // 主管訪談輸入：空站約 30 分鐘可接受（非官方 SLA，見 docs/DIRECTION_REVIEW_2026-09-12.md）
 const HAV = (a, b) => { const R = 6371000, r = Math.PI / 180;
   const x = (b[0] - a[0]) * r, y = (b[1] - a[1]) * r * Math.cos((a[0] + b[0]) / 2 * r);
   return Math.sqrt(x * x + y * y) * R; };
 
-const S = { base: null, stations: [], tasks: [], A: null, tickets: [], flow: [], clock: null, scen: '',
+const S = { base: null, stations: [], tasks: [], A: null, tickets: [], flow: [], cycle: null, clock: null, scen: '',
   view: 'ops', dist: '', sel: null, alloc: {}, manual: [], reports: [], actuals: {}, crewState: {},
   routes: {}, sched: null, briefs: {}, mseq: 0, alerts: [], leftTab: 'tasks', peak: 'am' };
 
@@ -44,6 +49,9 @@ function initAlloc() {
 function crewsOf(d) { return S.alloc[d] || 0; }
 function moverGroups(d) { return Math.max(1, Math.round((baseDistrict(d).movers || 0) / MOVER_PER_GROUP)); }
 function repairGroups(d) { return Math.max(1, Math.round((baseDistrict(d).repair || 0) / MOVER_PER_GROUP)); }
+function repairCrewIds(d) { return [...Array(repairGroups(d))].map((_, i) => `${short(d)}維修${i + 1}組`); }
+function allRepairCrews() { return FOCUS.flatMap(repairCrewIds); }
+function crewBusy(id) { return S.tickets.filter(t => t.crew === id && !['closed', 'verified'].includes(t.status)).length; }
 function crewId(d, n) { return `${short(d)}${n}車`; }
 function crewStatus(id) { return S.crewState[id] || 'on'; }
 function setCrew(id, v) { S.crewState[id] = v; render(); log(`${id} 狀態改為 ${CREW_ST[v]}`, 'crew'); }
@@ -426,14 +434,22 @@ function moverCard(m) {
     <div class="sub">${m.from.name} → ${m.to.name}</div>
     <div class="rs">騎 ${m.qty} 輛・${m.dist_m} m・約 ${m.minutes} 分・零碳排</div></div>`;
 }
+function assetTxt(t) {
+  if (t.bike_no) return `車號 ${t.bike_no}`;
+  if (t.dock_id) return `${t.dock_id} 號柱`;
+  return '無資產識別';
+}
 function ticketCard(t) {
-  const TKS = { reported: '回報', accepted: '接單', on_site: '現場', recovered: '回收', verified: '驗收', closed: '結案' };
-  const idx = S.flow.findIndex(f => f.key === t.status);
-  return `<div class="task ${t.status === 'closed' ? 'done' : 'repair'} ${S.sel === t.id ? 'sel' : ''}" onclick="sel('${t.id}')">
-    <div class="hd"><b>${t.id}・${t.station}</b><span class="pill">${TKS[t.status] || t.status}</span></div>
-    <div class="sub">${t.issue}${t.bike_no ? `・車號 ${t.bike_no}` : ''}${t.reports > 1 ? `・合併 ${t.reports} 次` : ''}</div>
-    <div class="stepper" style="margin-top:6px">${S.flow.map((f, i) => `<div class="st ${i < idx ? 'done' : (i === idx ? 'cur' : '')}"><i></i>${TKS[f.key]}</div>`).join('')}</div>
-    <div class="rs">${String(t.ts).slice(11, 16)} 回報・${t.assignee}</div></div>`;
+  const idx = TK_FLOW.indexOf(t.status);
+  const pend = t.diagnosis === 'pending_triage';
+  const st = S.stations.find(x => x.sid === t.sid);
+  return `<div class="task ${t.status === 'closed' ? 'done' : (pend ? 'iso' : 'repair')} ${S.sel === t.id ? 'sel' : ''}" onclick="sel('${t.id}')">
+    <div class="hd"><b>${t.id}・${t.station}</b><span class="pill">${TK_LABEL[t.status] || t.status}</span></div>
+    <div class="sub">${ASSET_TXT[t.asset_type] || '設備'}｜${assetTxt(t)}　${t.issue}</div>
+    <div class="stepper" style="margin-top:5px">${TK_FLOW.map((k, i) => `<div class="st ${i < idx ? 'done' : (i === idx ? 'cur' : '')}"><i></i>${TK_LABEL[k]}</div>`).join('')}</div>
+    <div class="rs">${String(t.ts).slice(11, 16)} 受理${t.reports > 1 ? `・合併 ${t.reports} 次` : ''}${st ? `・該站現有 ${st.bikes ?? '–'} 輛` : ''}
+      ${t.crew ? `・<b>${t.crew}</b>${t.eta ? ` ETA ${t.eta}` : ''}` : '・<b style="color:var(--bad)">未指派</b>'}
+      ${pend ? '・<b style="color:var(--bad)">待診斷</b>' : ''}</div></div>`;
 }
 function emptyCard(s) {
   return `<div class="task ${s._isolated ? 'iso' : 'empty'}" onclick="openMover(${s.sid})">
@@ -450,10 +466,19 @@ function renderList() {
     box.innerHTML = `<div class="xs muted" style="margin-bottom:6px">早尖峰有 <b>${coverPct() ?? '–'}%</b> 的缺車站在 500 公尺內還有車可借（我們的資料算出來），所以小缺口的第一手段是人力就近補，不出動貨車。</div>`
       + (m.length ? m.map(moverCard).join('') : '<div class="muted small">目前沒有人力任務，到「缺車站」分頁指派。</div>')
       + (done.length ? `<div class="ghdr">已完成<span class="pill">${done.length}</span></div>` + done.slice(0, 5).map(moverCard).join('') : ''); return; }
-  if (tab === 'repair') { const open = repairTasks(), closed = S.tickets.filter(t => t.status === 'closed');
-    box.innerHTML = `<div class="xs muted" style="margin-bottom:6px">民眾端回報與調度員現場回報都進到這裡，同站同類型 2 小時內合併為一張單。<span class="badge sim">接單、維修、驗收為模擬</span></div>`
-      + (open.length ? open.map(ticketCard).join('') : '<div class="muted small">目前沒有待處理的維修工單</div>')
-      + (closed.length ? `<div class="ghdr">已結案<span class="pill">${closed.length}</span></div>` + closed.slice(0, 5).map(ticketCard).join('') : ''); return; }
+  if (tab === 'repair') {
+    const open = repairTasks(), closed = S.tickets.filter(t => t.status === 'closed');
+    const pend = open.filter(t => t.diagnosis === 'pending_triage');
+    const unassigned = open.filter(t => t.diagnosis !== 'pending_triage' && !t.crew);
+    const doing = open.filter(t => t.diagnosis !== 'pending_triage' && t.crew);
+    const sec = (title, items, note) => items.length ? `<div class="ghdr">${title}<span class="pill">${items.length}</span>${note ? `<span class="xs muted">${note}</span>` : ''}</div>` + items.map(ticketCard).join('') : '';
+    box.innerHTML = `<div class="xs muted" style="margin-bottom:6px">去重依<b>車號 &gt; 柱號 &gt; 站點＋問題類別</b>；同站兩台不同車不會被合併。維修班組可直接派查，不必等調度貨車到場才發現。</div>`
+      + sec('🔎 待診斷（證據不足）', pend, '不確定是哪個設備，先派人現場確認')
+      + sec('🔧 待派查', unassigned, '明確設備問題，可直接指派班組')
+      + sec('🚐 處理中', doing)
+      + sec('✅ 已結案', closed.slice(0, 5))
+      || '<div class="muted small">目前沒有維修工單</div>';
+    return; }
   if (tab === 'empty') { const es = emptyStations();
     const iso = es.filter(s => s._isolated).length;
     box.innerHTML = `<div class="xs muted" style="margin-bottom:6px">納管三區中現在 0 輛、或 60 分鐘後零車機率 ≥60% 的站，孤立站排最前面。<br>其中 <b style="color:var(--bad)">${iso} 站</b>在 500 公尺內找不到 3 輛以上可調，人力補不了。</div>`
@@ -558,13 +583,70 @@ function detailMover(m) {
   drawMover(m);
 }
 function detailTicket(t) {
-  const TKS = { reported: '已回報', accepted: '授權店家接單', on_site: '現場處理中', recovered: '已回收／維修', verified: '驗收復役', closed: '結案' };
-  const idx = S.flow.findIndex(f => f.key === t.status);
-  $('detail').innerHTML = `<div class="row wrap"><b style="font-size:15px">${t.id}｜${t.station}</b><span class="pill">${TKS[t.status]}</span></div>
-    <div class="small" style="margin-top:6px">${t.issue}${t.bike_no ? `・車號 ${t.bike_no}` : ''}${t.reports > 1 ? `・合併 ${t.reports} 次回報` : ''}</div>
-    <div class="stepper" style="margin:10px 0">${S.flow.map((f, i) => `<div class="st ${i < idx ? 'done' : (i === idx ? 'cur' : '')}"><i></i>${TKS[f.key].slice(0, 4)}</div>`).join('')}</div>
-    ${(t.history || []).map(h => `<div class="logrow"><span class="t">${h.ts.slice(11, 16)}</span><span>${h.label}</span></div>`).join('')}
-    <div class="xs muted" style="margin-top:8px">指派 ${t.assignee}。<span class="badge sim">接單、維修、驗收復役為模擬流程</span></div>`;
+  const idx = TK_FLOW.indexOf(t.status);
+  const st = S.stations.find(x => x.sid === t.sid);
+  const nxt = TK_NEXT[t.status];
+  const pend = t.diagnosis === 'pending_triage';
+  const ev = [];
+  (t.sources || []).forEach(x => ev.push(`${String(x.ts).slice(11, 16)}　來源 ${x.source}／可信度 ${{ stated: '用戶自述', observed: 'AI 影像觀察', confirmed: '現場確認' }[x.certainty] || x.certainty}`));
+  (t.error_codes || []).forEach(c => ev.push(`錯誤碼 ${c}`));
+  (t.report_ids || []).forEach(r => ev.push(`民眾回報 ${r}`));
+  (t.evidence || []).forEach(x => ev.push(typeof x === 'string' ? x : JSON.stringify(x)));
+  $('detail').innerHTML = `
+    <div class="row wrap"><b style="font-size:15px">${t.id}｜${t.station}</b><span class="pill">${TK_LABEL[t.status]}</span>
+      ${pend ? '<span class="badge high">待診斷</span>' : '<span class="badge warn">可直接派修</span>'}<span style="flex:1"></span>
+      <span class="xs muted">v${t.version || 1}</span></div>
+    <div class="big">
+      <div><div class="v" style="font-size:13px">${ASSET_TXT[t.asset_type] || '待判定'}</div><div class="l">${assetTxt(t)}</div></div>
+      <div><div class="v" style="font-size:13px">${t.crew || '未指派'}</div><div class="l">負責班組${t.eta ? `・ETA ${t.eta}` : ''}</div></div>
+      <div><div class="v">${st ? (st.bikes ?? '–') : '–'}</div><div class="l">該站現有車數（影響評估）</div></div></div>
+    <div class="eff"><span>位置：${st ? `${short(st.district)}・${st.lat.toFixed(4)}, ${st.lon.toFixed(4)}` : '—'}</span><span>回報 ${t.reports || 1} 次</span><span>${String(t.ts).slice(5, 16)}</span></div>
+    <div class="stepper" style="margin:10px 0">${TK_FLOW.map((k, i) => `<div class="st ${i < idx ? 'done' : (i === idx ? 'cur' : '')}"><i></i>${TK_LABEL[k]}</div>`).join('')}</div>
+    <div class="row wrap" style="gap:5px">
+      ${t.status === 'reported' ? `<button class="small primary" onclick="openAssign('${t.id}')">指派維修班組</button>` : ''}
+      ${nxt && t.status !== 'reported' ? `<button class="small primary" onclick="ticketAct('${t.id}','${nxt}')">推進到「${TK_LABEL[nxt]}」</button>` : ''}
+      ${t.status === 'recovered' ? '<span class="xs muted">處理完成不等於驗收，要另外按驗收復役</span>' : ''}
+    </div>
+    <div style="margin-top:10px"><b class="small">證據</b> <span class="badge grey">AI 影像觀察是證據，不是現場驗收</span></div>
+    ${ev.length ? ev.map(x => `<div class="logrow"><span>${x}</span></div>`).join('') : '<div class="muted small">目前只有用戶自述，沒有其他證據</div>'}
+    <div style="margin-top:10px"><b class="small">處理歷程</b></div>
+    ${(t.history || []).map(h => `<div class="logrow"><span class="t">${String(h.ts).slice(11, 16)}</span><span>${h.label}</span></div>`).join('')}
+    <div class="xs muted" style="margin-top:8px">
+      設備驗收狀態：<b>${{ suspect: '疑似異常', confirmed_faulty: '已確認故障', repaired: '已處理未驗收', verified_ok: '驗收通過', not_applicable: '不適用' }[t.asset_state] || t.asset_state}</b>；
+      用戶坐墊標記：<b>${{ done: '已反轉', skipped: '未操作', not_applicable: '不適用', unknown: '未回報' }[(t.saddle_marker || {}).status] || '未回報'}</b>（僅現場提醒，非維修確認）。
+      <span class="badge sim">沒有遠端停租介接，本工具只排除推薦，不會鎖車</span></div>`;
+}
+function openAssign(tid) {
+  const t = S.tickets.find(x => x.id === tid); if (!t) return;
+  const crews = allRepairCrews();
+  showModal(`指派維修班組｜${t.id} ${t.station}`, `
+    <div class="small">${ASSET_TXT[t.asset_type]}｜${assetTxt(t)}　${t.issue}</div>
+    <div class="xs muted" style="margin:6px 0">交通局確認維修量能足夠，瓶頸在發現與定位。所以這裡直接派具資格且就近的班組，不等調度貨車到場才發現。</div>
+    <label class="xs" style="display:block;margin-top:6px">班組
+      <select id="as_crew" style="font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;width:100%">
+        ${crews.map(c => `<option value="${c}">${c}（處理中 ${crewBusy(c)} 件）</option>`).join('')}
+      </select></label>
+    <label class="xs" style="display:block;margin-top:6px">預計到場時間（沒有把握就留空，不要填假的）
+      <input id="as_eta" placeholder="HH:MM" style="font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;width:110px"></label>
+    <div style="text-align:right;margin-top:10px"><button class="small" onclick="closeModal()">取消</button>
+      <button class="small primary" onclick="doAssign('${tid}')">派查</button></div>`);
+}
+async function doAssign(tid) {
+  const t = S.tickets.find(x => x.id === tid); if (!t) return;
+  const crew = ($('as_crew') || {}).value, eta = (($('as_eta') || {}).value || '').trim();
+  closeModal();
+  await ticketAct(tid, 'accepted', { crew, eta: eta || null });
+}
+async function ticketAct(tid, to, extra) {
+  const t = S.tickets.find(x => x.id === tid); if (!t) return;
+  try {
+    const r = await API.post(`/api/ops/tickets/${tid}/transition`, { to, version: t.version, actor: '派車端', ...(extra || {}) });
+    log(`${tid} ${TK_LABEL[to]}${(extra || {}).crew ? `・${extra.crew}` : ''}`, 'crew', { tid });
+    Toasts.show(`${tid} → ${TK_LABEL[to]}`, r.crew ? `${r.crew}${r.eta ? `・ETA ${r.eta}` : ''}` : '', 'task');
+  } catch (e) {
+    Toasts.show('推進失敗', '版本可能已被其他人更新，畫面重新整理後再試（409）', 'warn');
+  }
+  await loadTickets();
 }
 function detailGap(t) {
   $('detail').innerHTML = `<div class="row between"><b style="font-size:14px">${t.district}｜${t.horizon} 分鐘後缺口</b><span class="badge real">真實計算</span></div>
@@ -573,9 +655,41 @@ function detailGap(t) {
   ${(t.alternatives || []).map(a => `<div class="stop"><div class="no" style="background:var(--brand2)">↪</div><div><b>${a.name}</b><br><span class="muted">${t.horizon} 分後預測 ${a.pred_bikes} 輛</span></div></div>`).join('')}`;
 }
 function detailBlocked(t) {
+  const e = t.escalation;
   $('detail').innerHTML = `<div class="row between"><b style="font-size:14px">${t.id}｜${t.district}</b><span class="pill">${LAB[t.status] || t.status}</span></div>
   <div class="brief">${String(t.reason).replace('缺口僅 0 輛', '缺口不足 1 輛')}</div>
-  <div class="xs muted" style="margin-top:6px">目標時間 ${hhmm(t.target_ts)}・提前 ${t.horizon} 分鐘評估。此類任務不占用車組，改以人力就近補、鄰站引導或跨區支援處理。</div>`;
+  <div class="xs muted" style="margin-top:6px">目標時間 ${hhmm(t.target_ts)}・提前 ${t.horizon} 分鐘評估。跨區與逾時由<b>營運端主責</b>，政府端可追蹤但不另建第二套派車任務。</div>
+  ${e ? `<div class="brief" style="margin-top:8px;background:#f1f7ff"><b>已決定：${ESCALATE[e.plan]}</b>${e.eta ? `・ETA ${e.eta}` : '・不提供 ETA（無可派資源）'}<br>
+      <span class="xs muted">${e.reason || ''}　${e.ts} 由 ${e.owner} 決定，已同步政府端</span></div>`
+    : `<div style="margin-top:10px"><b class="small">處理方案</b>
+      <div class="xs muted" style="margin:4px 0">沒有可派人車就選「改民眾分流」，<b>不要編一個到不了的 ETA</b>。</div>
+      <div class="row wrap" style="gap:5px">
+        <button class="small primary" onclick="openEscalate('${t.id}','cross_district')">跨區支援</button>
+        <button class="small" onclick="openEscalate('${t.id}','accept_delay')">接受延誤並通知</button>
+        <button class="small" onclick="openEscalate('${t.id}','divert_only')">無可派資源，改分流</button>
+      </div></div>`}`;
+}
+function openEscalate(tid, plan) {
+  const needEta = plan === 'cross_district';
+  showModal(`處理方案｜${ESCALATE[plan]}`, `
+    <div class="xs muted">選定後會記錄負責人與時間，並同步通知政府端。政府端只追蹤，不會另外建立派車任務。</div>
+    ${needEta ? `<label class="xs" style="display:block;margin-top:8px">跨區車輛預計到場時間（必填，沒有可派資源請改選其他方案）
+      <input id="es_eta" placeholder="HH:MM" style="font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;width:110px"></label>` : ''}
+    <label class="xs" style="display:block;margin-top:6px">說明
+      <input id="es_reason" style="font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;width:100%"></label>
+    <div id="es_err" class="xs" style="color:var(--bad);margin-top:6px"></div>
+    <div style="text-align:right;margin-top:10px"><button class="small" onclick="closeModal()">取消</button>
+      <button class="small primary" onclick="doEscalate('${tid}','${plan}')">確定</button></div>`);
+}
+async function doEscalate(tid, plan) {
+  const eta = (($('es_eta') || {}).value || '').trim(), reason = (($('es_reason') || {}).value || '').trim();
+  if (plan === 'cross_district' && !eta) { $('es_err').textContent = '跨區支援必須填實際可行的到場時間；沒有可派資源請改選「改分流」。'; return; }
+  try {
+    await API.post(`/api/ops/tasks/${tid}/escalate`, { plan, eta: eta || null, reason, owner: '微笑單車調度中心' });
+    closeModal(); log(`${tid} 處理方案：${ESCALATE[plan]}${eta ? `・ETA ${eta}` : '・無 ETA'}`, 'crew', { tid });
+    Toasts.show('已記錄處理方案並同步政府端', ESCALATE[plan] + (eta ? `・ETA ${eta}` : '・不提供 ETA'), 'task');
+    await loadTasks();
+  } catch (e) { $('es_err').textContent = '伺服器拒絕：跨區支援必須帶可行的 ETA。'; }
 }
 async function detail(fetchRoute) {
   const id = S.sel; if (!id) return;
@@ -717,7 +831,34 @@ function render() {
   initAlloc(); schedule(); renderCity(); renderKpis(); renderGantt(); renderTabs(); chips(); renderList(); drawLive(); detail(false);
 }
 function sel(id) { S.sel = id; render(); detail(true); }
-async function act(id, a) { await API.post(`/api/tasks/${id}/${a}`); log(`${id} ${a === 'confirm' ? '派工確認' : a === 'dispatch_now' ? '立即出車' : '取消'}`, 'crew'); await loadTasks(); }
+async function act(id, a) {
+  const t = S.tasks.find(x => x.id === id);
+  const map = { confirm: 'confirm', dispatch_now: 'dispatch', cancel: 'cancel' };
+  const action = map[a] || a;
+  try {
+    const r = await API.post(`/api/ops/tasks/${id}/${action}`, { version: t ? t.res_version : undefined, actor: '調度員' });
+    log(`${id} ${ { confirm: '派工確認，資源轉為已確認', dispatch: '立即出車，資源轉為在途', cancel: '取消，資源已釋放' }[action] }`
+        + (r.reservations_changed ? `（${r.reservations_changed} 筆預約）` : ''), 'crew', { tid: id });
+  } catch (e) {
+    Toasts.show('動作失敗', '版本可能已被更新（409），畫面會重新載入', 'warn');
+  }
+  await loadTasks(); await loadCycle();
+}
+async function loadCycle() { try { S.cycle = await API.get('/api/ops/cycle'); } catch (e) { S.cycle = null; } }
+function openCycle() {
+  const c = S.cycle;
+  if (!c) return showModal('資源帳', '<div class="muted small">尚未取得資源帳（伺服器可能還沒載入派車端端點，需重啟一次）。</div>');
+  const rows = c.by_station.filter(r => (r.candidate + r.confirmed + r.in_transit) > 0)
+    .sort((a, b) => (b.candidate + b.confirmed + b.in_transit) - (a.candidate + a.confirmed + a.in_transit)).slice(0, 25);
+  showModal(`規劃週期資源帳｜${c.cycle}`, `
+    <div class="small">回放時刻 ${c.ts}・已規劃尺度 ${c.horizons.join('／')} 分・預約 ${c.reservations} 筆</div>
+    <div class="xs muted" style="margin:6px 0">可用量＝原始可用量 − 候選 − 已確認 − 在途。取消才會釋放；重算只釋放候選，不會把已確認的承諾吃掉。</div>
+    <table><tr><th>站點</th><th>類型</th><th>候選</th><th>已確認</th><th>在途</th><th>已釋放</th></tr>
+    ${rows.map(r => `<tr><td>${r.station || r.sid}</td><td>${r.kind === 'supply' ? '抽車' : '送車'}</td>
+      <td class="mono">${r.candidate || 0}</td><td class="mono">${r.confirmed || 0}</td>
+      <td class="mono">${r.in_transit || 0}</td><td class="mono muted">${r.released || 0}</td></tr>`).join('')}</table>
+    <div class="xs muted" style="margin-top:8px">GET 這份快照不會改變任何狀態。</div>`);
+}
 async function loadTasks() { const d = await API.get('/api/tasks'); S.tasks = d.tasks; S.A = d.assumptions; render(); }
 async function loadStations() { try { const d = await API.get('/api/stations?adjusted=1'); S.stations = d.stations; renderCity(); if (S.leftTab === 'empty') renderList(); } catch (e) { } }
 async function loadTickets() { try { const d = await API.get('/api/tickets'); S.tickets = d.tickets; S.flow = d.flow; render(); } catch (e) { } }
@@ -736,7 +877,7 @@ function renderAlerts() {
 function setPeak(p) { S.peak = p; S.alloc = {}; initAlloc(); render(); }
 
 connectEvents({
-  tick: p => { S.clock = p.clock; $('clock').textContent = '回放時間 ' + p.clock.ts; loadTasks(); loadStations(); loadAlerts(); },
+  tick: p => { S.clock = p.clock; $('clock').textContent = '回放時間 ' + p.clock.ts; loadTasks(); loadStations(); loadAlerts(); loadCycle(); },
   task: () => loadTasks(), ticket: () => loadTickets(), alert: () => loadAlerts(),
   notify: n => { if (n.channel === 'ops') Toasts.show(n.title, n.body, n.kind, n.ts); },
   scenario: s => { S.sel = null; S.manual = []; S.actuals = {}; S.reports = []; S.routes = {}; S.scen = s && s.label ? s.label : ''; $('scen').textContent = S.scen ? '情境：' + S.scen : ''; loadTasks(); loadStations(); loadAlerts(); },
@@ -746,6 +887,6 @@ connectEvents({
   try { S.base = await API.get('/static/ops_baseline.json'); } catch (e) { console.warn('ops_baseline.json 讀取失敗', e); }
   const st = await API.get('/api/state'); S.clock = st.clock; $('clock').textContent = '回放時間 ' + st.clock.ts;
   $('scen').textContent = st.scenario && st.scenario.label ? '情境：' + st.scenario.label : '';
-  await loadTasks(); await loadStations(); await loadTickets(); await loadAlerts();
+  await loadTasks(); await loadStations(); await loadTickets(); await loadAlerts(); await loadCycle();
   const first = truckTrips().sort((a, b) => T(a.depart_by) - T(b.depart_by))[0]; if (first) sel(first.id);
 })();

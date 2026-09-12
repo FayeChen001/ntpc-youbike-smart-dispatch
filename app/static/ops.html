@@ -126,6 +126,7 @@ details.rule summary{cursor:pointer;color:var(--brand);font-size:11.5px}
   <span class="seg row" style="gap:3px"><button class="small on" id="pk-am" onclick="setPeak('am');document.getElementById('pk-am').classList.add('on');document.getElementById('pk-pm').classList.remove('on')">早尖峰</button><button class="small" id="pk-pm" onclick="setPeak('pm');document.getElementById('pk-pm').classList.add('on');document.getElementById('pk-am').classList.remove('on')">晚尖峰</button></span>
   <span class="small" style="color:#9fd3ff">在勤</span><span id="fleetTotal" class="small" style="color:#fff">–</span>
   <button class="small" onclick="resetAlloc()">⚡ 依資料配置</button>
+  <button class="small" onclick="openCycle()">資源帳</button>
   <button class="small" onclick="openInfo('fleet')">編制來源</button>
   <button class="small" onclick="openInfo('rules')">排程依據</button>
   <button class="small" onclick="openInfo('assump')">情境假設</button>

@@ -123,6 +123,48 @@ POST /api/ops/tickets/{ticket_id}/transition
 
 回應帶 `clock_source:"replay"` 與 `ts`（回放時鐘）。
 
+## 6b. 派車任務與資源帳（A 追蹤用）
+
+規劃週期（planning cycle）把每一筆承諾記成預約：
+
+| 狀態 | 意義 | 是否占用資源 |
+|---|---|---|
+| `candidate` | 規劃產生、調度員尚未確認 | 是 |
+| `confirmed` | 調度員確認派工 | 是 |
+| `in_transit` | 已出車 | 是 |
+| `released` | 取消或重算釋放 | **否** |
+
+可用量 ＝ 原始可用量 − 候選 − 已確認 − 在途。重算只釋放**同一尺度的候選**，已確認與在途不會被吃掉。
+
+| 端點 | 說明 |
+|---|---|
+| `GET /api/ops/cycle` | 唯讀資源帳，逐站列候選／已確認／在途／已釋放 |
+| `POST /api/ops/tasks/{id}/confirm` | → confirmed |
+| `POST /api/ops/tasks/{id}/dispatch` | → in_transit |
+| `POST /api/ops/tasks/{id}/cancel` | → released（真的釋放） |
+| `POST /api/ops/tasks/{id}/escalate` | 跨區／逾時由營運端主責 |
+
+任務動作可帶 `version`（任務的 `res_version`），舊版本回 409。
+
+### 跨區與逾時（B 主責，A 追蹤）
+
+```
+POST /api/ops/tasks/{id}/escalate
+{"plan":"cross_district|accept_delay|divert_only","eta":"08:40","reason":"...","owner":"微笑單車調度中心"}
+```
+
+- `cross_district` **沒帶 `eta` 會被擋下（400）**：沒有可派資源就不准生成 ETA。
+- `divert_only` 的 `eta` 是 `null`，代表「無可派人車，改民眾分流」。
+- 三種方案都會 `notify("gov", ...)` 帶 `{task_id, plan, eta, owner}`。
+- **政府端請不要據此另建派車任務**；派工由 B 執行，A 追蹤與協調。
+
+### 每個送車站有自己的服務時限
+
+`stops[]` 裡的 dropoff 會帶 `due_min`／`due_ts`／`on_time`／`late_min`；
+任務層有 `late_stops[]`、`on_time_stops`、`tightest_due_min`。
+一趟裡只要還有站來得及就照送，趕不上的站標紅並改走人力就近補或分流；
+**全部站都趕不上才判定整趟來不及**。
+
 ## 7. 給 C 的串接清單
 
 1. 送 `request_id`（重送用同一個），逾時先 `GET /api/ops/tickets/{id}` 查狀態，不要直接重建。
@@ -152,6 +194,16 @@ POST /api/ops/tickets/{ticket_id}/transition
 | N07 | 舊 version 回 409、重送不重派 | HTTP | **通過** |
 | — | reset 清掉冪等表與資源帳 | HTTP | **通過** |
 | — | 待診斷分流 | HTTP | **通過** `pending=1` 撈得到 |
+| N03 | 來源可供 10、兩站各缺 8 | fixture（手算） | **通過** 抽走 10、送出 10、帳上 ≤10、剩餘缺口明示 6 |
+| N04 | 同週期重算不重扣 | fixture | **通過** 10→10 而非 20；舊候選標 released |
+| N04 | 已確認不被重算釋放 | fixture | **通過** confirmed 保留，合計仍 ≤10 |
+| N04 | 取消釋放、GET 無副作用 | fixture＋HTTP | **通過** 取消後歸零；快照重讀不變 |
+| N05 | 第二站超時、第一站準時 | fixture | **通過** late_stops 只列遠站、on_time_stops=1、理由不宣稱全部準時 |
+| N07 | 任務動作舊版本 409 | HTTP | **通過** |
+| — | 無可行 ETA 時擋下跨區支援 | HTTP＋UI | **通過** 後端 400、前端也擋 |
+| — | 無人可派改分流不產生假 ETA | HTTP＋UI | **通過** `eta=null` |
+| — | 維修派查 → 現場 → 處理 → 驗收 分開 | UI 實操 | **通過** recovered 後 asset_state=repaired 且未結案 |
+| — | 1000×770 版面不破 | UI 量測 | **通過** scrollHeight=clientHeight=770，無水平捲動 |
 
 重現：
 ```bash
@@ -165,5 +217,10 @@ python3 /private/tmp/.../scratchpad/test_http.py       # 24 項 HTTP 整合測�
 - **需重啟 8787 才生效**。目前共用機還是舊碼；以上實測跑在臨時的 8789。
 - `service_state` 目前只有欄位與預設值，尚未接到站點恢復判定。
 - 沒有遠端停租介接：工單只會標記「本工具排除推薦／待查」，**不會聲稱已鎖車**。
-- 官方已扣除的故障車不重複扣庫存——這條在資源帳那邊處理，本輪尚未完成。
+- **官方已扣除的故障車不重複扣庫存：尚未完成。** 目前工單不會回寫站點可借數，也就不會重扣；
+  但也還沒有「官方已扣除」的判定來源，屬未驗證項目。
+- **`service_state` 尚未接到站點恢復判定**，目前恆為 `unknown`。
+- **未確認不整站判不可用：目前沒有任何地方會把整站標成不可用**，符合要求，但也代表
+  「已確認不可用 X／疑似異常 Y」的彙總還沒做（A 線需要的服務可用性）。
+- 維修班組的數量與位置來自 `ops_baseline.json` 的情境拆分（公開資料只有全市 350 人總數）。
 - `evidence[]` 原樣保留但未做內容驗證；圖片本身不進 SSE、不進日誌、不進 Git。
