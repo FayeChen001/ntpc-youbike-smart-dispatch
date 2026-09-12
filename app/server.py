@@ -987,6 +987,9 @@ def api_reset():
     for c in STATE["notifications"]: STATE["notifications"][c].clear()
     STATE["rewards"] = {"points": 0, "seed_points": 0, "demo_seed": False, "stamps": [], "coupons": [], "history": []}; STATE["last_plan_hour"] = None; STATE["last_reminder"] = {}; PRED._cache.clear()
     TK.SERVICE.reset(); PL.ledger_reset()          # B 線自有狀態：建單冪等表、規劃週期資源帳
+    # C 線自有狀態：民眾回報、request_id 冪等表、坐墊標記。不清會留下指向已刪除工單的殘影。
+    try: api_c_reset()
+    except Exception as e: print("[reset] C 狀態清除失敗：%s: %s" % (type(e).__name__, e))
     return {"ok": True}
 
 # ------------------------------------------------------------------ 外部資料：即時 API、藝文活動、模型報告
