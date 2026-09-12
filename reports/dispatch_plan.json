@@ -4,7 +4,7 @@
   "mean_bikes_in_docks": 15971,
   "observed_trips_per_day_lower_bound": 49799,
   "trips_per_bike_per_day": 3.12,
-  "trips_per_dock_per_day": "1.06",
+  "trips_per_dock_per_day": 1.06,
   "note": "以觀測到的庫存下降量估算旅次，為下界；30 分鐘內一借一還會抵銷，零車期間的需求看不到。"
  },
  "prepositioning": {
@@ -412,6 +412,91 @@
      "district": "泰山區",
      "deficit": 12.0,
      "surplus": 70.0
+    },
+    {
+     "district": "鶯歌區",
+     "deficit": 12.0,
+     "surplus": 287.0
+    },
+    {
+     "district": "林口區",
+     "deficit": 11.0,
+     "surplus": 297.0
+    },
+    {
+     "district": "淡水區",
+     "deficit": 8.0,
+     "surplus": 520.0
+    },
+    {
+     "district": "三峽區",
+     "deficit": 8.0,
+     "surplus": 315.0
+    },
+    {
+     "district": "三芝區",
+     "deficit": 0.0,
+     "surplus": 46.0
+    },
+    {
+     "district": "平溪區",
+     "deficit": 0.0,
+     "surplus": 21.0
+    },
+    {
+     "district": "坪林區",
+     "deficit": 0.0,
+     "surplus": 21.0
+    },
+    {
+     "district": "深坑區",
+     "deficit": 0.0,
+     "surplus": 38.0
+    },
+    {
+     "district": "烏來區",
+     "deficit": 0.0,
+     "surplus": 9.0
+    },
+    {
+     "district": "瑞芳區",
+     "deficit": 0.0,
+     "surplus": 71.0
+    },
+    {
+     "district": "石碇區",
+     "deficit": 0.0,
+     "surplus": 16.0
+    },
+    {
+     "district": "石門區",
+     "deficit": 0.0,
+     "surplus": 22.0
+    },
+    {
+     "district": "萬里區",
+     "deficit": 0.0,
+     "surplus": 38.0
+    },
+    {
+     "district": "八里區",
+     "deficit": 0.0,
+     "surplus": 169.0
+    },
+    {
+     "district": "貢寮區",
+     "deficit": 0.0,
+     "surplus": 17.0
+    },
+    {
+     "district": "金山區",
+     "deficit": 0.0,
+     "surplus": 45.0
+    },
+    {
+     "district": "雙溪區",
+     "deficit": 0.0,
+     "surplus": 45.0
     }
    ],
    "trips_needed_cap20": 60,
@@ -821,6 +906,91 @@
      "district": "鶯歌區",
      "deficit": 27.0,
      "surplus": 218.0
+    },
+    {
+     "district": "三峽區",
+     "deficit": 21.0,
+     "surplus": 265.0
+    },
+    {
+     "district": "汐止區",
+     "deficit": 21.0,
+     "surplus": 176.0
+    },
+    {
+     "district": "淡水區",
+     "deficit": 15.0,
+     "surplus": 321.0
+    },
+    {
+     "district": "瑞芳區",
+     "deficit": 10.0,
+     "surplus": 31.0
+    },
+    {
+     "district": "雙溪區",
+     "deficit": 9.0,
+     "surplus": 0.0
+    },
+    {
+     "district": "石門區",
+     "deficit": 7.0,
+     "surplus": 0.0
+    },
+    {
+     "district": "五股區",
+     "deficit": 7.0,
+     "surplus": 132.0
+    },
+    {
+     "district": "萬里區",
+     "deficit": 6.0,
+     "surplus": 15.0
+    },
+    {
+     "district": "平溪區",
+     "deficit": 6.0,
+     "surplus": 0.0
+    },
+    {
+     "district": "坪林區",
+     "deficit": 4.0,
+     "surplus": 0.0
+    },
+    {
+     "district": "石碇區",
+     "deficit": 4.0,
+     "surplus": 1.0
+    },
+    {
+     "district": "三芝區",
+     "deficit": 3.0,
+     "surplus": 32.0
+    },
+    {
+     "district": "烏來區",
+     "deficit": 3.0,
+     "surplus": 0.0
+    },
+    {
+     "district": "金山區",
+     "deficit": 1.0,
+     "surplus": 38.0
+    },
+    {
+     "district": "八里區",
+     "deficit": 0.0,
+     "surplus": 131.0
+    },
+    {
+     "district": "深坑區",
+     "deficit": 0.0,
+     "surplus": 35.0
+    },
+    {
+     "district": "貢寮區",
+     "deficit": 0.0,
+     "surplus": 17.0
     }
    ],
    "trips_needed_cap20": 94,
@@ -840,7 +1010,7 @@
  "dead_capacity": {
   "stations": 41,
   "docks_locked": 1117,
-  "pct_of_city_docks": "2.4",
+  "pct_of_city_docks": 2.4,
   "top": [
    {
     "sid": 1522,

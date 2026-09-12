@@ -833,7 +833,7 @@ def api_trip_start(body: dict):
         STATE["choice_log"].append(o["kind"])
         last = STATE["choice_log"][-2:]
         if len(last) == 2 and last[0] == last[1] and last[0] != STATE["profile"]["preference"]:
-            STATE["pref_prompt"] = {"kind": last[0], "label": {"fast": "準時抵達", "reliable": "一定借得到", "reward": "多集點"}.get(last[0], last[0])}
+            STATE["pref_prompt"] = {"kind": last[0], "label": {"fast": "準時抵達", "reliable": "不用怕沒車沒位", "reward": "多集點"}.get(last[0], last[0])}
     trip = {"active": True, "id": uuid.uuid4().hex[:8], "kind": o["kind"], "started": iso(n), "phase": "walk_to_borrow",
             "option": o, "bike_no": f"YB2-{np.random.randint(10000, 99999)}", "report": None,
             "km": round(o["legs"][1]["dist_m"] / 1000, 2), "points": o.get("points", 0)}

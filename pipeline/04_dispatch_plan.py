@@ -51,7 +51,7 @@ for wname,(a,b) in WIN.items():
       "total_surplus_bikes":round(float(df.surplus.sum())),
       "top_deficit":df.nlargest(20,"deficit")[["sid","district","name","cap","stock","need","deficit","zero_share"]].to_dict("records"),
       "top_surplus":df.nlargest(15,"surplus")[["sid","district","name","cap","stock","need","surplus"]].to_dict("records"),
-      "by_district":df.groupby("district").agg(deficit=("deficit","sum"),surplus=("surplus","sum")).round(0).query("deficit>0 or surplus>0").sort_values("deficit",ascending=False).head(12).reset_index().to_dict("records")}
+      "by_district":df.groupby("district").agg(deficit=("deficit","sum"),surplus=("surplus","sum")).round(0).query("deficit>0 or surplus>0").sort_values("deficit",ascending=False).reset_index().to_dict("records")}
     df.to_csv(f"{R}/prepos_{'am' if a<20 else 'pm'}.csv",index=False)
 out["prepositioning"]=plan
 

@@ -19,6 +19,7 @@ body{background:#fff;max-width:430px;margin:0 auto;height:100vh;display:flex;fle
 h1.big{font-size:25px;margin:2px 18px 3px;letter-spacing:-.5px;line-height:1.22;font-weight:800;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .sub{margin:0 18px 14px;color:var(--sub);font-size:12.5px}
+.dest.hide{display:none}.fromline.hide{display:none}
 .top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid transparent;transition:border-color .2s}
 .top.stuck{border-bottom-color:var(--line2)}
 /* 卡片 */
@@ -140,7 +141,25 @@ nav button .bdg{position:absolute;top:5px;right:calc(50% - 20px);background:#d64
 .fromline b{color:var(--ink);font-weight:600}
 .fromline .edit{color:#0f5fa8;cursor:pointer}
 /* 方案切換：顯眼的三段式 */
-.seg{display:flex;gap:6px;margin:0 18px 10px}
+.seg{display:none}
+/* 通勤時段的通知卡 */
+.alert-head{display:flex;align-items:center;gap:9px;padding:13px 15px;background:linear-gradient(135deg,#0f5fa8,#1478c9);color:#fff}
+.alert-head .ic{font-size:20px}
+.alert-head .t{font-size:15.5px;font-weight:800;letter-spacing:-.3px}
+.alert-head .s{font-size:11.5px;opacity:.9;margin-top:1px}
+.wxline{display:flex;align-items:center;gap:8px;padding:10px 15px;font-size:12.5px;border-bottom:1px solid #eef1f5;color:#3a4553}
+.wxline.rain{background:#eaf3fb}.wxline.dry{background:#f6faf7}
+.card-wrap{border:1px solid var(--line2);border-radius:18px;overflow:hidden;margin-bottom:10px;background:#fff;
+  box-shadow:0 2px 6px rgba(15,95,168,.08),0 14px 34px rgba(15,95,168,.12)}
+.card-wrap .body{padding:15px}
+/* 替代方案：一行 */
+.altline{display:flex;align-items:center;gap:8px;margin:0 18px 12px;padding:12px 14px;border:1px solid #e2e7ee;border-radius:13px;
+  background:#fff;cursor:pointer;font-size:13px;transition:border-color .12s,transform .12s}
+.altline:active{transform:scale(.99)}.altline:hover{border-color:#b9c9dd}
+.altline .e{font-size:16px}.altline .tx{flex:1;line-height:1.45}.altline .tx b{font-weight:700}
+.altline .go{color:var(--sub);font-size:15px}
+.altline.back{background:#f7f9fc;border-style:dashed}
+.linkline{margin:0 18px 14px;font-size:12.5px;color:#0f5fa8;cursor:pointer;display:inline-block}
 .seg button{flex:1;border:1.5px solid var(--line2);background:#fff;border-radius:14px;padding:11px 4px 10px;text-align:center;cursor:pointer;line-height:1.25;
   transition:transform .12s,border-color .12s,background .12s;position:relative}
 .seg button:active{transform:scale(.97)}
@@ -176,15 +195,17 @@ nav button .bdg{position:absolute;top:5px;right:calc(50% - 20px);background:#d64
   <div class="scroll">
     <div id="notices"></div>
     <h1 class="big" id="greet">早安</h1><p class="sub" id="greet2"></p>
-    <div class="dest">
+    <div class="dest" id="dest">
       <div class="destbox"><span>🔍</span><input id="dest-input" placeholder="要去哪裡？輸入地點或站名" autocomplete="off"
         oninput="onDestInput()" onfocus="onDestInput()"><span id="dest-clear" style="display:none;cursor:pointer;color:var(--sub)" onclick="clearDest()">✕</span></div>
       <div id="sug"></div>
       <div class="chips" id="dest-chips"></div>
     </div>
     <div class="fromline" id="fromline"></div>
-    <div class="seg" id="seg"></div>
     <div class="pad" id="home-body"></div>
+    <div id="alt-line"></div>
+    <div id="switch-line"></div>
+    <div class="pad" id="near-wrap"></div>
     <div class="hint" id="home-hint"></div>
   </div>
 </section>
@@ -235,7 +256,7 @@ const OB=[
   <div class="pick">${[[true,'🏅','加入','幫忙分流可累積點數、集章與商家優惠'],[false,'🚫','先不要','只做路線推薦，不顯示獎勵']].map(([k,e,t,d])=>
     `<div class="opt ${S.ob.join_rewards===k?'sel':''}" onclick="S.ob.join_rewards=${k};obRender()"><div class="e">${e}</div><div><div class="tt">${t}</div><div class="dd">${d}</div></div></div>`).join('')}</div>
   <label class="fl">推薦時預設先看哪一種</label>
-  <div class="pick">${[['time','⏱','準時抵達','總時間最短'],['reliable','🛡','一定借得到','借不到或還不了的風險最低'],['reward','🎯','多集點','優先推薦有獎勵的借還']].map(([k,e,t,d])=>
+  <div class="pick">${[['time','⏱','準時抵達','總時間最短'],['reliable','🛡','不用怕沒車沒位','借不到或還不了的風險最低'],['reward','🎯','多集點','優先推薦有獎勵的借還']].map(([k,e,t,d])=>
     `<div class="opt ${S.ob.preference===k?'sel':''}" onclick="S.ob.preference='${k}';obRender()"><div class="e">${e}</div><div><div class="tt">${t}</div><div class="dd">${d}</div></div></div>`).join('')}</div>
   <div class="hint" style="padding:4px 0 0">每次規劃時三種方案都看得到，可以隨時切換。</div>`
 ];
@@ -307,7 +328,7 @@ function renderChips(){
   const list=[{title:'🏠 '+(p.home?p.home.name:'家'),place:homePlace()},{title:(p.role==='student'?'🎒 ':'🏢 ')+(p.work?p.work.name:'公司'),place:workPlace()}]
     .concat((p.recent_places||[]).map(x=>({title:'🕘 '+x.title,place:{title:x.title,lat:x.lat,lon:x.lon,key:'recent'}})));
   $('dest-chips').innerHTML=list.map((x,i)=>`<div class="chip2 ${x.place.title===cur?'on':''}" onclick="pickPlace(${JSON.stringify(x.place).replace(/"/g,'&quot;')})">${x.title}</div>`).join(''); }
-function pickPlace(pl){ S.dest=pl; $('dest-input').value=''; $('sug').innerHTML=''; $('dest-clear').style.display='none';
+function pickPlace(pl){ S.dest=pl; S.userPickedDest=true; S.forceExplore=true; $('dest-input').value=''; $('sug').innerHTML=''; $('dest-clear').style.display='none';
   if(S.origin && Math.abs(S.origin.lat-pl.lat)<1e-6 && Math.abs(S.origin.lon-pl.lon)<1e-6) S.origin = pl.key==='home'? workPlace() : homePlace();
   renderChips(); renderFromLine(); refreshHome(); }
 function clearDest(){ $('dest-input').value=''; $('sug').innerHTML=''; $('dest-clear').style.display='none'; }
@@ -322,41 +343,81 @@ async function pickSearch(r){ const pl={title:r.title,lat:r.lat,lon:r.lon,key:'s
   S.profile=await API.get('/api/profile'); pickPlace(pl); }
 
 /* ================= 現在頁 ================= */
+const LBL={fast:'最快抵達',reliable:'不用怕沒車沒位',reward:'順路集點',alt:'其他選擇'};
+function mins(t){ return +t.slice(0,2)*60 + +t.slice(3,5); }
+function homeMode(){
+  if(S.forceExplore) return 'explore';
+  const p=S.profile, now=mins(S.clock.ts.slice(11,16));
+  const near=t=> now>=mins(t)-60 && now<=mins(t)+30;
+  return (near(p.out_time)||near(p.back_time))? 'commute':'explore';
+}
 async function refreshHome(){
-  if(!S.dest) setDefaultOD();
+  const mode=homeMode(); S.mode=mode;
+  if(mode==='commute' && !S.userPickedDest) setDefaultOD();
+  if(!S.dest){ renderExploreEmpty(); return; }
   const date=S.clock.ts.slice(0,10);
-  $('greet').textContent = `去 ${S.dest.title.replace(' 一帶','')}`;
-  $('greet2').textContent = `${S.departTime} 出發・${S.origin.title} → ${S.dest.title}`;
-  renderChips(); renderFromLine();
-  $('seg').innerHTML=['fast','reliable','reward'].map(()=>'<button disabled><span class="sk" style="display:block;height:38px;border-radius:9px"></span></button>').join('');
-  $('home-body').innerHTML='<div class="main-card"><div class="sk sk-big"></div><div class="sk sk-line" style="width:88%"></div><div class="sk sk-line" style="width:76%"></div><div class="sk sk-line" style="width:60%"></div><div class="sk" style="height:48px;margin-top:14px"></div></div>';
+  $('dest').classList.toggle('hide', mode==='commute');
+  $('fromline').classList.toggle('hide', mode==='commute');
+  if(mode==='commute'){
+    const c=timeCtx();
+    $('greet').textContent=`${c.time} 要${c.label}`;
+    $('greet2').textContent=`${S.origin.title} → ${S.dest.title}`;
+  } else {
+    $('greet').textContent='要去哪裡？';
+    $('greet2').textContent=S.dest? `${S.origin.title} → ${S.dest.title}`:'輸入地點或選常去的地方';
+    renderChips(); renderFromLine();
+  }
+  $('home-body').innerHTML='<div class="card-wrap"><div class="body"><div class="sk sk-big"></div><div class="sk sk-line" style="width:88%"></div><div class="sk sk-line" style="width:76%"></div><div class="sk sk-line" style="width:60%"></div><div class="sk" style="height:48px;margin-top:14px"></div></div></div>';
   const [plan,near]=await Promise.all([
     API.post('/api/plan',{origin:[S.origin.lat,S.origin.lon],dest:[S.dest.lat,S.dest.lon],depart_ts:`${date} ${S.departTime}`,preference:S.profile.preference}),
     API.get(`/api/nearby?lat=${S.origin.lat}&lon=${S.origin.lon}&r=900`)]);
-  S.plan=plan; S.near=near; S.wx=plan.weather||near.weather; renderWx(); S.sel=0; renderHome();
+  S.plan=plan; S.near=near; S.wx=plan.weather||near.weather; S.reasons=null; S.reasonSrc=null; renderWx(); S.sel=0; renderHome();
   if(plan.explain_id) pollExplain(plan.explain_id);
 }
+function renderExploreEmpty(){
+  S.mode='explore'; $('dest').classList.remove('hide'); $('fromline').classList.add('hide');
+  $('greet').textContent='要去哪裡？'; $('greet2').textContent='輸入地點，或選常去的地方';
+  renderChips(); $('home-body').innerHTML=''; $('alt-line').innerHTML=''; S.plan=null; S.reasons=null;
+  $('switch-line').innerHTML=`<span class="linkline" onclick="S.forceExplore=false;S.userPickedDest=false;setDefaultOD();refreshHome()">回到通勤路線 ›</span>`;
+  $('home-hint').innerHTML='';
+  API.get(`/api/nearby?lat=${S.profile.home_pos[0]}&lon=${S.profile.home_pos[1]}&r=900`).then(n=>{ S.near=n; renderNear(); });
+}
 function riskDot(p){ return `<span class="dot" style="background:${riskColor(p)}"></span>`; }
+/* 依情況只提供一個替代方案 */
+function altOffer(){
+  const r=S.plan; if(!r||!r.options||r.options.length<2) return null;
+  const cur=r.options[S.sel];
+  if(S.sel!==0){ const home=r.options[0]; const d=+(home.total_min-cur.total_min).toFixed(1);
+    return {i:0,back:true,e:'↩︎',text:`回到<b>${LBL[home.kind]||home.label}</b>的路線（${d>0?`多 ${d} 分`:d<0?`少 ${-d} 分`:'時間一樣'}）`}; }
+  const risky = cur.borrow.p_empty>=0.25 || cur.return.p_full>=0.25;
+  const idx=k=>r.options.findIndex((o,i)=>i!==S.sel && o.kind===k);
+  const iSafe=idx('reliable'), iRew=idx('reward'), iAlt=r.options.findIndex((o,i)=>i!==S.sel);
+  const mk=(i,e,fn)=>{ const o=r.options[i]; const d=+(o.total_min-cur.total_min).toFixed(1);
+    const dt=d>0?`多 ${d} 分`:d<0?`少 ${-d} 分`:'時間一樣'; return {i,e,text:fn(o,dt)}; };
+  if(risky && iSafe>=0) return mk(iSafe,'🛡',(o,dt)=>`這站可能借不到？<b>${dt}</b>，換一條<b>不用怕沒車沒位</b>`);
+  if(iRew>=0 && r.options[iRew].points>0) return mk(iRew,'🏅',(o,dt)=>`想多集點？<b>${dt}</b>可得 <b>${o.points} 點</b>`);
+  if(iSafe>=0) return mk(iSafe,'🛡',(o,dt)=>`想更保險？<b>${dt}</b>，<b>不用怕沒車沒位</b>`);
+  if(iAlt>=0) return mk(iAlt,'🔀',(o,dt)=>`換個組合？<b>${dt}</b>，${o.diff||'不同借還站'}`);
+  return null;
+}
 function renderHome(){
   const r=S.plan,n=S.near; if(!r) return;
-  if(!r.options||!r.options.length){ $('seg').innerHTML=''; $('home-body').innerHTML=`<div class="main-card">${r.error||'這段距離找不到合適的借還組合'}</div>`; drawMini(); return; }
-  // 方案切換
-  $('seg').innerHTML=['fast','reliable','reward'].map(k=>{
-    const i=r.options.findIndex(o=>o.kind===k||(o.also||[]).includes(KIND[k].t)||(o.also||[]).includes({fast:'最快抵達',reliable:'借還較穩',reward:'順路集點'}[k]));
-    const o=i>=0?r.options[i]:null;
-    const dup = o && r.options.filter(x=>x===o).length>=1 && (o.also||[]).length>0 && o.kind!==k;
-    return `<button class="${i===S.sel?'on':''}" ${o?'':'disabled'} onclick="S.sel=${i};renderHome()">
-      ${dup?'<span class="same">同一條</span>':''}
-      <span class="e">${KIND[k].e}</span><span class="t">${KIND[k].t}</span>
-      <span class="m">${o?`${Math.round(o.total_min)} 分${o.points?`・+${o.points}`:''}`:'無'}</span></button>`; }).join('');
-  const o=r.options[S.sel]; const ev=(n&&n.events&&n.events[0])||null;
+  if(!r.options||!r.options.length){ $('home-body').innerHTML=`<div class="card-wrap"><div class="body">${r.error||'這段距離找不到合適的借還組合'}</div></div>`+nearHtml(); drawMini(); return; }
+  const o=r.options[S.sel]; const ev=(n&&n.events&&n.events[0])||null; const c=timeCtx();
+  const wet=S.wx&&S.wx.is_raining;
   let html='';
   if(S.trip&&S.trip.active) html+=`<div class="main-card" style="border-left:4px solid #0aa47a"><b>行程進行中</b><div class="small muted">${S.trip.option.return.name}</div><button class="btn sec" style="margin-top:8px" onclick="go('nav')">繼續導航</button></div>`;
   const far=o.legs[1].dist_m>8000;
   if(far) html+=`<div class="banner note"><div>🚇</div><div>這段騎乘 ${(o.legs[1].dist_m/1000).toFixed(1)} 公里，單車可能不是最好的選擇，建議搭捷運或公車再接一段。</div></div>`;
   if(ev) html+=`<div class="banner ev"><div>🎤</div><div><b>附近有活動</b>：${ev.title}<br>${ev.hint}</div></div>`;
-  if(S.wx&&S.wx.is_raining) html+=`<div class="banner rain"><div>🌧</div><div><b>外面在下雨</b>（${S.wx.rain_mm} 毫米）。記得雨具，騎乘時間已加計 ${Math.round(((((r.weather||{})._factor||{}).time||1.18)-1)*100)}%。</div></div>`;
-  html+=`<div class="main-card pri">
+  // 主卡：通勤時段做成通知卡，其他時段是一般卡
+  html+=`<div class="card-wrap">`;
+  if(S.mode==='commute') html+=`<div class="alert-head"><span class="ic">⏰</span><div><div class="t">${c.time} 要${c.label}</div><div class="s">${S.origin.title} → ${S.dest.title}</div></div></div>`;
+  html+=`<div class="wxline ${wet?'rain':'dry'}"><span>${wxIcon(S.wx)}</span><div>${wet
+      ? `<b>外面在下雨</b>（${S.wx.rain_mm} 毫米），記得雨具。騎乘時間已加計 ${Math.round(((((r.weather||{})._factor||{}).time||1.18)-1)*100)}%。`
+      : (S.wx&&S.wx.will_rain_3h? `目前沒下雨，未來三小時可能有雨。${S.wx.temp}°C` : `外面沒下雨，${S.wx?S.wx.temp:'–'}°C`)}</div></div>
+    <div class="body">
+    <div>${[LBL[o.kind]||o.label].concat((o.also||[])).map(t=>`<span class="tag ${t.includes('集點')?'o':t.includes('沒車')?'g':''}">${t}</span>`).join(' ')}</div>
     <div class="eta"><span class="n">${Math.round(o.total_min)}</span><span class="u">分鐘</span><span class="arr">${hhmm(o.eta)} 抵達</span></div>
     <div class="steps">
       <div class="step"><div class="ic">🚶</div><div class="tx"><b>${o.legs[0].minutes>=0.5?`走 ${o.legs[0].minutes} 分`:'就在旁邊'}</b>到 ${o.borrow.name}<div class="st">${riskDot(o.borrow.p_empty)}到站時預估 ${o.borrow.expected_bikes} 輛可借（現在 ${o.borrow.bikes_now??'–'} 輛）</div></div></div>
@@ -364,22 +425,32 @@ function renderHome(){
       ${o.legs[2].minutes>=0.5?`<div class="step"><div class="ic">🚶</div><div class="tx"><b>走 ${o.legs[2].minutes} 分</b>到 ${S.dest.title.replace(' 一帶','')}</div></div>`
         :`<div class="step"><div class="ic">🎯</div><div class="tx"><b>還車站就是目的地</b><div class="st">不用再走</div></div></div>`}
     </div>
-    ${(o.also&&o.also.length)?`<div style="margin-top:9px"><span class="tag n">這條同時是 ${[KIND[o.kind].t].concat(o.also.map(a=>({'最快抵達':'最快','借還較穩':'最穩','順路集點':'集點','集點最多':'集點'}[a]||a))).join(' 與 ')}</span></div>`:''}
     ${o.points?`<div style="margin-top:9px;display:flex;align-items:center;gap:7px;background:linear-gradient(90deg,#fff8e9,#fffdf7);border:1px solid #f3e2b8;border-radius:11px;padding:9px 11px">
       <span style="font-size:17px">🏅</span><div style="font-size:12.5px;line-height:1.4"><b>完成可得 ${o.points} 點</b><br><span style="color:var(--sub);font-size:11px">還到預測會缺車的站，幫忙分流</span></div></div>`:''}
-    <div id="reason" style="font-size:12px;color:#41505f;background:#f7f9fc;border-radius:10px;padding:9px;margin-top:10px">${o.reason||''}</div>
-    <button class="btn big" style="margin-top:12px" onclick="startTrip()">出發</button></div>`;
-  if(n){ const a=n.area;
-    html+=`<div class="near"><div class="hd"><span>${a.key==='easy'?'🟢':a.key==='normal'?'🟡':'🟠'}</span><b>${a.text}</b>
+    <div id="reason" style="font-size:12px;color:#41505f;background:#f7f9fc;border-radius:10px;padding:9px;margin-top:10px">${(()=>{
+        const rr=S.reasons&&S.reasons[S.sel]; const txt=typeof rr==='string'?rr:(rr&&(rr.reason||rr.text))||null;
+        return txt? `${txt} ${srcBadge(S.reasonSrc)}` : (o.reason||''); })()}</div>
+    <button class="btn big" style="margin-top:12px" onclick="startTrip()">出發</button>
+    </div></div>`;
+  $('home-body').innerHTML=html;
+  const alt=altOffer();
+  $('alt-line').innerHTML = alt? `<div class="altline ${alt.back?'back':''}" onclick="S.sel=${alt.i};renderHome()"><span class="e">${alt.e}</span><span class="tx">${alt.text}</span><span class="go">›</span></div>`:'';
+  $('switch-line').innerHTML = S.mode==='commute'
+    ? `<span class="linkline" onclick="S.forceExplore=true;S.userPickedDest=false;S.dest=null;refreshHome()">改去別的地方 ›</span>`
+    : `<span class="linkline" onclick="S.forceExplore=false;S.userPickedDest=false;setDefaultOD();refreshHome()">回到通勤路線 ›</span>`;
+  $('near-wrap').innerHTML=nearHtml();
+  $('home-hint').innerHTML=`已評估 ${r.candidates_considered} 種借還組合，其中 ${r.routed_candidates} 組取真實路網比較${r.pruned_by_bound?`（${r.pruned_by_bound} 組以直線下界排除，不可能更快）`:''}。納入${(r.includes||[]).join('、')}。<br>${n?n.definition:''}<br>天氣：${S.wx&&S.wx.source?S.wx.source:'—'}`;
+  drawMini();
+}
+function nearHtml(){ const n=S.near; if(!n) return '';
+  const a=n.area;
+  return `<div class="near"><div class="hd"><span>${a.key==='easy'?'🟢':a.key==='normal'?'🟡':'🟠'}</span><b>${a.text}</b>
       <span class="m">附近 ${a.stations_counted} 站・可借 ${a.bikes_total} 輛／${a.capacity_total} 柱</span></div>
       <div id="mapmini"></div>
       <div style="padding:9px 13px;font-size:11.5px;color:var(--sub);cursor:pointer" onclick="$('nlist').classList.toggle('on')">查看附近每一站 ▾</div>
       <div class="nlist" id="nlist">${n.stations.slice(0,14).map(s=>`<div class="nrow"><span class="dot" style="background:${s.ease.color}"></span><span class="nm">${s.name}</span>
         <span style="color:var(--sub)">走 ${Math.round(s.walk_min)} 分</span><b>${s.bikes??'–'}</b><span style="color:var(--sub)">輛／${s.spaces??'–'} 位</span></div>`).join('')}</div></div>`; }
-  $('home-body').innerHTML=html;
-  $('home-hint').innerHTML=`已評估 ${r.candidates_considered} 種借還組合，納入${(r.includes||[]).join('、')}。預設先看「${{time:'準時抵達',reliable:'一定借得到',reward:'多集點'}[S.profile.preference]}」，可在上方切換。<br>${n?n.definition:''}<br>天氣：${S.wx&&S.wx.source?S.wx.source:'—'}`;
-  drawMini();
-}
+function renderNear(){ $('near-wrap').innerHTML=nearHtml(); drawMini(); }
 function drawMini(){ const n=S.near,o=S.plan&&S.plan.options&&S.plan.options[S.sel]; const box=$('mapmini'); if(!n||!box) return;
   // 每次重繪首頁都會產生新的容器，舊的地圖物件會指向已脫離文件的節點
   if(mapMini && mapMini.getContainer() !== box){ try{ mapMini.remove(); }catch(e){} mapMini=null; }
@@ -391,7 +462,7 @@ function drawMini(){ const n=S.near,o=S.plan&&S.plan.options&&S.plan.options[S.s
   if(o){ const b=L.circleMarker([o.borrow.lat,o.borrow.lon],{radius:9,color:'#0f5fa8',weight:3,fillColor:'#fff',fillOpacity:1}).bindTooltip('建議借車：'+o.borrow.name); b.addTo(mapMini); g.push(b); }
   setTimeout(()=>{ mapMini.invalidateSize(); if(g.length) mapMini.fitBounds(L.featureGroup(g).getBounds().pad(.15)); },60); }
 async function pollExplain(eid){ for(let k=0;k<14;k++){ await new Promise(r=>setTimeout(r,700));
-  try{ const e=await API.get('/api/explain/'+eid); if(e.ready){ const rr=e.reasons&&e.reasons[S.sel];
+  try{ const e=await API.get('/api/explain/'+eid); if(e.ready){ S.reasons=e.reasons; S.reasonSrc=e.source; const rr=e.reasons&&e.reasons[S.sel];
       const txt = typeof rr==='string'? rr : (rr && (rr.reason||rr.text||rr.description)) || null;
       if(txt && $('reason')) $('reason').innerHTML=`${txt} ${srcBadge(e.source)}`; return; } }catch(err){ return; } } }
 
@@ -510,7 +581,7 @@ async function loadWallet(){ const w=await API.get('/api/wallet'); const mx=Math
   <div class="hint">${Object.entries(w.assumptions).map(([k,v])=>`${k.replace(/_/g,' ')}：${v}`).join('<br>')}</div>`; }
 
 /* ================= 我的 ================= */
-async function loadMe(){ const p=await API.get('/api/profile'); S.profile=p; const PR={time:'準時抵達',reliable:'一定借得到',reward:'多集點'};
+async function loadMe(){ const p=await API.get('/api/profile'); S.profile=p; const PR={time:'準時抵達',reliable:'不用怕沒車沒位',reward:'多集點'};
   const ios=/iPhone|iPad|iPod/.test(navigator.userAgent);
   $('me-body').innerHTML=`<h1 class="big" style="margin-top:16px">我的設定</h1><div style="height:8px"></div>
   <div class="mrow"><div class="l">身分</div><div class="v">${p.role==='student'?'學生':'上班族'}</div></div>
@@ -526,7 +597,7 @@ async function loadMe(){ const p=await API.get('/api/profile'); S.profile=p; con
     <button class="btn" style="margin-top:8px" onclick="installApp()">加到手機或桌面主畫面</button>
     <button class="btn ghost" style="margin-top:8px" onclick="S.obStep=0;S.ob={...S.ob,role:p.role,home_sid:p.home_sid,work_sid:p.work_sid,out_time:p.out_time,back_time:p.back_time,join_rewards:p.join_rewards,preference:p.preference};go('onboard');obRender()">重新設定常用地點</button></div>
   <div class="hint">通知為頁內模擬推播，不是手機系統推播。${ios?'iPhone 請用 Safari 分享選單的「加入主畫面」。':''}</div>`; }
-function editPref(){ const PR=[['time','⏱','準時抵達'],['reliable','🛡','一定借得到'],['reward','🎯','多集點']];
+function editPref(){ const PR=[['time','⏱','準時抵達'],['reliable','🛡','不用怕沒車沒位'],['reward','🎯','多集點']];
   openSheet(`<h3>預設先看哪一種</h3><p>三種方案每次都看得到，這只決定預設。</p><div class="pick">${PR.map(([k,e,t])=>`<div class="opt ${S.profile.preference===k?'sel':''}" onclick="setPref('${k}')"><div class="e">${e}</div><div class="tt">${t}</div></div>`).join('')}</div>`); }
 async function setPref(k){ S.profile=await API.post('/api/profile',{preference:k}); closeSheet(); loadMe(); pushNotice({title:'已更新',body:'下次規劃會用新的預設',kind:'info',ts:S.clock.ts}); }
 async function reportPassingBike(){
@@ -570,7 +641,7 @@ async function boot(reload){
   const w=await API.get('/api/weather'); S.wx=w.replay; renderWx();
   const t=await API.get('/api/trip'); S.trip=t.active?t:null;
   if(!p.onboarded){ S.ob={role:'worker',home_sid:null,work_sid:null,out_time:'07:40',back_time:'18:10',join_rewards:true,preference:'time'}; go('onboard'); obRender(); return; }
-  $('nav-bar').style.display=''; S.dest=null; setDefaultOD();
+  $('nav-bar').style.display=''; S.dest=null; S.userPickedDest=false; S.forceExplore=false; setDefaultOD();
   const q=new URLSearchParams(location.search);
   if(q.get('tab')==='wallet'){ go('wallet'); } else go('home');
   await refreshHome();

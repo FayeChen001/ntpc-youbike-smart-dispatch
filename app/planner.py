@@ -344,7 +344,7 @@ def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_rewar
 
     def pack(b, kind):
         c = b["c"]; pts = int(min(30, round(b["benefit"] * 20))) if kind == "reward" else 0
-        return {"kind": kind, "label": {"fast": "最快抵達", "reliable": "借還最穩", "reward": "順路集點"}.get(kind, "其他選擇"),
+        return {"kind": kind, "label": {"fast": "最快抵達", "reliable": "不用怕沒車沒位", "reward": "順路集點"}.get(kind, "其他選擇"),
                 "borrow": {"sid": int(c["borrow"].sid), "name": c["borrow"]["name"], "lat": float(c["borrow"].lat), "lon": float(c["borrow"].lon),
                            "bikes_now": None if np.isnan(c["borrow"].bikes) else int(c["borrow"].bikes), "cap": int(c["borrow"].cap),
                            "expected_bikes": round(b["eb"], 1), "p_empty": round(b["pe"], 2), "arrive_in_min": round(b["t_borrow_min"])},
@@ -360,7 +360,7 @@ def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_rewar
     for b, kind in chosen:
         key = id(b)
         if key in by_id:                      # 同一條路線同時滿足多個標準
-            o = by_id[key]; o.setdefault("also", []).append({"fast": "最快抵達", "reliable": "借還最穩", "reward": "順路集點"}[kind])
+            o = by_id[key]; o.setdefault("also", []).append({"fast": "最快抵達", "reliable": "不用怕沒車沒位", "reward": "順路集點"}[kind])
             if kind == "reward": o["points"] = int(min(30, round(b["benefit"] * 20)))
             continue
         o = pack(b, kind); by_id[key] = o; opts.append(o)
@@ -386,7 +386,7 @@ def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_rewar
     opts.sort(key=lambda o: order.index(o["kind"]) if o["kind"] in order else 9)
     if opts:
         opts[0]["primary"] = True
-        opts[0]["primary_reason"] = {"time": "你設定最在意準時抵達", "reliable": "你設定最在意一定借得到", "reward": "你設定最在意多集點"}.get(preference, "")
+        opts[0]["primary_reason"] = {"time": "你設定最在意準時抵達", "reliable": "你設定最在意不用怕沒車沒位", "reward": "你設定最在意多集點"}.get(preference, "")
         base = opts[0]["total_min"]
         for o in opts[1:]:
             o["primary"] = False; o["delta_min"] = round(o["total_min"] - base, 1); o["delta_points"] = o["points"] - opts[0]["points"]
