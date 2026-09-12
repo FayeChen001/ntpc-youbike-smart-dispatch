@@ -44,6 +44,9 @@
   2026-09-12 就發生過一次——某一線 commit server.py 時掃走了政府端還沒寫完的端點，卻沒有一起帶到對應的
   `app/events.py` 與 import，導致 main 上的 `/api/ledger` 直接 NameError。
   **每個 hunk 都確認是自己的才 add；看到別人的區塊就先在 chat 講，不要自己決定要不要一起 commit。**
+- **別人有 staged 但還沒 commit 的檔案時，不要直接 `git commit`。** `git status --short` 第一欄是 `M`
+  代表已進 index，直接 commit 會把那些檔案一起帶走。改用 `git commit -- <你的檔案路徑>`，只提交指定路徑、
+  不動 index（注意：新檔要先 `git add`，pathspec 對未追蹤檔無效）。
 - **禁止** `git stash`、`git checkout .`、`git reset --hard`、`git clean`、`git switch`、`git restore`。
 - commit 前先 `git status --short`，確認你 add 的只有自己的檔；別人的 `M` 留在那裡不要碰。
 - commit 後直接 `git push origin main`。不需要 pull；若 push 被拒，代表有人在 GitHub 上直接改了，先問過再處理。
@@ -65,9 +68,11 @@
 
 - [x] 驗收指標面板（服務中斷事件上下界、告警門檻取捨、流程時效、量不出來的四項）— `b717fe5`
 - [x] **事件台帳**（`376c15f`）：分級 P0／P1／長期／待查、觀測下界與上界、最後資料時間、負責人、ETA、原因與證據、狀態留痕。站群同時失效以 500 公尺鄰站關係認定，不是以行政區。API 是 `/api/ledger`（`/api/events` 已被 SSE 端點佔用）。
+- [x] **第二輪數值口徑**（`12ca2d8`）：觀測跨度不等於連續中斷、未知上界保留未知、候選觸發量不等於通知量、ack 不等於指派。手算 fixture 見 `tests/test_a_numeric.py`。
+- [x] **全域儀表板、事件版本與冪等、通知情境預覽**（`9d64929`、`320547c`）：供需／資料新鮮度／設備待查三欄／任務與未覆蓋缺口；`POST /api/ledger/{id}/action` 帶 version 與 request_id。
 - [ ] **主管決策卡**：方案 A／B 比較（就近改道 vs 跨區支援，各自的抵達時間、受影響站點、延後代價），選完保存決策、理由、任務版本與時間，避免雙重派工。
-- [x] **原因時間線**（`376c15f`）：資料過期／設備故障／需求暴增／沒排到任務／區內無供給／已排但趕不上／已派車行進中，每一項都連到證據（觀測時間、工單、活動情境、任務 ID）。推不出證據就標「待查」，不猜。
 - [ ] **服務可用性**：官方可借 N／已確認不可用 X／疑似異常 Y／確認時間（需要 C 線的症狀回報彙總）。
+- [ ] **接 B 的 planning cycle**：把候選／確認／在途與資源帳顯示到全域儀表板。詳見 `docs/HANDOFF_A.md` 的阻擋清單。
 
 ### B 派車端
 
