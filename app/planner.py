@@ -413,7 +413,7 @@ def plan_dispatch(pred, now_ts, horizon, scenario_delta=None, districts=None, ex
     return tasks
 
 # ---------- 民眾端：三方案 ----------
-def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_reward=True, nb_sids=None, weather=None, preference="time"):
+def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_reward=True, nb_sids=None, weather=None, preference="time", arrive_by=None):
     A = ASSUMPTIONS
     wf = weather.get("_factor") if weather else None
     t_mult = (wf or {}).get("time", 1.0); r_mult = (wf or {}).get("risk", 1.0)
@@ -548,15 +548,35 @@ def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_rewar
         for o in opts:
             if o["kind"] != "fast" and o["legs"][0]["minutes"] > max_walk_min:
                 o["note"] = (o.get("note", "") + " 附近站散場後預測都缺車，多走幾分鐘到備援站較穩").strip()
+    # 抵達期限：算每個方案的餘裕。會遲到的方案排在後面，也不會被當成準時推薦。
+    deadline = None
+    if arrive_by:
+        try:
+            deadline = pd.Timestamp(arrive_by) if " " in str(arrive_by) else \
+                pd.Timestamp(f"{pd.Timestamp(depart_ts).date()} {arrive_by}")
+        except Exception:
+            deadline = None
+    if deadline is not None:
+        for o in opts:
+            eta = pd.Timestamp(o["eta"])
+            o["slack_min"] = round((deadline - eta).total_seconds() / 60, 1)
+            o["late"] = o["slack_min"] < 0
+            o["deadline"] = str(deadline)
+            o["latest_depart"] = str(deadline - pd.Timedelta(minutes=o["total_min"]))
+
     order = {"time": ["fast", "reliable", "reward", "alt"], "reliable": ["reliable", "fast", "reward", "alt"], "reward": ["reward", "reliable", "fast", "alt"]}.get(preference, ["fast", "reliable", "reward", "alt"])
-    opts.sort(key=lambda o: order.index(o["kind"]) if o["kind"] in order else 9)
+    opts.sort(key=lambda o: ((1 if o.get("late") else 0), order.index(o["kind"]) if o["kind"] in order else 9))
     if opts:
         opts[0]["primary"] = True
         opts[0]["primary_reason"] = {"time": "你設定最在意準時抵達", "reliable": "你設定最在意不用怕沒車沒位", "reward": "你設定最在意多集點"}.get(preference, "")
         base = opts[0]["total_min"]
         for o in opts[1:]:
             o["primary"] = False; o["delta_min"] = round(o["total_min"] - base, 1); o["delta_points"] = o["points"] - opts[0]["points"]
+    on_time = [o for o in opts if not o.get("late")]
     return {"options": opts, "preference": preference, "weather_applied": (wf or {}).get("label"), "extended_search": extended,
+            "arrive_by": str(deadline) if deadline is not None else None,
+            "any_on_time": (bool(on_time) if deadline is not None else None),
+            "deadline_note": ("所有方案都會晚於你設定的抵達時間，下面顯示的是最接近的。" if (deadline is not None and not on_time) else None),
             "candidates_considered": len(cands), "routed_candidates": len(built), "pruned_by_bound": pruned,
             "assumptions": {k: ASSUMPTIONS[k] for k in ["walk_kmh", "ride_kmh", "reroute_penalty_min", "intent_conversion"]}}
 

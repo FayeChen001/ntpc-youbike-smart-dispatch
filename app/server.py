@@ -636,7 +636,8 @@ def api_plan(body: dict):
     depart = pd.Timestamp(body.get("depart_ts") or now_ts())
     w = wx_now(); pref = body.get("preference") or STATE["profile"]["preference"]
     res = PL.plan_trip(apply_dispatch_to_pred(apply_event_to_pred(current_pred())), origin, dest, depart, now_ts(),
-                       int(body.get("max_walk_min") or STATE["profile"]["max_walk_min"]), weather=w, preference=pref)
+                       int(body.get("max_walk_min") or STATE["profile"]["max_walk_min"]), weather=w, preference=pref,
+                       arrive_by=body.get("arrive_by"))
     res["weather"] = w
     res["includes"] = ["模型預測", "已登記意向×0.7"] + (["雨天時間與風險加成"] if w.get("is_raining") else []) + (["活動情境需求"] if STATE["scenario"].get("event") else []) + (["已排程補車（執行為模擬）"] if any(tk["status"] in ("planned", "dispatched", "en_route") for tk in STATE["tasks"]) else [])
     res["ts"] = iso(now_ts()); res["depart_ts"] = iso(depart); res["origin"] = origin; res["dest"] = dest

@@ -341,7 +341,12 @@ function renderFromLine(){
   const alt = S.origin.key==='home'? workPlace() : homePlace();
   $('fromline').innerHTML = `從 <b>${S.origin.title}</b> 出發　<input type="time" value="${S.departTime}" onchange="S.departTime=this.value;refreshHome()"
     style="border:1px solid #e2e7ee;border-radius:8px;padding:3px 6px;font:inherit;font-size:12px">
-    <span class="edit" onclick="S.origin=${S.origin.key==='home'?'workPlace()':'homePlace()'};renderFromLine();refreshHome()">改從${alt.title.replace(' 一帶','')}出發</span>`; }
+    <span class="edit" onclick="S.origin=${S.origin.key==='home'?'workPlace()':'homePlace()'};renderFromLine();refreshHome()">改從${alt.title.replace(' 一帶','')}出發</span>
+    <br>${S.arriveBy?`要在 <input type="time" value="${S.arriveBy}" onchange="S.arriveBy=this.value;refreshHome()"
+      style="border:1px solid #e2e7ee;border-radius:8px;padding:3px 6px;font:inherit;font-size:12px"> 前到
+      <span class="edit" onclick="S.arriveBy=null;refreshHome()">取消期限</span>`
+     :`<span class="edit" onclick="S.arriveBy=defaultDeadline();refreshHome()">＋ 設定幾點前要到</span>`}`; }
+function defaultDeadline(){ const m=mins(S.departTime)+45; return String(Math.floor(m/60)%24).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
 function renderChips(){
   const p=S.profile; const cur=S.dest?S.dest.title:'';
   const list=[{title:'🏠 '+(p.home?p.home.name:'家'),place:homePlace()},{title:(p.role==='student'?'🎒 ':'🏢 ')+(p.work?p.work.name:'公司'),place:workPlace()}]
@@ -376,7 +381,7 @@ async function refreshHome(){
   if(!S.dest){ renderExploreEmpty(); return; }
   const date=S.clock.ts.slice(0,10);
   $('dest').classList.toggle('hide', mode==='commute');
-  $('fromline').classList.toggle('hide', mode==='commute');
+  $('fromline').classList.remove('hide'); renderFromLine();
   if(mode==='commute'){
     const c=timeCtx();
     $('greet').textContent=`${c.time} 要${c.label}`;
@@ -388,7 +393,7 @@ async function refreshHome(){
   }
   $('home-body').innerHTML='<div class="card-wrap"><div class="body"><div class="sk sk-big"></div><div class="sk sk-line" style="width:88%"></div><div class="sk sk-line" style="width:76%"></div><div class="sk sk-line" style="width:60%"></div><div class="sk" style="height:48px;margin-top:14px"></div></div></div>';
   const [plan,near]=await Promise.all([
-    API.post('/api/plan',{origin:[S.origin.lat,S.origin.lon],dest:[S.dest.lat,S.dest.lon],depart_ts:`${date} ${S.departTime}`,preference:S.profile.preference}),
+    API.post('/api/plan',{origin:[S.origin.lat,S.origin.lon],dest:[S.dest.lat,S.dest.lon],depart_ts:`${date} ${S.departTime}`,preference:S.profile.preference,arrive_by:S.arriveBy||null}),
     API.get(`/api/nearby?lat=${S.origin.lat}&lon=${S.origin.lon}&r=900`)]);
   S.plan=plan; S.near=near; S.wx=plan.weather||near.weather; S.reasons=null; S.reasonSrc=null; renderWx(); S.sel=0; renderHome();
   if(plan.explain_id) pollExplain(plan.explain_id);
@@ -412,7 +417,8 @@ function altOffer(){
   const idx=k=>r.options.findIndex((o,i)=>i!==S.sel && o.kind===k);
   const iSafe=idx('reliable'), iRew=idx('reward'), iAlt=r.options.findIndex((o,i)=>i!==S.sel);
   const mk=(i,e,fn)=>{ const o=r.options[i]; const d=+(o.total_min-cur.total_min).toFixed(1);
-    const dt=d>0?`多 ${d} 分`:d<0?`少 ${-d} 分`:'時間一樣'; return {i,e,text:fn(o,dt)}; };
+    const dt=(d>0?`多 ${d} 分`:d<0?`少 ${-d} 分`:'時間一樣')+(o.slack_min!=null?(o.late?`，會遲到 ${Math.abs(o.slack_min)} 分`:`，仍有 ${o.slack_min} 分餘裕`):'');
+    return {i,e,text:fn(o,dt)}; };
   if(risky && iSafe>=0) return mk(iSafe,'🛡',(o,dt)=>`這站可能借不到？<b>${dt}</b>，換一條<b>不用怕沒車沒位</b>`);
   if(iRew>=0 && r.options[iRew].points>0) return mk(iRew,'🏅',(o,dt)=>`想多集點？<b>${dt}</b>可得 <b>${o.points} 點</b>`);
   if(iSafe>=0) return mk(iSafe,'🛡',(o,dt)=>`想更保險？<b>${dt}</b>，<b>不用怕沒車沒位</b>`);
@@ -428,6 +434,7 @@ function renderHome(){
   if(S.trip&&S.trip.active) html+=`<div class="main-card" style="border-left:4px solid #0aa47a"><b>行程進行中</b><div class="small muted">${S.trip.option.return.name}</div><button class="btn sec" style="margin-top:8px" onclick="go('nav')">繼續導航</button></div>`;
   const far=o.legs[1].dist_m>8000;
   if(far) html+=`<div class="banner note"><div>🚇</div><div>這段騎乘 ${(o.legs[1].dist_m/1000).toFixed(1)} 公里，單車可能不是最好的選擇，建議搭捷運或公車再接一段。</div></div>`;
+  if(r.deadline_note) html+=`<div class="banner note"><div>⏰</div><div>${r.deadline_note}</div></div>`;
   if(ev) html+=`<div class="banner ev"><div>🎤</div><div><b>附近有活動</b>：${ev.title}<br>${ev.hint}</div></div>`;
   // 主卡：通勤時段做成通知卡，其他時段是一般卡
   html+=`<div class="card-wrap">`;
@@ -438,6 +445,9 @@ function renderHome(){
     <div class="body">
     <div>${[LBL[o.kind]||o.label].concat((o.also||[])).map(t=>`<span class="tag ${t.includes('集點')?'o':t.includes('沒車')?'g':''}">${t}</span>`).join(' ')}</div>
     <div class="eta"><span class="n">${Math.round(o.total_min)}</span><span class="u">分鐘</span><span class="arr">${hhmm(o.eta)} 抵達</span></div>
+    ${o.slack_min!=null?`<div style="margin:2px 0 0;font-size:12.5px;color:${o.late?'#a12626':'#15683a'}">
+      ${o.late?`⚠️ 比 ${hhmm(o.deadline)} 的期限<b>晚 ${Math.abs(o.slack_min)} 分</b>`
+              :`⏱ 在 ${hhmm(o.deadline)} 前到，<b>餘裕 ${o.slack_min} 分</b>　最晚 ${hhmm(o.latest_depart)} 出發`}</div>`:''}
     <div class="steps">
       <div class="step"><div class="ic">🚶</div><div class="tx"><b>${o.legs[0].minutes>=0.5?`走 ${o.legs[0].minutes} 分`:'就在旁邊'}</b>到 ${o.borrow.name}<div class="st">${riskDot(o.borrow.p_empty)}到站時預估 ${o.borrow.expected_bikes} 輛可借（現在 ${o.borrow.bikes_now??'–'} 輛）</div></div></div>
       <div class="step"><div class="ic">🚲</div><div class="tx"><b>騎 ${o.legs[1].minutes} 分</b>（${(o.legs[1].dist_m/1000).toFixed(1)} 公里）到 ${o.return.name}<div class="st">${riskDot(o.return.p_full)}到站時預估 ${o.return.expected_spaces} 個空位可還</div></div></div>

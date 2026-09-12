@@ -136,6 +136,38 @@ check("C02f", "未確認的照片不建維修工單", r8.get("ticket_id") is Non
 _, vs = call("GET", "/api/c/vision/status")
 check("C02g", "視覺模型來源標示為 Bedrock", "Bedrock" in vs["provider"], vs["model"])
 
+
+# ---------------------------------------------------------------- N06：抵達期限與餘裕
+print("\n[N06] 抵達期限、餘裕、遲到方案不當準時推薦")
+# 人工約束（獨立於實作）：deadline 09:00；方案 eta 09:00 - slack。
+# 用一個確定會遲到的期限與一個確定來得及的期限，各驗一次。
+_, p_ok = call("POST", "/api/plan", {"origin": [25.02672, 121.46479], "dest": [25.030560, 121.473968],
+                                     "depart_ts": "2026-06-16 08:00", "arrive_by": "09:00"})
+o0 = p_ok["options"][0]
+import datetime as _dt
+eta = _dt.datetime.strptime(o0["eta"][:16], "%Y-%m-%d %H:%M")
+dl = _dt.datetime.strptime("2026-06-16 09:00", "%Y-%m-%d %H:%M")
+expect_slack = round((dl - eta).total_seconds() / 60, 1)
+check("N06a", "餘裕＝期限減抵達時間（獨立換算比對）", abs(o0["slack_min"] - expect_slack) < 0.6,
+      f"回傳 {o0['slack_min']}，換算 {expect_slack}（eta {o0['eta'][11:16]}）")
+check("N06b", "來得及時不標遲到", o0["late"] is False and p_ok["any_on_time"] is True)
+# 帶秒解析，避免截斷造成的假失敗
+_ld = o0["latest_depart"][:19]
+lat = _dt.datetime.strptime(_ld, "%Y-%m-%d %H:%M:%S") if len(_ld) == 19 else _dt.datetime.strptime(_ld[:16], "%Y-%m-%d %H:%M")
+check("N06c", "最晚出發＝期限減總時間", abs(((dl - lat).total_seconds() / 60) - o0["total_min"]) < 0.2,
+      f"最晚 {o0['latest_depart'][11:19]}，總時間 {o0['total_min']} 分，差 {abs(((dl-lat).total_seconds()/60)-o0['total_min']):.2f} 分")
+# 期限訂在出發後 3 分鐘，所有方案都會遲到
+_, p_late = call("POST", "/api/plan", {"origin": [25.02672, 121.46479], "dest": [25.030560, 121.473968],
+                                       "depart_ts": "2026-06-16 08:00", "arrive_by": "08:03"})
+check("N06d", "全部遲到時明確標示，不當準時推薦",
+      p_late["any_on_time"] is False and all(o["late"] for o in p_late["options"]) and bool(p_late["deadline_note"]),
+      f"note={p_late['deadline_note']}")
+check("N06e", "遲到方案的餘裕為負", p_late["options"][0]["slack_min"] < 0, f"{p_late['options'][0]['slack_min']} 分")
+# 不設期限時不應出現餘裕欄位
+_, p_none = call("POST", "/api/plan", {"origin": [25.02672, 121.46479], "dest": [25.030560, 121.473968],
+                                       "depart_ts": "2026-06-16 08:00"})
+check("N06f", "沒設期限就不顯示餘裕", p_none.get("arrive_by") is None and "slack_min" not in p_none["options"][0])
+
 print(f"\n=== 總計 通過 {len(PASS)}　失敗 {len(FAIL)} ===")
 for t, d, x in FAIL: print("  失敗:", t, d, x)
 sys.exit(1 if FAIL else 0)
