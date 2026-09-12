@@ -207,17 +207,32 @@ def forecast_status():
 
 
 @router.get("/forecast/risk")
-def forecast_risk(kind: str = "full", horizon: int = 120, limit: int = 20, min_p: float = 0.3):
-    """未來最可能無位可還／無車可借的站——這是模型預測，不是歷史同時段分布。"""
+def forecast_risk(kind: str = "full", horizon: int = 120, limit: int = 20,
+                  min_p: float = 0.3, include_offline: bool = False):
+    """未來最可能無位可還／無車可借的站——這是模型預測，不是歷史同時段分布。
+
+    預設排除此刻借還同時為 0 的整站無服務站；它們的機率必然接近 1，會把真正
+    需要處理的站擠出排名，而且派車也解決不了。要看的話加 include_offline=true。
+    """
     fc = _CTX.get("fc")
     if fc is None:
         raise HTTPException(503, "即時預測層未初始化")
     st = fc.status()
-    rows = fc.risk_ranking(kind=kind, horizon=horizon, limit=limit, min_p=min_p)
+    rows = fc.risk_ranking(kind=kind, horizon=horizon, limit=limit, min_p=min_p,
+                           exclude_offline=not include_offline)
+    # 標出歷史上六月整月零車的站。不過濾掉——它們現在有車就是有車，
+    # 但值班看到要知道這一站長期沒有庫存，預警的意義和一般站不同。
+    meta = _CTX.get("stations", {})
+    for r in rows:
+        m = meta.get(r["sid"], {})
+        r["retired_in_history"] = bool(m.get("retired"))
+        r["profile"] = m.get("profile")
     return {"kind": kind, "horizon_min": horizon, "min_p": min_p,
             "count": len(rows), "stations": rows,
             "status": st,
-            "semantics": ("HistGradientBoosting 模型跑在官方即時站況上；"
+            "excluded_offline": not include_offline,
+            "semantics": ("已排除此刻借還同時為 0 的整站無服務站（機率必然接近 1，派車解決不了）。"
+                          "HistGradientBoosting 模型跑在官方即時站況上；"
                           "落後特徵來自本服務自行累積的即時歷史，累積不足時準確度下降。"
                           "模型卡的離線指標是在六月測試集上量的，不等於即時推論的準確度。")}
 

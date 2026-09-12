@@ -507,7 +507,8 @@ function forecastCard(){
     return `<div class="sm" style="font-weight:600;margin:10px 0 5px">${lab}　
         <span class="dim" style="font-weight:400">${r.stations.length} 站</span></div>
       <table><tbody>${r.stations.slice(0,6).map(x=>`<tr class="click" data-sid="${x.sid}">
-        <td>${esc(x.name)}<div class="xs dim">${esc(x.district)}</div></td>
+        <td>${esc(x.name)}<div class="xs dim">${esc(x.district)}${
+          x.retired_in_history?'<span style="color:var(--purple)">・歷史上長期零車</span>':''}</div></td>
         <td class="mono dim" style="width:58px">現在 ${x.now.toFixed(0)}</td>
         <td style="width:80px"><div class="bar"><i style="width:${x.p}%;background:${col}"></i></div></td>
         <td class="mono" style="width:46px;color:${col}">${x.p}%</td></tr>`).join('')}</tbody></table>`;

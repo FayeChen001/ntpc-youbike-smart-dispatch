@@ -137,13 +137,21 @@ class LiveForecaster:
                 "model_origin": f["model_origin"], "coverage": f["coverage"]}
 
     # ------------------------------------------------------------------
-    def risk_ranking(self, kind="full", horizon=120, limit=20, min_p=0.3):
-        """未來最可能出事的站。kind: full（無位可還）/ empty（無車可借）。"""
+    def risk_ranking(self, kind="full", horizon=120, limit=20, min_p=0.3,
+                     exclude_offline=True):
+        """未來最可能出事的站。kind: full（無位可還）/ empty（無車可借）。
+
+        預設排除「此刻借還同時為 0」的站。那些是整站無服務（設備離線或未投車），
+        模型當然會預測它們繼續是空的——機率 100%、而且永遠排在最前面，
+        把真正需要處理的站擠掉。派車過去也沒有柱位可用，不是調度訊號。
+        """
         f = self.forecast()
         if not f or horizon not in f["horizons"]:
             return []
         col = f"p_{'full' if kind == 'full' else 'empty'}_{horizon}"
         d = f["stations"]
+        if exclude_offline:
+            d = d[~((d["bikes_now"] == 0) & (d["docks_now"] == 0))]
         d = d[d[col] >= min_p].sort_values(col, ascending=False).head(limit)
         now_col = "docks_now" if kind == "full" else "bikes_now"
         return [{"sid": int(r.sid), "name": r["name"], "district": r.district,
