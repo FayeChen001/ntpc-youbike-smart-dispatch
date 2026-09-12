@@ -1056,3 +1056,351 @@ def api_metrics_threshold(horizon: int = 120, kind: str = "empty", duty: float =
 def api_metrics_flow():
     return {**MX.flow_metrics(STATE["alert_log"], STATE["tasks"], iso(now_ts())),
             "not_measurable": MX.NOT_MEASURABLE, "assumptions": PL.ASSUMPTIONS, "now": iso(now_ts())}
+
+
+# ============================================================================
+# C 主線（用戶端）：借不到 ≠ 車壞掉、交易與安全狀態、回報後回饋、推播能力誠實揭露
+# 本區塊只新增端點與自有狀態，不修改其他主線既有的函式或 STATE 結構。
+# ============================================================================
+
+# 可觀察症狀。刻意不問「哪裡壞了」，因為使用者看得到的是現象，不是根因。
+C_SYMPTOMS = [
+    {"key": "no_response", "icon": "🚫", "label": "刷卡或掃碼沒反應", "asks_txn": True,  "asset": "dock"},
+    {"key": "error_shown", "icon": "⚠️", "label": "螢幕顯示錯誤",     "asks_txn": True,  "asset": "dock", "asks_code": True},
+    {"key": "charge_odd",  "icon": "💳", "label": "扣款或解鎖怪怪的", "asks_txn": True,  "asset": "account"},
+    {"key": "stuck",       "icon": "🔒", "label": "車卡住拿不出來或推不進去", "asks_txn": True, "asset": "dock"},
+    {"key": "brake",       "icon": "🛑", "label": "煞車怪怪的",       "asks_txn": False, "asset": "bike", "unsafe": True},
+    {"key": "tire",        "icon": "🛞", "label": "輪胎沒氣或破了",   "asks_txn": False, "asset": "bike", "unsafe": True},
+    {"key": "chain",       "icon": "⛓️", "label": "鏈條掉了或卡住",   "asks_txn": False, "asset": "bike", "unsafe": True},
+    {"key": "body",        "icon": "🪑", "label": "坐墊、把手或車身壞了", "asks_txn": False, "asset": "bike"},
+    {"key": "battery",     "icon": "🔋", "label": "電輔車沒電或沒助力", "asks_txn": False, "asset": "bike"},
+    {"key": "no_bike",     "icon": "🅿️", "label": "現場根本沒有車可借", "asks_txn": False, "asset": "supply"},
+    {"key": "no_dock",     "icon": "🈵", "label": "現場沒有空位可還",   "asks_txn": False, "asset": "supply"},
+    {"key": "unsure",      "icon": "❓", "label": "說不上來，就是用不了", "asks_txn": True,  "asset": "unknown"},
+]
+# 交易狀態由使用者自述，系統無法驗證。文案不可寫成已停止計費或已退款。
+C_TXN = {
+    "not_started": {"label": "還沒借成功，車沒出來", "safe_swap": True},
+    "unsure":      {"label": "不確定有沒有借到或扣款", "safe_swap": False},
+    "riding":      {"label": "已經借出來，騎乘中",   "safe_swap": False},
+    "return_unconfirmed": {"label": "推回去了但沒看到還車成功", "safe_swap": False},
+}
+C_STAGE = {"before_borrow": "借車前", "riding": "騎乘中", "after_return": "還車時", "passing": "路過看到"}
+C_STATUS = ["received", "triaging", "routed", "resolved", "user_left"]
+C_STATUS_LABEL = {"received": "已收到", "triaging": "判斷中", "routed": "已分流給負責單位（模擬）",
+                  "resolved": "已處理（模擬）", "user_left": "你已離開，我們仍會處理"}
+CREPORTS = {"items": [], "seq": 0}
+
+
+def _c_triage(rep):
+    """依證據給疑似方向。單筆通常無法定論，預設待診斷，不把「借不到」寫成「車壞了」。"""
+    same_bike, same_dock, same_station = [], [], []
+    for r in CREPORTS["items"]:
+        if r["id"] == rep["id"]: continue
+        if (now_ts() - pd.Timestamp(r["ts"])).total_seconds() > 6 * 3600: continue
+        if rep.get("bike_no") and r.get("bike_no") == rep["bike_no"]: same_bike.append(r)
+        if rep.get("dock_no") and r.get("dock_no") == rep["dock_no"] and r["sid"] == rep["sid"]: same_dock.append(r)
+        if r["sid"] == rep["sid"]: same_station.append(r)
+    assets = {s["asset"] for s in C_SYMPTOMS if s["key"] in rep["symptoms"]}
+    if same_bike and len({r.get("dock_no") for r in same_bike if r.get("dock_no")} | ({rep["dock_no"]} if rep.get("dock_no") else set())) > 1:
+        return {"suspect": "bike", "text": "同一車號在不同車柱都出問題，疑似車輛或車機",
+                "route": "營運診斷後交授權車輛維修", "evidence": f"同車號回報 {len(same_bike)+1} 次", "confident": True}
+    if same_dock and len({r.get("bike_no") for r in same_dock if r.get("bike_no")} | ({rep["bike_no"]} if rep.get("bike_no") else set())) > 1:
+        return {"suspect": "dock", "text": "同一柱號換車還是出問題，疑似車柱或鎖具",
+                "route": "站務設備維護", "evidence": f"同柱號回報 {len(same_dock)+1} 次", "confident": True}
+    docks = {r.get("dock_no") for r in same_station if r.get("dock_no")} | ({rep["dock_no"]} if rep.get("dock_no") else set())
+    if len(docks) >= 3:
+        return {"suspect": "station", "text": "同一站多個柱同時出錯，疑似供電、網路或站端系統",
+                "route": "查設備心跳與錯誤碼", "evidence": f"同站 {len(docks)} 個柱有回報", "confident": True}
+    if assets == {"supply"}:
+        return {"suspect": "supply", "text": "現場沒有車或沒有位，屬供需問題不是設備故障",
+                "route": "調度端補車或分流", "evidence": "症狀僅涉及數量", "confident": True}
+    if assets == {"bike"}:
+        return {"suspect": "bike_symptom", "text": "回報的是車體可觀察損壞",
+                "route": "授權車輛維修", "evidence": "使用者描述機械症狀", "confident": False}
+    return {"suspect": "unknown", "text": "證據還不足以判斷是車、柱、站端還是帳戶問題",
+            "route": "待診斷，先不指派維修", "evidence": "僅單筆回報，缺車號或柱號對應",
+            "confident": False}
+
+
+def _c_guidance(rep):
+    """交易與安全狀態的處置建議。不宣稱已停止計費、已退款或已鎖定設備。"""
+    g = {"safety_stop": False, "may_swap": False, "lines": [], "escalate": False}
+    unsafe = [s for s in C_SYMPTOMS if s["key"] in rep["symptoms"] and s.get("unsafe")]
+    if unsafe and rep["stage"] in ("riding", "before_borrow"):
+        g["safety_stop"] = True
+        g["lines"].append("這類狀況有安全疑慮。請先停止騎乘，把車停在安全的地方，不要騎故障車去送修。")
+    txn = rep.get("txn_state")
+    if rep["stage"] == "before_borrow" and txn == "not_started":
+        g["may_swap"] = True
+        g["lines"].append("你還沒借成功，可以直接換一台。這台我們會標記待查。")
+    elif txn == "unsure":
+        g["lines"].append("交易狀態不明時，請不要反覆刷卡或重試，可能造成重複扣款。先到官方 APP 或客服查證這筆有沒有成立。")
+    elif rep["stage"] == "after_return" and txn == "return_unconfirmed":
+        g["escalate"] = True
+        g["lines"].append("還車還沒確認，我們無法代你停止計費，也無法確認這筆是否已結束。")
+        g["lines"].append("請保留現場證據：柱號、車號、現在時間，可以的話拍下車柱畫面與停放狀態。")
+        g["lines"].append("接著用官方 APP 或客服申報未完成還車，這個流程只有營運商能處理。")
+    elif rep["stage"] == "riding":
+        g["lines"].append("騎乘中先不要操作手機。到站停妥後再補充細節。")
+    if rep["stage"] == "passing":
+        g["lines"].append("感謝回報。你不是這台車的租借人，不會影響你的任何費用。")
+    if not g["lines"]:
+        g["lines"].append("已收到。你可以隨時離開，不需要反覆試車幫我們診斷。")
+    return g
+
+
+@app.get("/api/c/symptoms")
+def api_c_symptoms():
+    return {"symptoms": C_SYMPTOMS, "txn_states": [{"key": k, **v} for k, v in C_TXN.items()],
+            "stages": C_STAGE,
+            "note": "只問看得到的現象。根因需要租借錯誤碼、車號柱號對應與設備心跳才能確認，本服務未取得這些介接。"}
+
+
+@app.post("/api/c/report")
+def api_c_report(body: dict):
+    sid = int(body["sid"]); stage = body.get("stage", "passing")
+    syms = [s for s in (body.get("symptoms") or []) if s in {x["key"] for x in C_SYMPTOMS}]
+    if not syms: return JSONResponse({"error": "請至少選一個症狀"}, 400)
+    CREPORTS["seq"] += 1
+    name = ST.loc[ST.sid == sid, "name"].iloc[0]
+    rep = {"id": f"C{CREPORTS['seq']:03d}", "sid": sid, "station": name, "stage": stage,
+           "symptoms": syms, "symptom_labels": [x["label"] for x in C_SYMPTOMS if x["key"] in syms],
+           "bike_no": (body.get("bike_no") or "").strip(), "dock_no": (body.get("dock_no") or "").strip(),
+           "error_code": (body.get("error_code") or "").strip(), "txn_state": body.get("txn_state"),
+           "note": (body.get("note") or "").strip(), "ts": str(now_ts()), "status": "received",
+           "history": [{"ts": iso(now_ts()), "status": "received", "label": C_STATUS_LABEL["received"]}],
+           "ticket_id": None, "source": "民眾症狀回報"}
+    CREPORTS["items"].insert(0, rep)
+    rep["triage"] = _c_triage(rep)
+    rep["guidance"] = _c_guidance(rep)
+    rep["status"] = "triaging"; rep["history"].append({"ts": iso(now_ts()), "status": "triaging",
+                                                       "label": f"{C_STATUS_LABEL['triaging']}：{rep['triage']['text']}"})
+    # 只有在證據指向設備時才開維修工單。供需問題或證據不足不開，避免把「借不到」寫成「車壞了」。
+    if rep["triage"]["suspect"] in ("bike", "dock", "station", "bike_symptom"):
+        issue = "｜".join(rep["symptom_labels"][:2])
+        tk = api_ticket_create({"sid": sid, "bike_no": rep["bike_no"], "issue": issue,
+                                "note": f"{C_STAGE.get(stage, stage)}｜{rep['triage']['text']}｜柱號 {rep['dock_no'] or '未填'}｜錯誤碼 {rep['error_code'] or '未填'}"})
+        if isinstance(tk, dict): rep["ticket_id"] = tk.get("id")
+        rep["status"] = "routed"
+        rep["history"].append({"ts": iso(now_ts()), "status": "routed",
+                               "label": f"{C_STATUS_LABEL['routed']}：{rep['triage']['route']}"})
+    elif rep["triage"]["suspect"] == "supply":
+        notify("ops", f"民眾回報借不到／還不了｜{name}", f"{'、'.join(rep['symptom_labels'])}。屬供需問題，非設備故障。", "warn", {"sid": sid, "report_id": rep["id"]})
+        rep["status"] = "routed"
+        rep["history"].append({"ts": iso(now_ts()), "status": "routed", "label": "已轉調度端（供需問題，未開維修工單）"})
+    else:
+        notify("ops", f"待診斷回報｜{name}", f"{'、'.join(rep['symptom_labels'])}。證據不足，尚未指派維修。", "info", {"sid": sid, "report_id": rep["id"]})
+    broadcast("c_report", {k: rep[k] for k in ("id", "sid", "station", "status", "symptom_labels", "triage", "ticket_id")})
+    return rep
+
+
+@app.get("/api/c/report/{rid}")
+def api_c_report_get(rid: str):
+    for r in CREPORTS["items"]:
+        if r["id"] == rid: return r
+    return JSONResponse({"error": "not found"}, 404)
+
+
+@app.post("/api/c/report/{rid}/leave")
+def api_c_report_leave(rid: str):
+    for r in CREPORTS["items"]:
+        if r["id"] == rid:
+            r["status"] = "user_left"
+            r["history"].append({"ts": iso(now_ts()), "status": "user_left", "label": C_STATUS_LABEL["user_left"]})
+            return r
+    return JSONResponse({"error": "not found"}, 404)
+
+
+@app.get("/api/c/reports")
+def api_c_reports(): return {"items": CREPORTS["items"][:30]}
+
+
+@app.get("/api/c/alternatives")
+def api_c_alternatives(sid: int, kind: str = "borrow"):
+    """附近替代站。明示是預測與快照，不保證你走到時還有車或還有位。"""
+    p = current_pred()
+    row = p[p.sid == sid]
+    if row.empty: return JSONResponse({"error": "unknown station"}, 404)
+    r = row.iloc[0]
+    res = PL.nearby(p, (float(r.lat), float(r.lon)), 700, 12)
+    out = []
+    for s in res["stations"]:
+        if s["sid"] == sid: continue
+        ok = (s["bikes"] or 0) >= 2 if kind == "borrow" else (s["spaces"] or 0) >= 2
+        if not ok: continue
+        out.append({**s, "state": s["ease"] if kind == "borrow" else s["dock"]})
+    out = out[:5]
+    return {"station": r["name"], "kind": kind, "alternatives": out, "ts": iso(now_ts()),
+            "disclaimer": "這是最近一次快照與預測，不是保證。走過去時可能已經被借走或停滿，建議到場前再看一次。"}
+
+
+@app.get("/api/c/push/status")
+def api_c_push_status():
+    """誠實揭露推播能力。沒有推播伺服器就不能宣稱背景送達。"""
+    configured = bool(os.environ.get("VAPID_PUBLIC_KEY"))
+    return {
+        "web_push_configured": configured,
+        "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY") or None,
+        "levels": [
+            {"key": "in_page", "label": "頁面內通知", "available": True,
+             "desc": "這個頁面開著的時候才會出現。經 Server-Sent Events 由伺服器推到瀏覽器。"},
+            {"key": "os_while_alive", "label": "系統通知（頁面仍在執行時）", "available": True,
+             "desc": "需要你授權通知權限。切到別的 App 時仍可能出現，但把這個分頁關掉就不會有。"},
+            {"key": "background_push", "label": "背景推播（關掉頁面也收得到）", "available": configured,
+             "desc": "需要推播伺服器與 VAPID 金鑰。本次未設定，所以關掉頁面後不會收到任何通知。"},
+        ],
+        "honesty": "介面不會顯示「已送達」。伺服器只知道事件已發出，不知道你的裝置有沒有收到或看到。",
+        "ios_note": "iPhone 需先把網頁加到主畫面，才能使用 Web Push；本次未設定推播伺服器，所以加了也只有頁面內通知。",
+    }
+
+
+@app.post("/api/c/reset")
+def api_c_reset():
+    """C 主線自有狀態的重置。api_reset 由共用邏輯負責，這裡不動它。"""
+    n = len(CREPORTS["items"]); CREPORTS["items"].clear(); CREPORTS["seq"] = 0
+    return {"cleared_reports": n}
+
+
+@app.post("/api/c/swap_bike")
+def api_c_swap_bike(body: dict = None):
+    """只換掉行程中的車號，不重複開工單（工單已由 /api/c/report 依證據決定是否開）。"""
+    t = STATE["trip"]
+    if not t: return JSONResponse({"error": "no trip"}, 404)
+    old = t["bike_no"]; t["bike_no"] = f"YB2-{np.random.randint(10000, 99999)}"
+    t.setdefault("skipped_bikes", []).append({"bike_no": old, "reason": (body or {}).get("reason", "使用者回報借不到")})
+    broadcast("trip", t)
+    return {"old_bike": old, "new_bike": t["bike_no"]}
+
+
+# ============================================================================
+# A 主線（政府端）：事件台帳 — 分級、觀測時長、負責人、ETA、原因與證據、狀態留痕
+# 本區塊只新增端點。台帳的重算在讀取時進行，刻意不改 on_tick 等共用邏輯。
+# ============================================================================
+
+@app.get("/api/ledger")
+def api_ledger(level: str = None, district: str = None):
+    EV.refresh(STATE, PRED, current_pred(), now_ts(), iso)
+    d = EV.ledger(STATE, iso(now_ts()))
+    items = d["events"]
+    if level: items = [a for a in items if a.get("level") == level]
+    if district: items = [a for a in items if a.get("district") == district]
+    return {**d, "events": items, "owners": EV.OWNERS, "causes": EV.CAUSES}
+
+
+@app.get("/api/ledger/{aid}")
+def api_ledger_get(aid: str):
+    EV.refresh(STATE, PRED, current_pred(), now_ts(), iso)
+    for a in STATE["alerts"].values():
+        if a["id"] == aid: return a
+    for a in STATE["alert_log"]:
+        if a["id"] == aid: return a
+    return JSONResponse({"error": "not found"}, 404)
+
+
+@app.post("/api/ledger/{aid}/assign")
+def api_ledger_assign(aid: str, body: dict = None):
+    owner = (body or {}).get("owner")
+    for a in STATE["alerts"].values():
+        if a["id"] == aid:
+            prev = a.get("owner")
+            a["owner"] = owner
+            a.setdefault("timeline", []).append({"ts": iso(now_ts()), "action": "assign", "actor": "政府端",
+                                                 "note": (f"負責人 {prev} → {owner}" if prev else f"指派負責人：{owner}")})
+            if a.get("status") == "open": a["status"] = "acked"; a["acked"] = a.get("acked") or iso(now_ts())
+            ddb_put("yb_alerts", a); broadcast("alert", a)
+            notify("ops", f"政府端指派｜{a['station']}", f"{EV.LEVELS.get(a.get('level'), {}).get('label', '')} 事件指派給 {owner}：{a['message']}", "warn",
+                   {"alert_id": aid, "sid": a["sid"], "owner": owner})
+            return a
+    return JSONResponse({"error": "not found"}, 404)
+
+
+@app.post("/api/ledger/{aid}/note")
+def api_ledger_note(aid: str, body: dict = None):
+    text = ((body or {}).get("note") or "").strip()
+    if not text: return JSONResponse({"error": "note is empty"}, 400)
+    for a in list(STATE["alerts"].values()) + STATE["alert_log"]:
+        if a["id"] == aid:
+            a.setdefault("timeline", []).append({"ts": iso(now_ts()), "action": "note", "actor": "政府端", "note": text})
+            ddb_put("yb_alerts", a); return a
+    return JSONResponse({"error": "not found"}, 404)
+
+
+# ================================================================== B 線（派車端）附加端點
+# 只在檔尾新增，不改動上面任何既有函式。
+# 工單去重改用資產識別：同一張單應該是「同一台車」或「同一個柱」的問題，
+# 舊的「站點＋問題類別＋2 小時」會把同一站不同設備的故障合併成一張，維修派不出去。
+ASSET_LABEL = {"bike": "車輛", "dock": "車柱", "station": "站端系統", "unknown": "待判定"}
+
+def _ticket_key(sid, issue, bike_no, dock_id):
+    """去重鍵的優先序：車號 > 柱號 > 站點＋問題類別。有資產識別就不靠站點猜。"""
+    if bike_no: return f"bike:{str(bike_no).strip()}", "bike"
+    if dock_id: return f"dock:{int(sid)}:{str(dock_id).strip()}", "dock"
+    return f"station:{int(sid)}:{issue}", "station"
+
+def _legacy_key(tk):
+    """舊工單沒有 dedup_key，補算一個，才能跟新回報合併。"""
+    if tk.get("dedup_key"): return tk["dedup_key"]
+    k, _ = _ticket_key(tk["sid"], tk.get("issue", ""), tk.get("bike_no", ""), tk.get("dock_id", ""))
+    return k
+
+@app.post("/api/ops/tickets")
+def api_ops_ticket(body: dict):
+    """派工端建立／合併維修工單。
+    body: sid(必填), issue, note, bike_no, dock_id, error_code, asset_type, source
+    去重：車號相同或柱號相同就合併（不限 2 小時，因為同一台壞車隔天回報還是同一台）；
+    沒有資產識別才退回站點＋問題類別的 2 小時窗。"""
+    try:
+        sid = int(body["sid"])
+    except Exception:
+        return JSONResponse({"error": "sid is required"}, 400)
+    row = ST.loc[ST.sid == sid]
+    if row.empty: return JSONResponse({"error": "unknown sid"}, 404)
+    name = row["name"].iloc[0]
+    issue = (body.get("issue") or "其他").strip()
+    bike_no = (body.get("bike_no") or "").strip()
+    dock_id = (body.get("dock_id") or "").strip()
+    err = (body.get("error_code") or "").strip()
+    src = (body.get("source") or "ops").strip()
+    key, inferred = _ticket_key(sid, issue, bike_no, dock_id)
+    asset = (body.get("asset_type") or inferred or "unknown").strip()
+
+    for tk in STATE["tickets"]:
+        if tk["status"] == "closed": continue
+        if _legacy_key(tk) != key: continue
+        if asset == "station" and (now_ts() - pd.Timestamp(tk["ts"])).total_seconds() >= 7200: continue
+        tk["reports"] = tk.get("reports", 1) + 1
+        tk.setdefault("error_codes", [])
+        if err and err not in tk["error_codes"]: tk["error_codes"].append(err)
+        tk["history"].append({"ts": iso(now_ts()), "status": tk["status"],
+                              "label": f"重複回報合併（第 {tk['reports']} 次，{ASSET_LABEL.get(asset, asset)}識別：{key.split(':', 1)[1]}）"})
+        ddb_put("yb_tickets", tk); broadcast("ticket", tk)
+        return {**tk, "merged": True}
+
+    tk = {"id": f"R{len(STATE['tickets']) + 1:03d}", "sid": sid, "station": name, "bike_no": bike_no,
+          "dock_id": dock_id, "asset_type": asset, "error_code": err, "error_codes": [err] if err else [],
+          "dedup_key": key, "source": src, "issue": issue, "note": (body.get("note") or ""), "reports": 1,
+          "ts": str(now_ts()), "status": "reported",
+          "history": [{"ts": iso(now_ts()), "status": "reported",
+                       "label": f"{TICKET_LABEL['reported']}（{ASSET_LABEL.get(asset, asset)}"
+                                + (f"：{bike_no}" if bike_no else (f"：{dock_id} 號柱" if dock_id else "，無資產識別"))
+                                + (f"，錯誤碼 {err}" if err else "") + "）"}],
+          "assignee": "授權店家 A（模擬）"}
+    STATE["tickets"].insert(0, tk); ddb_put("yb_tickets", tk); broadcast("ticket", tk)
+    notify("ops", f"維修工單 {tk['id']}｜{name}",
+           f"{ASSET_LABEL.get(asset, asset)}｜{issue}" + (f"（{bike_no or dock_id}）" if (bike_no or dock_id) else "（無資產識別，待現場確認）"),
+           "ticket", {"ticket_id": tk["id"], "sid": sid, "asset_type": asset})
+    return {**tk, "merged": False}
+
+@app.get("/api/ops/tickets/dedup")
+def api_ops_ticket_dedup():
+    """給驗收看的：目前工單各是用什麼識別去重的。"""
+    out = []
+    for tk in STATE["tickets"]:
+        k = _legacy_key(tk)
+        out.append({"id": tk["id"], "station": tk["station"], "issue": tk.get("issue"),
+                    "asset_type": tk.get("asset_type", "unknown"), "dedup_key": k,
+                    "keyed_by": k.split(":", 1)[0], "reports": tk.get("reports", 1),
+                    "bike_no": tk.get("bike_no", ""), "dock_id": tk.get("dock_id", ""),
+                    "error_codes": tk.get("error_codes", []), "status": tk["status"]})
+    return {"tickets": out, "rule": "車號 > 柱號 > 站點＋問題類別（僅後者限 2 小時窗）"}
