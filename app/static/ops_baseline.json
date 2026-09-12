@@ -64,7 +64,7 @@
    "trucks_pm": 0,
    "crew": 0,
    "movers": 1,
-   "repair": 3,
+   "repair": 4,
    "below_target_am": false,
    "below_target_pm": false
   },
@@ -140,7 +140,7 @@
    "trucks_pm": 0,
    "crew": 2,
    "movers": 4,
-   "repair": 1,
+   "repair": 2,
    "below_target_am": false,
    "below_target_pm": false
   },
@@ -177,7 +177,7 @@
    "trucks_am": 5,
    "trucks_pm": 4,
    "crew": 10,
-   "movers": 25,
+   "movers": 26,
    "repair": 5,
    "below_target_am": true,
    "below_target_pm": false
@@ -330,7 +330,7 @@
    "trucks_pm": 3,
    "crew": 4,
    "movers": 12,
-   "repair": 2,
+   "repair": 3,
    "below_target_am": true,
    "below_target_pm": true
   },
@@ -520,7 +520,7 @@
    "trucks_pm": 3,
    "crew": 4,
    "movers": 8,
-   "repair": 2,
+   "repair": 3,
    "below_target_am": false,
    "below_target_pm": false
   },

@@ -139,12 +139,17 @@ for d in districts:
         "deficit_pm": def_pm.get(d, 0.0), "surplus_pm": sur_pm.get(d, 0.0),
         "trucks_am": alloc_am.get(d, 0), "trucks_pm": alloc_pm.get(d, 0),
     })
+# 人力也要用最大餘數法，否則各區獨立四捨五入會讓 29 區加總對不上公開的 350 人
+mover_alloc = largest_remainder({b["district"]: b["deficit_am"] for b in board}, mover_staff)
+repair_alloc = largest_remainder({b["district"]: b["stations"] for b in board}, REPAIR_STAFF)
 for b in board:
     b["crew"] = b["trucks_am"] * CREW_PER_TRUCK
-    b["movers"] = int(round(mover_staff * (b["deficit_am"] / max(sum(def_am.values()), 1))))
-    b["repair"] = int(round(REPAIR_STAFF * (b["stations"] / max(all_stations, 1)))) if (all_stations := int(st.shape[0])) else 0
+    b["movers"] = mover_alloc.get(b["district"], 0)
+    b["repair"] = repair_alloc.get(b["district"], 0)
     b["below_target_am"] = (b["avail_am"] is not None and b["avail_am"] < PUBLIC["avail_rate_target"])
     b["below_target_pm"] = (b["avail_pm"] is not None and b["avail_pm"] < PUBLIC["avail_rate_target"])
+assert sum(b["crew"] for b in board) + sum(b["movers"] for b in board) + sum(b["repair"] for b in board) == STAFF, "逐區人力加總必須等於公開的 350 人"
+assert sum(b["trucks_am"] for b in board) == TRUCKS and sum(b["trucks_pm"] for b in board) == TRUCKS
 
 focus = ["板橋區", "新莊區", "土城區"]
 focus_stations = int(st[st.district.isin(focus)].shape[0]); all_stations = int(st.shape[0])
