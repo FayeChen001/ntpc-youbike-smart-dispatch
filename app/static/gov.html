@@ -11,6 +11,10 @@ main{flex:1;display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,40
 .brief{font-size:12px;background:#f6f8fb;border-radius:8px;padding:8px;color:#2b3542;min-height:40px}
 .compare{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center}.compare div{background:#f6f8fb;border-radius:8px;padding:6px}.compare .v{font-size:18px;font-weight:700}.compare .l{font-size:10px;color:var(--muted)}
 .mini{font-size:11px;color:var(--muted)}
+.ledsum{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:5px}
+.alert select.owner{font:inherit;font-size:11px;padding:2px 4px;border:1px solid var(--line);border-radius:6px;max-width:96px}
+.tl{border-left:2px solid var(--line);padding:3px 0 3px 8px;margin-left:3px}
+.tl .pill{font-size:10px}
 /* 驗收指標面板 */
 .mx{position:fixed;inset:0;background:var(--bg);z-index:1200;display:none;flex-direction:column}
 .mx.open{display:flex}
@@ -46,7 +50,7 @@ tr.cur td{background:#eaf2fd;font-weight:600}
     <div class="drawer" id="drawer"></div></div>
   <div class="side">
     <div class="card" style="flex:0 0 auto"><div class="row between"><b>主管簡報</b><span id="brief-src"></span></div><div class="brief" id="brief">–</div></div>
-    <div class="card"><div class="tabs" style="margin-bottom:6px"><button class="on" onclick="sideTab('alerts',this)">即時告警 <span class="pill" id="n-alerts">0</span></button><button onclick="sideTab('check',this)">待查清單</button><button onclick="sideTab('tasks',this)">排程</button><button onclick="sideTab('model',this)">模型卡</button><button onclick="sideTab('lake',this)">資料湖</button></div>
+    <div class="card"><div class="tabs" style="margin-bottom:6px"><button class="on" onclick="sideTab('alerts',this)">事件台帳 <span class="pill" id="n-alerts">0</span></button><button onclick="sideTab('check',this)">待查清單</button><button onclick="sideTab('tasks',this)">排程</button><button onclick="sideTab('model',this)">模型卡</button><button onclick="sideTab('lake',this)">資料湖</button></div>
       <div class="list" id="side-alerts"></div><div class="list" id="side-check" style="display:none"></div><div class="list" id="side-tasks" style="display:none"></div><div class="list" id="side-model" style="display:none"></div><div class="list" id="side-lake" style="display:none"></div></div>
   </div>
 </main>
@@ -74,11 +78,65 @@ async function toggleLive(){ S.live=!S.live; $('livebtn').textContent = S.live?'
 function drawLive(){ const d=S.liveData; if(!d) return; markers.clearLayers(); $('src').innerHTML=`<span class="badge real">即時</span> ${d.fetched_at}・${d.count} 站・空 ${d.empty}／滿 ${d.full}／停用 ${d.inactive}・與歷史站鍵對得上 ${d.matched} 站`; d.stations.forEach(s=>{ const color = s.act!=='1'?'#9aa4b2': s.sbi===0?'#d64545': s.bemp===0?'#e08a00':'#2fa66a'; markers.addLayer(L.circleMarker([s.lat,s.lon],{radius:6,color:'#fff',weight:1,fillColor:color,fillOpacity:.9}).bindTooltip(`<b>${s.name}</b><br>可借 ${s.sbi}（一般 ${s.yb2}・電輔 ${s.eyb}）／可還 ${s.bemp}／柱 ${s.tot}<br>更新 ${s.mday}${s.act!=='1'?'<br><b>停用</b>':''}`)); }); }
 function kpis(k){ S.kpi=k; $('clock').textContent = '回放時間 '+k.ts; const t=(v,l,s,c)=>`<div class="kpi"><div class="v" style="color:${c||'inherit'}">${v}</div><div class="l">${l}</div>${s?`<div class="s">${s}</div>`:''}</div>`;
   $('kpis').innerHTML = t(k.empty_now,'現在無車站','快照狀態，非失敗旅次',k.empty_now>40?'var(--bad)':'') + t(k.full_now,'現在無位站','', k.full_now>15?'var(--warn)':'') + t(k.both_zero+k.stale,'待查站','雙零／長期不變，不派車','var(--grey)') + t(k.risk_empty_120,'120 分內高風險缺車',`60 分 ${k.risk_empty_60}・180 分 ${k.risk_empty_180}`,'var(--warn)') + t(k.risk_full_120,'120 分內高風險缺位',`60 分 ${k.risk_full_60}・180 分 ${k.risk_full_180}`,'var(--warn)') + t(k.open_alerts,'開啟告警',`高 ${k.high_alerts}・平均確認 ${k.mean_ack_min??'–'} 分`,k.high_alerts?'var(--bad)':'') + t(k.tasks_planned,'排程中任務','重點三區・提前 120/180 分') + t(k.intents_active,'民眾意向',`預期分流 ${k.expected_diverted} 車次（×0.7）`,'var(--brand2)'); }
-async function loadAlerts(){ const d = await API.get('/api/alerts'); S.alerts=d.alerts; $('n-alerts').textContent = d.alerts.length; renderAlerts(); renderCheck(); }
-function renderAlerts(){ const dist=$('district').value; const items = S.alerts.filter(a=>!['stale_flat','both_zero','cap_conflict'].includes(a.type)).filter(a=>!dist||a.district===dist);
-  $('side-alerts').innerHTML = items.map(a=>`<div class="alert ${a.severity} ${a.status==='acked'?'acked':''}"><div class="m"><span class="badge ${a.severity}">${{high:'高',warn:'預警',info:'資訊'}[a.severity]}</span> ${a.message}</div><div class="meta"><span>${a.opened.slice(11)} 開啟・${a.route}${a.acked?`・${a.acked.slice(11)} 確認`:''}</span><span>${a.status==='open'?`<button class="small" onclick="act('${a.id}','ack')">確認</button>`:''}<button class="small" onclick="act('${a.id}','dispatch')">轉調度端</button><button class="small ghost" onclick="openStation(${a.sid})">看站</button></span></div></div>`).join('') || '<div class="muted small">目前沒有開啟中的告警</div>'; }
-function renderCheck(){ const items = S.alerts.filter(a=>['stale_flat','both_zero','cap_conflict'].includes(a.type)); $('side-check').innerHTML = `<div class="xs muted" style="margin-bottom:6px">這些站不會自動轉成派車任務；需查核營運狀態、資料更新或容量版本。</div>` + (items.map(a=>`<div class="alert info"><div class="m">${a.message}</div><div class="meta"><span>${a.opened.slice(11)}</span><span><button class="small" onclick="act('${a.id}','resolve')">已查核</button><button class="small ghost" onclick="openStation(${a.sid})">看站</button></span></div></div>`).join('') || '<div class="muted small">無</div>'); }
+/* 事件台帳：分級、觀測時長、負責人、ETA、原因與證據 */
+const LVCLS = {P0:'high', P1:'warn', P2:'info', C:'grey', W:'grey'};
+function lv(a){ const L=(S.ledger&&S.ledger.levels)||{}; const k=a.level||'P2'; return `<span class="badge ${LVCLS[k]||'grey'}" title="${(L[k]||{}).desc||''}">${(L[k]||{}).label||k}</span>`; }
+function dur(o){ if(!o) return ''; const u = o.upper_min==null?'上界未收斂':(o.upper_min>=1440?'超過 24 小時':o.upper_min+' 分'); return `觀測 <b>${o.lower_min} 分</b>（最多 ${u}）`; }
+async function loadAlerts(){
+  const d = await API.get('/api/ledger'); S.ledger=d; S.alerts=d.events;
+  $('n-alerts').textContent = (d.counts.P0||0)+(d.counts.P1||0);
+  renderAlerts(); renderCheck();
+}
+function renderAlerts(){
+  const d=S.ledger; if(!d) return; const dist=$('district').value;
+  const items = d.events.filter(a=>a.level!=='W').filter(a=>!dist||a.district===dist);
+  const sum = `<div class="ledsum">
+    <span class="badge high">P0 ${d.counts.P0||0}</span><span class="badge warn">P1 ${d.counts.P1||0}</span><span class="badge info">P2 ${d.counts.P2||0}</span><span class="badge grey">長期 ${d.counts.C||0}</span>
+    <span class="xs muted">未指派 ${d.unowned_p01}・無恢復計畫 ${d.no_plan_p01}</span></div>
+    <div class="xs muted" style="margin-bottom:6px">${d.coverage_note}目前排程涵蓋 ${d.planned_districts.join('、')||'無'}。分級為試行門檻，非官方標準。</div>`;
+  $('side-alerts').innerHTML = sum + (items.map(a=>{
+    const o=a.observed, c=a.cause||{}, al=a.alt;
+    return `<div class="alert ${LVCLS[a.level]==='high'?'high':LVCLS[a.level]==='warn'?'warn':'info'} ${a.status==='acked'?'acked':''}">
+      <div class="m">${lv(a)} <b>${a.station}</b> <span class="xs muted">${a.district}</span>${a.cluster?' <span class="badge high">站群</span>':''}</div>
+      <div class="xs" style="margin-top:3px">${o?dur(o):a.message}</div>
+      <div class="xs muted" style="margin-top:2px">原因：${c.label||'—'}${c.confident===false?'（證據不足）':''}${al?`・500 m 內可借替代站 ${al.n}${al.no_neighbor?'（無鄰站）':''}`:''}</div>
+      <div class="xs muted">負責人：${a.owner||'<b style="color:var(--bad)">未指派</b>'}・ETA：${a.eta?a.eta.slice(11,16)+`<span class="xs">（${a.eta_source||''}）</span>`:'—'}</div>
+      <div class="meta"><span>${a.opened.slice(11)} 開啟${a.acked?`・${a.acked.slice(11)} 確認`:''}</span><span>
+        ${a.status==='open'?`<button class="small" onclick="act('${a.id}','ack')">確認</button>`:''}
+        <select class="small owner" onchange="assign('${a.id}',this.value)"><option value="">指派…</option>${(d.owners||[]).map(o2=>`<option ${a.owner===o2?'selected':''}>${o2}</option>`).join('')}</select>
+        <button class="small" onclick="act('${a.id}','dispatch')">轉調度</button><button class="small ghost" onclick="openEvent('${a.id}')">詳情</button></span></div></div>`;
+  }).join('') || '<div class="muted small">目前沒有開啟中的事件</div>');
+}
+function renderCheck(){
+  const d=S.ledger; if(!d) return; const items = d.events.filter(a=>a.level==='W');
+  $('side-check').innerHTML = `<div class="xs muted" style="margin-bottom:6px">這些站不會自動轉成派車任務；需查核營運狀態、資料更新或容量版本。</div>`
+    + (items.map(a=>`<div class="alert info"><div class="m">${a.message}</div><div class="meta"><span>${a.opened.slice(11)}</span><span><button class="small" onclick="act('${a.id}','resolve')">已查核</button><button class="small ghost" onclick="openStation(${a.sid})">看站</button></span></div></div>`).join('') || '<div class="muted small">無</div>');
+}
 async function act(id, a){ await API.post(`/api/alerts/${id}/${a}`); loadAlerts(); }
+async function assign(id, owner){ if(!owner) return; await API.post(`/api/ledger/${id}/assign`, {owner}); loadAlerts(); }
+async function addNote(id){ const t = prompt('補充處理紀錄（會寫進事件時間線）'); if(!t) return; await API.post(`/api/ledger/${id}/note`, {note:t}); openEvent(id); loadAlerts(); }
+const TLLABEL = {opened:'開啟', level:'分級異動', cluster:'站群', assign:'指派', note:'處理紀錄', ack:'確認'};
+async function openEvent(id){
+  const a = await API.get('/api/ledger/'+id); const dr=$('drawer'); dr.classList.add('open');
+  const o=a.observed, c=a.cause||{}, al=a.alt, th=(S.ledger||{}).thresholds||{};
+  dr.innerHTML = `<div class="row between"><b style="font-size:15px">${lv(a)} ${a.station}</b><button class="small ghost" onclick="$('drawer').classList.remove('open')">✕</button></div>
+  <div class="small muted">${a.district}・${a.type}・${a.opened} 開啟${a.cluster?`・<span class="badge high">站群同時失效（${a.cluster_n} 站）</span>`:''}</div>
+  ${o?`<div class="compare" style="margin:10px 0"><div><div class="v">${o.lower_min}</div><div class="l">觀測下界（分）</div></div><div><div class="v">${o.upper_min==null?'–':(o.upper_min>=1440?'>24h':o.upper_min)}</div><div class="l">可能上界（分）</div></div><div><div class="v">${o.snapshots}</div><div class="l">零值快照數</div></div><div><div class="v">${al?al.n:'–'}</div><div class="l">500 m 可借替代站</div></div></div>
+  <div class="xs muted">從 ${o.started_obs.slice(5,16)} 起的快照都是零。最後一筆有效觀測 ${o.last_data_ts?o.last_data_ts.slice(5,16):'無'}${o.gap_inside?'・區間內有缺測，上界無法收斂':''}。30 分鐘一筆的快照證明不了中間有沒有短暫恢復。</div>`:`<div class="xs muted" style="margin:10px 0">${a.message}</div>`}
+  <div style="margin-top:10px"><b class="small">原因與證據</b>
+    <div class="alert ${c.confident?'info':'warn'}" style="margin-top:4px"><div class="m">${c.label||'待查'}${c.confident===false?' <span class="badge grey">證據不足</span>':''}</div>
+    ${(c.evidence||[]).map(e=>`<div class="xs muted" style="margin-top:3px">・${e.text}${e.ref&&e.ref!=='—'?` <span class="pill">${e.ref}</span>`:''}</div>`).join('')}</div></div>
+  ${al&&al.has?`<div class="xs muted">替代站（候選資源存在≠使用者走得到）：${al.names.join('、')}</div>`:''}
+  <div style="margin-top:10px"><div class="row between"><b class="small">處理狀態</b><button class="small" onclick="addNote('${a.id}')">加處理紀錄</button></div>
+    <table><tr><td>負責人</td><td>${a.owner||'<b style="color:var(--bad)">未指派</b>'}</td></tr>
+    <tr><td>現行 ETA</td><td>${a.eta?`${a.eta.slice(11,16)}<div class="xs muted">${a.eta_source||''}</div>`:'尚無恢復計畫'}</td></tr>
+    <tr><td>狀態</td><td>${{open:'開啟中',acked:'已確認',resolved:'已結案'}[a.status]||a.status}</td></tr>
+    ${a.escalated?`<tr><td>升級原因</td><td class="xs">${a.escalated}</td></tr>`:''}</table></div>
+  <div style="margin-top:10px"><b class="small">事件時間線</b>
+    ${(a.timeline||[]).map(t=>`<div class="tl"><span class="xs mono muted">${(t.ts||'').slice(11,16)}</span> <span class="pill">${TLLABEL[t.action]||t.action}</span> <span class="xs">${t.note}</span><span class="xs muted"> — ${t.actor}</span></div>`).join('')}</div>
+  <div class="xs muted" style="margin-top:8px">分級門檻：P1 ≥ ${th.P1_min} 分、P0 ≥ ${th.P0_min} 分且無替代站與恢復計畫、P1 逾 ${th.P0_unacked_min} 分無人確認升級、站群 ${th.cluster_n} 站。${th.note||''}</div>
+  <div class="row" style="margin-top:10px"><button class="small primary" onclick="act('${a.id}','dispatch')">轉調度端處理</button><button class="small" onclick="openStation(${a.sid})">看站點</button></div>`;
+}
 async function loadTasks(){ const d = await API.get('/api/tasks'); S.tasks=d.tasks; const lab={planned:'已排定',dispatched:'出車中',en_route:'行進中',done:'完成',too_late:'來不及',needs_cross_district:'需跨區',minor_gap:'缺口小',superseded:'已取代',cancelled:'取消',proposed:'待確認'};
   $('side-tasks').innerHTML = `<div class="xs muted" style="margin-bottom:6px">調度端排程摘要（載量 20 輛、市區 20 km/h、決策到抵達 ≥60 分為情境假設）</div>` + d.tasks.slice(0,20).map(t=>`<div class="alert ${t.status==='too_late'?'warn':'info'}"><div class="m"><b>${t.id}</b> ${t.district}・${t.horizon} 分前・<span class="pill">${lab[t.status]||t.status}</span> ${t.stops.length?`${t.stops.length} 站／載 ${t.load} 輛／最遲 ${hhmm(t.depart_by)} 出發`:''}</div><div class="meta"><span>${t.reason}</span></div></div>`).join(''); }
 async function loadModel(){ const m = await API.get('/api/model'); const e=m.eval; let html = `<div class="xs muted" style="margin-bottom:6px">資料：${m.audit.raw_rows.toLocaleString()} 筆／${m.audit.canonical_stations} 站鍵／隔離容量矛盾 ${m.audit.invalid_counts.toLocaleString()}／雙零 ${m.audit.both_zero.toLocaleString()}。切分：1–4 月訓練、5 月驗證、6 月測試。</div>`;

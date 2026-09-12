@@ -17,6 +17,7 @@ import llm as LLM
 import weather as WX
 import awsloc as AWSLOC
 import metrics as MX
+import events as EV
 
 if not (os.environ.get("AWS_PROFILE") or "").strip():
     os.environ.pop("AWS_PROFILE", None); os.environ.pop("AWS_DEFAULT_PROFILE", None)
