@@ -173,6 +173,19 @@ POST /api/ops/tasks/{id}/escalate
 4. 坐墊教學顯示在**受理成功之後**，呼叫 `/saddle`；使用者略過不要撤銷工單。
 5. 只有 `status` 是工單流程；不要用它表示「使用者已離開」，那是 C 自己的回報狀態。
 
+## 7b. 目前待 C 調整的兩件事（我已先做相容，不擋 demo）
+
+1. **坐墊標記還沒寫進工單。** C 目前存在自己的 `CREPORTS["saddle"]`，回應裡寫
+   「B 主線尚未提供 saddle_marker_status 欄位」——那是在我這個端點上線前寫的。
+   現在 `POST /api/ops/tickets/{id}/saddle` 已經可用，請改成在記錄自己的回報後
+   一併呼叫它，工單上的 `saddle_marker` 才會是權威值。
+   **在那之前**我在 `GET /api/ops/tickets`／`/{id}` 做了唯讀橋接：
+   若工單的 `saddle_marker.status` 還是 `unknown`，會附一個
+   `saddle_marker_external: {status, source, ts, origin:"c_report", authoritative:false}`。
+   這是唯讀的，不會覆寫工單欄位，A 端請不要把它當成已確認資訊。
+2. **`merged` 欄位。** C 的程式讀 `tk.get("merged")`，我原本只回 `action`。
+   已補上 `merged: true/false` 相容欄位，C 不必改碼。
+
 ## 8. 給 A 的串接清單
 
 1. 事件台帳用 `ticket_id` 對齊，`GET /api/ops/tickets` 可取得 `crew`、`eta`、`version`、`status`。
@@ -204,6 +217,9 @@ POST /api/ops/tasks/{id}/escalate
 | — | 無人可派改分流不產生假 ETA | HTTP＋UI | **通過** `eta=null` |
 | — | 維修派查 → 現場 → 處理 → 驗收 分開 | UI 實操 | **通過** recovered 後 asset_state=repaired 且未結案 |
 | — | 1000×770 版面不破 | UI 量測 | **通過** scrollHeight=clientHeight=770，無水平捲動 |
+| I01 | C 回報 → B 同一 ticket_id → 派查 → 處理 → 驗收 | HTTP 閉環 | **通過** 19 項，見 `test_i01.py` |
+| I01 | 修復不等於自動驗收 | HTTP 閉環 | **通過** recovered→repaired，verified 才 verified_ok |
+| I03 | 重連重複 GET 不重複建單 | HTTP 閉環 | **通過** |
 
 重現：
 ```bash

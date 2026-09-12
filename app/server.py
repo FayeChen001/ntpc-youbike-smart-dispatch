@@ -1541,6 +1541,25 @@ def api_ledger_note(aid: str, body: dict = None):
 # ================================================================== B 線（派車端）附加端點
 # 只在檔尾新增，不改動上面既有函式的行為。建單邏輯一律委派 app/tickets.py，不在這裡複製規則。
 
+def _saddle_from_c(tid):
+    """唯讀橋接：C 主線的坐墊標記目前存在 CREPORTS["saddle"]，尚未改呼叫 B 的 /saddle 端點。
+    這裡只讀不寫，標成 external 來源，避免冒充工單上的權威欄位。"""
+    try:
+        rows = [x for x in CREPORTS.get("saddle", []) if x.get("ticket_id") == tid]
+    except Exception:
+        return None
+    if not rows: return None
+    r = sorted(rows, key=lambda x: x.get("ts") or "")[-1]
+    return {"status": r.get("saddle_marker_status"), "source": r.get("source") or "user_report",
+            "ts": r.get("ts"), "origin": "c_report", "authoritative": False,
+            "note": "來自用戶端回報清單，尚未寫入工單欄位；不是維修確認"}
+
+def _with_saddle(tk):
+    if (tk.get("saddle_marker") or {}).get("status") in (None, "unknown"):
+        ext = _saddle_from_c(tk["id"])
+        if ext: return {**tk, "saddle_marker_external": ext}
+    return tk
+
 def _find_ticket(tid):
     for tk in STATE["tickets"]:
         if tk["id"] == tid: return tk
@@ -1556,7 +1575,7 @@ def api_ops_ticket(body: dict):
     tk = submit_ticket(body)
     if tk is None: return JSONResponse({"error": "unknown sid"}, 404)
     action = "created" if tk["id"] not in before else ("merged" if tk.get("reports", 1) > 1 else "idempotent")
-    return {**tk, "action": action}
+    return {**tk, "action": action, "merged": action == "merged"}
 
 @app.get("/api/ops/tickets")
 def api_ops_tickets(state: str = "", pending: int = 0):
@@ -1564,7 +1583,7 @@ def api_ops_tickets(state: str = "", pending: int = 0):
     out = list(STATE["tickets"])
     if state == "open": out = [t for t in out if t["status"] != "closed"]
     if pending: out = [t for t in out if t.get("diagnosis") == "pending_triage"]
-    return {"tickets": out, "flow": [{"key": k, "label": TK.FLOW_LABEL[k]} for k in TK.FLOW],
+    return {"tickets": [_with_saddle(t) for t in out], "flow": [{"key": k, "label": TK.FLOW_LABEL[k]} for k in TK.FLOW],
             "contract_version": "b-1", "clock_source": "replay", "ts": iso(now_ts())}
 
 @app.get("/api/ops/tickets/dedup")
@@ -1584,7 +1603,7 @@ def api_ops_ticket_dedup():
 def api_ops_ticket_one(tid: str):
     tk = _find_ticket(tid)
     if tk is None: return JSONResponse({"error": "not found"}, 404)
-    return {**tk, "clock_source": "replay", "ts": iso(now_ts())}
+    return {**_with_saddle(tk), "clock_source": "replay", "ts": iso(now_ts())}
 
 @app.post("/api/ops/tickets/{tid}/saddle")
 def api_ops_ticket_saddle(tid: str, body: dict = None):
