@@ -51,7 +51,8 @@ STATE = {
     "explain": {}, "last_reminder": {}, "last_plan_hour": None, "cloud": {"dynamodb": "unknown", "writes": 0, "errors": 0},
     "kpi_history": [],
     "profile": {"onboarded": False, "nickname": "我", "role": "worker", "home_sid": None, "work_sid": None,
-                "out_time": "07:40", "back_time": "18:10", "join_rewards": True, "preference": "time", "max_walk_min": 12},
+                "out_time": "07:40", "back_time": "18:10", "join_rewards": True, "preference": "time", "max_walk_min": 12,
+                "recent_places": []},
     "trip": None, "trip_log": [], "choice_log": [], "pref_prompt": None,
 }
 SEED_TRIPS = [   # 示範帳戶歷史：僅用於存摺呈現，明確標示為模擬紀錄
@@ -312,6 +313,10 @@ def gov(): return FileResponse(os.path.join(STATIC, "gov.html"))
 def ops(): return FileResponse(os.path.join(STATIC, "ops.html"))
 @app.get("/citizen", response_class=HTMLResponse)
 def citizen(): return FileResponse(os.path.join(STATIC, "citizen.html"))
+@app.get("/manifest.webmanifest")
+def manifest(): return FileResponse(os.path.join(STATIC, "manifest.webmanifest"), media_type="application/manifest+json")
+@app.get("/sw.js")
+def sw(): return FileResponse(os.path.join(STATIC, "sw.js"), media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
 # ------------------------------------------------------------------ API
 @app.get("/api/events")
@@ -614,6 +619,7 @@ def api_explain(eid: str):
     r = fut.result(); txt = r["text"]
     try:
         js = txt[txt.index("["): txt.rindex("]") + 1]; reasons = json.loads(js)
+        reasons = [r if isinstance(r, str) else (r.get("reason") or r.get("text") or next(iter(r.values()), "")) if isinstance(r, dict) else str(r) for r in reasons]
     except Exception: reasons = None
     return {"ready": True, "reasons": reasons, "source": r["source"], "model": r.get("model"), "ms": r.get("ms")}
 
@@ -698,6 +704,40 @@ def place_of(sid, offset=(0.0, 0.0)):
     r = ST.loc[ST.sid == sid].iloc[0]
     return (float(r.lat) + offset[0], float(r.lon) + offset[1])
 
+@app.get("/api/search_place")
+def api_search_place(q: str):
+    q = (q or "").strip()
+    if len(q) < 1: return {"results": []}
+    res = []
+    # 先比對站點名稱（本地資料，最快）
+    hit = ST[ST["name"].str.contains(q, regex=False, na=False)].head(4)
+    for _, r in hit.iterrows():
+        res.append({"title": r["name"], "sub": f"{r.district}・YouBike 站點", "lat": float(r.lat), "lon": float(r.lon), "src": "station"})
+    # 再用 Amazon Location Places 搜地標與地址
+    try:
+        import boto3
+        gp = boto3.Session(profile_name=os.environ.get("AWS_PROFILE", "hackathon")).client("geo-places", region_name="us-west-2")
+        rr = gp.suggest(QueryText=q, BiasPosition=[121.4723, 25.0262], MaxResults=6, Language="zh-Hant",
+                        Filter={"IncludeCountries": ["TWN"]}, AdditionalFeatures=["Core"])
+        AWSLOC.STATUS["places"] += 1
+        for x in rr.get("ResultItems", []):
+            pos = (x.get("Place") or {}).get("Position")
+            if not pos: continue
+            addr = ((x.get("Place") or {}).get("Address") or {}).get("Label", "")
+            if any(abs(pos[1] - r["lat"]) < 1e-4 and abs(pos[0] - r["lon"]) < 1e-4 for r in res): continue
+            res.append({"title": x.get("Title"), "sub": addr[:40] or "Amazon Location", "lat": pos[1], "lon": pos[0], "src": "aws"})
+    except Exception as e:
+        AWSLOC.STATUS["errors"] += 1; AWSLOC.STATUS["last_error"] = f"suggest: {type(e).__name__}"
+    return {"results": res[:8], "source": "站點名稱比對＋Amazon Location Service Places"}
+
+@app.post("/api/recent_place")
+def api_recent_place(body: dict):
+    rp = STATE["profile"]["recent_places"]
+    item = {"title": body["title"], "lat": body["lat"], "lon": body["lon"]}
+    rp = [x for x in rp if x["title"] != item["title"]]
+    STATE["profile"]["recent_places"] = ([item] + rp)[:6]
+    return {"recent_places": STATE["profile"]["recent_places"]}
+
 @app.get("/api/profile")
 def api_profile_get():
     pr = dict(STATE["profile"])
@@ -713,7 +753,7 @@ def api_profile_get():
 @app.post("/api/profile")
 def api_profile_set(body: dict):
     pr = STATE["profile"]
-    for k in ("nickname", "role", "home_sid", "work_sid", "out_time", "back_time", "join_rewards", "preference", "max_walk_min", "onboarded"):
+    for k in ("nickname", "role", "home_sid", "work_sid", "out_time", "back_time", "join_rewards", "preference", "max_walk_min", "onboarded", "recent_places"):
         if k in body: pr[k] = body[k]
     if pr["home_sid"] is not None and pr["work_sid"] is not None:
         STATE["user"]["home"] = place_of(pr["home_sid"], (0.0022, 0.0016))   # 家＝站點附近的住處，非站點本身
@@ -796,6 +836,23 @@ def api_trip_phase(body: dict):
     if body["phase"] == "riding": t["borrowed_at"] = iso(now_ts())
     broadcast("trip", t); return t
 
+@app.post("/api/trip/report_bike")
+def api_trip_report_bike(body: dict):
+    """借車前或騎乘中回報目前這台車有問題，系統建立工單並指派下一台。"""
+    t = STATE["trip"]
+    if not t: return JSONResponse({"error": "no trip"}, 404)
+    stage = body.get("stage", "before_borrow")
+    sid = t["option"]["borrow"]["sid"] if stage == "before_borrow" else t["option"]["return"]["sid"]
+    tk = api_ticket_create({"sid": sid, "bike_no": t["bike_no"], "issue": body["issue"],
+                            "note": {"before_borrow": "借車前發現", "riding": "騎乘中發現", "after_return": "還車時回報"}.get(stage, "")})
+    old = t["bike_no"]
+    if stage == "before_borrow":
+        t["bike_no"] = f"YB2-{np.random.randint(10000, 99999)}"
+        t.setdefault("skipped_bikes", []).append({"bike_no": old, "issue": body["issue"]})
+    t.setdefault("reports", []).append({"bike_no": old, "issue": body["issue"], "stage": stage, "ticket": tk["id"] if isinstance(tk, dict) else None})
+    broadcast("trip", t)
+    return {"trip": t, "ticket": tk if isinstance(tk, dict) else None, "old_bike": old, "new_bike": t["bike_no"], "stage": stage}
+
 @app.post("/api/trip/finish")
 def api_trip_finish(body: dict = None):
     t = STATE["trip"]
@@ -809,7 +866,7 @@ def api_trip_finish(body: dict = None):
     stamp = {"name": f"{row.district}生活圈章", "type": "district"}
     if STATE["scenario"].get("event"): stamp = {"name": f"活動限定章：{STATE['scenario']['event']['title']}", "type": "event"}
     elif STATE["profile"]["role"] == "student" and t["kind"] == "reward": stamp = {"name": "放學接力章", "type": "relay"}
-    base = 5 + t["points"]
+    base = 5 + t["points"] + 12 * len(t.get("reports", []))
     grant_reward(base, f"完成一趟 {t['km']} 公里（模擬完成事件，未經借還交易驗證）", stamp=stamp)
     notify("citizen", "還車完成", f"本趟 {t['km']} 公里，獲得「{stamp['name']}」與 {base} 點。", "reward")
     broadcast("trip", t); broadcast("wallet", wallet_data())
