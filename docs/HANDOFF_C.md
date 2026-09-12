@@ -311,3 +311,177 @@ YB_BASE=http://127.0.0.1:8791 python3 tests/test_c_sse.py
 - 不要宣稱背景推播已完成。`/api/c/push/status` 的 `background_push.available` 是 `false`，
   iOS 關頁通知本輪是明示模擬。
 - 不要因為照片看不出異常就判定車輛安全或正常。
+
+
+---
+
+# 第四段：三端整合驗收、斷線重連補完、真實失效重現、原流程回歸
+
+接手基準 `c287235`，本段提交 `039a2f1`、`7a36551`、`ffe4c4f`、`f8184e1`。
+只動 C 歸屬檔案，加上 `app/server.py` 的 `api_reset` 一行（共用區塊，理由見下）。
+
+## 二十二、改了哪些檔案
+
+| 檔案 | 歸屬 | 動作 |
+|---|---|---|
+| `app/server.py` 的 `api_reset` | 共用檔，**C 區塊之外的一行** | 補上重設 `CREPORTS`，修 B 回報的跨端 reset 殘影 |
+| `app/static/citizen.html` | C | 加 `connectEventsC`：SSE 斷線後背景持續重試，接回來停輪詢並補狀態 |
+| `tests/test_c_i01.py` | C（新增） | 三端同一事件整合驗收 45 項 |
+| `tests/test_c_vision_fail.py` | C（新增） | 視覺模型連線層真實失效 29 項 |
+| `tests/test_c_regress.py` | C（新增） | 通勤原流程回歸 48 項 |
+
+## 二十三、修掉的跨端缺陷：`/api/reset` 沒清 C 的狀態
+
+B 寫的 `tests/test_b_reset_crossend.py` 實跑有三項失敗：`/api/reset` 清掉工單之後，
+C 的 `CREPORTS`（回報、`request_id` 冪等表、坐墊標記）還留著，`GET /api/c/report/{id}`
+仍回 200、`/api/c/saddle_markers` 還指向已被刪除的工單、同 `request_id` 重送回舊殘影。
+對應任務書「reset 包含所有自有狀態」與最低矩陣「三端 reset 一致」。
+
+修法是在 `api_reset` 就地重設 `CREPORTS`。全檔沒有任何地方把 `CREPORTS["items"]`／
+`["saddle"]` 綁成區域變數，都是每次經由 dict 取用，所以換成新容器不會留下舊參照。
+
+**B 的測試還有一項不會過，那是斷言本身不可靠，不是實作問題**：它用
+`again["ticket_id"] != 舊 ticket_id` 判斷「有沒有重新建單」，但 reset 之後 B 的工單
+序號也從 R001 重新編，新建的單同樣叫 R001，字串比對分不出殘影與新單。正確判準是
+`idempotent == False` 且 `ticket_action == "created"`，本輪在 `test_c_i01.py` 的
+I01ap 以這個判準驗過。**請 B 改這一行斷言。**
+
+## 二十四、I01 三端同一事件整合驗收（45 項，全過）
+
+原本列為「需要 A、B 同時在場」。三端程式在同一個 server 上，所以改成用各端自己對外的
+HTTP 介面走完一遍再交叉比對，不需要等人：C 讀 `/api/c/report/{rid}`、B 讀
+`/api/ops/tickets/{tid}`、A 讀 `/api/ledger` 的 `overview.equipment.rows`。
+
+| 驗到什麼 | 結果 |
+|---|---|
+| 同一個 `ticket_id`／`report_id` 三端都查得到、值一致 | 通過 |
+| `dock_no` 正規化後三端都是 `dock_id` | 通過（B=09、A=09） |
+| 同 `request_id` 重送：三端工單數都不變 | 通過（1 → 1） |
+| 接手後三端 status 與中文標籤一致、負責人與 ETA 一致 | 通過（維修二班／08:40） |
+| 坐墊標記三端看得到，但不推進工單、不改設備驗收 | 通過（accepted → accepted，asset_state 仍 suspect） |
+| **修復不等於驗收** | 通過：recovered 後設備只到 `repaired`，C／A 顯示內容不含「已驗收／驗收復役／verified」 |
+| A 主動標示「已處理但服務未恢復」 | 通過（`divergence=['handled_not_restored']`） |
+| 修復後站點服務仍是未知，不自動宣稱恢復 | 通過 |
+| 舊 version 推進回 409 且沒被推進 | 通過 |
+| 驗收後設備才是 `verified_ok` | 通過 |
+| 使用者離開不結案、A 端仍看得到 | 通過 |
+| 工單不可倒退 | 通過（HTTP 400 `backwards`） |
+| reset 後三端都不留殘影、同 `request_id` 重送是重新建單 | 通過 |
+
+狀態機順序與中文標籤在測試檔開頭另寫一份獨立對照表，不取 `/api/ops/contract` 的輸出
+當答案。B 改詞彙這支就會失敗，那是刻意的。
+
+## 二十五、SSE 斷線重連原本只做了一半（真實斷線才看得到）
+
+用 `kill -9` 直接切掉伺服器觀察 `/citizen`：共用的 `connectEvents()` 連三次失敗後改成
+每四秒輪詢 `/api/state`，**之後就再也不重試 SSE**。網路紀錄顯示伺服器回來之後完全沒有
+新的 `/api/events` 請求。輪詢只補得回時鐘，補不回 `notify`／`c_report`／`trip`／`wallet`，
+所以畫面看起來還活著，通知卻再也不會出現，要重新整理才恢復。
+
+`common.js` 是三端共用檔，規則只准新增函式不准改既有函式，所以在 `citizen.html` 裡包一層
+`connectEventsC`：輪詢只當過渡，背景每五秒持續重試 SSE，接回來就停掉輪詢並用 GET 補一次
+權威狀態。**`common.js` 一個字沒動，A／B 不受影響。**
+
+過程中修掉自己寫的兩個競態，都是實測看到才發現的：
+
+1. `onmessage` 可能早於 `onopen`（hello 先到），只在 `onopen` 停輪詢會變成「SSE 已接上但
+   輪詢還在跑」，兩條通道並行。改成兩邊共用 `markConnected`。
+2. 斷線期間累積的多次嘗試各自帶一個 8 秒 guard，舊那次的 guard 會在新連線已經健康時才
+   觸發，把狀態誤打回輪詢。加 `gen` 世代編號，編號對不上就整個略過。
+
+最後一次實測：
+
+| 時間 | 事件 | 觀察 |
+|---|---|---|
+| 22:27:28 | `kill -9` 切掉伺服器 | 立刻轉輪詢，時鐘停在最後一筆不假裝前進 |
+| 22:28:00 | 伺服器回來 | 約 3 秒接回 SSE，log 顯示「SSE 已重新接上，停止輪詢」 |
+| 22:28:16 | 重連後才建立的回報 | 頁面收得到「報修已受理 R001」 |
+| 之後 16 秒 | 量測輪詢次數 | 0 次，`/api/events` 只有一條連線 |
+
+**22:28:16 那一項正是舊版永遠收不到的。** 沒有重新整理頁面。
+
+## 二十六、視覺模型連線層失效以真實斷網重現（29 項，全過）
+
+原本列為未驗證。`tests/test_c_vision_fail.py` 把 Bedrock endpoint 指到不可路由的
+`10.255.255.1`，封包是真的被丟掉，不是 mock 也不是注入假例外。只改 `VISION_TIMEOUT_S`
+就能分別踩到兩條降級路徑：
+
+| 路徑 | 設定 | 實測 |
+|---|---|---|
+| 逾時 | `VISION_TIMEOUT_S=1`（join 4 秒 < connect_timeout 5 秒） | 4.0 秒後回「視覺模型超過 1 秒未回應」 |
+| 呼叫失敗 | `VISION_TIMEOUT_S=20`（等到 botocore 自己拋） | 10.8 秒後回真的 `ConnectTimeoutError` |
+
+兩條都驗證 `observations` 為空、標為需人工判讀、不冒充 `model_source`、不推測設備類型、
+不出現「正常／安全」字樣。接著把降級結果照前端流程送進 `/api/c/report`：不確定仍可送出
+但不建維修工單、明確機械問題照樣建單、重送仍冪等、降級的照片不會變成工單上的影像證據。
+
+HTTP 層也用同樣的黑洞設定重啟 8791 實跑過一次 `POST /api/c/image`：4.0 秒降級、
+回報照樣受理為 `pending_triage`、`ticket_id: null`、`vision/status` 記到 `degraded: 1`。
+
+## 二十七、通勤原流程回歸（48 項，全過）
+
+任務書 C.4 要求「正常通勤、提早到選還車、趕時間與集點原流程須回歸測試」，先前只有一次
+瀏覽器手動點擊紀錄，走的還是通報路徑。`tests/test_c_regress.py` 補成自動化：
+
+- **R1 正常通勤**：規劃 → 出發 → 登記意向 → 騎乘 → 還車完成 → 點數入帳、集章、意向轉
+  completed、行程結束、存摺公里數增加；獎勵紀錄必須寫明是模擬完成事件。
+- **R2 提早到選還車**：餘裕與最晚出發時間用 `datetime` 獨立換算比對；還車替代站標明是
+  快照與預測、不是保證、不含原站；換站後仍能完成集章。
+- **R3 趕時間**：主推薦確實是全部方案裡最快的；期限設在過去時全部標遲到、餘裕為負、
+  明說來不及，不當準時推薦。
+- **R4 集點**：偏好集點時排第一；點數用「方案點數 ＋ 5」獨立換算；同一枚章不重複；
+  取消釋放名額且不倒扣已入帳點數。
+- **R5 途中通報不影響原流程**：騎乘中通報會建單、坐墊提醒延後到停穩、行程不被打斷、
+  騎完不會把回報或工單順手結案。
+
+點數照固定規則自己算一次，時間用 `datetime` 自己換算，不拿實作輸出當答案。
+
+## 二十八、手機視窗操作回歸（420×880 之外另跑 375×812）
+
+`/citizen?report=C001` 深連結直接開該筆處理進度，四種狀態分列：處理進度「已受理」、
+設備驗收「待現場確認」、站點服務「未知」、坐墊標記「未標記」。
+完整路徑重跑：首頁通勤卡 → 出發 → 導航 → 到借車站 →「通報問題（借不到／車況異常）」
+→ 選輪胎 → 送出 → 受理頁（C002／工單 R002）→ 提醒下一位（正反向示意與四步驟、
+寫明「是標記故障車給下一位看，不是把車修好」）。全程可操作，無 console 錯誤。
+
+**限制不變**：內嵌瀏覽器送的是滑鼠事件，不是真實觸控事件。
+
+## 二十九、目前累計
+
+| 測試檔 | 項數 | 結果 |
+|---|---|---|
+| `tests/test_c_round2.py` | 35 | 全過 |
+| `tests/test_c_sse.py` | 5 | 全過 |
+| `tests/test_c_i01.py` | 45 | 全過 |
+| `tests/test_c_vision_fail.py` | 29 | 全過 |
+| `tests/test_c_regress.py` | 48 | 全過 |
+| **合計** | **162** | **全過** |
+
+在 A 提交 `78fd521`、`c523bc0` 之後重跑過一次，仍然全過。
+
+```bash
+cd /Users/chenhongfei/CC/ntpc-youbike
+export PATH=$HOME/Library/Python/3.9/bin:$PATH AWS_PROFILE=hackathon
+python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8791 &
+curl -s -X POST localhost:8791/api/profile -H 'content-type: application/json' \
+  -d '{"role":"worker","home_sid":895,"work_sid":858,"out_time":"07:40","back_time":"18:10","join_rewards":true,"preference":"time","onboarded":true}'
+for t in round2 sse i01 vision_fail regress; do YB_BASE=http://127.0.0.1:8791 python3 tests/test_c_$t.py; done
+```
+
+五個測試檔都有防呆：`YB_BASE` 指向 `:8787` 會拒絕執行，因為會呼叫 `/api/reset`。
+
+## 三十、仍待他人處理
+
+1. **B 請改 `tests/test_b_reset_crossend.py` 最後一項斷言**，理由見第二十三節。
+2. **B 請在 `/ops` 加上讀 `?ticket=<id>`** 深連結並開啟該張工單。C 已經在送，B 尚未實作讀取。
+3. **`/api/trip/report_bike`（`server.py:897`）仍呼叫舊入口 `api_ticket_create`**，用舊的
+   「站點＋問題類別＋2 小時」去重。`citizen.html` 已經不呼叫它，所以 C 的 UI 沒有雙入口
+   問題，但 HTTP 路由還在。要不要下架屬 B。
+
+## 三十一、本段之後仍未驗證
+
+- **真機觸控、相機 `capture="environment"`、iOS Safari 加入主畫面**：仍只在內嵌瀏覽器
+  以滑鼠事件測過，沒有實機。
+- **視覺模型的讀取逾時（read timeout）**：本輪重現的是連線層（connect）逾時與連線失敗。
+  已連上之後模型回應到一半才停住的情況沒有重現。
+- **獨立把關兩輪**：任務書要求的第三層驗收還沒做，本段全部是 C 自己跑的。
