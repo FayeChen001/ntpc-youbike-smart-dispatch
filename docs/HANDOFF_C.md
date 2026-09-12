@@ -248,7 +248,10 @@ B 發布 `GET /api/ops/contract`（`contract_version: b-1`）之後，C 做了�
 
 ---
 
-# 二十一、下一個 session 接手 C 主線從這裡開始
+# 二十一、下一個 session 接手 C 主線從這裡開始（**已過時，見本檔最末的第三十九節**）
+
+> 這一節寫於 `24bb00f`，其中「目前完成度」與「還沒做完的」都已被後面四段取代。
+> 接手請直接看最末的**第三十九節**；本節只保留檔案歸屬與 git 規則那兩段仍然有效。
 
 ## 你是誰
 
@@ -584,3 +587,83 @@ done
   內嵌瀏覽器送的是滑鼠事件。
 - **第三層獨立把關**：任務書要求 strict-deliver-loop 兩輪，需另開獨立 agent，尚未進行。
   上述全部是 C 自己跑的，第三十五節的變異反證是自證敏感度，不能取代獨立把關。
+
+
+---
+
+# 三十九、接手指南（最新，取代第二十一節）
+
+## 你是誰
+
+你負責 `/Users/chenhongfei/CC/ntpc-youbike` 的 **C 用戶端主線**。
+先讀 `docs/WORKSTREAMS.md` 的檔案歸屬與 git 硬規則（三個 session 共用同一個工作目錄與
+HEAD，**禁止** `git add -A`、`git add .`、`commit -a`、`stash`、`reset --hard`、`switch`、
+`checkout .`、`restore`、`clean`）。任務書在
+`/Users/chenhongfei/Documents/Codex/2026-09-12/new-chat/outputs/claude-control/第二輪正式任務書.md`，
+最末的「使用者最新修訂」優先於前文。
+
+## C 歸屬的檔案
+
+`app/static/citizen.html`、`app/static/sw.js`、`app/static/manifest.webmanifest`、
+`app/static/icons/`、`app/report_image.py`、`app/planner.py` 的 `plan_trip`、
+`docs/REWARDS.md`、`docs/HANDOFF_C.md`、`tests/test_c_*.py`（六個檔），
+以及 `app/server.py` 中 `# C 主線（用戶端）` 到 `# A 主線（政府端）` 之間的區塊。
+
+**共用檔目前有一處 C 的改動在 C 區塊之外**：`api_reset` 裡重設 `CREPORTS` 那一行
+（`server.py` 約 990 行）。提交 `app/server.py` 前務必
+`git diff -U0 app/server.py | grep "^@@"`，確認每個 hunk 都是自己的。
+
+## 目前完成度（基準 `9fd79ef`）
+
+C 自測 **204 項全過**：`round2` 35、`sse` 5、`i01` 45、`vision_fail` 40、`regress` 48、
+`matrix` 31。詳見第三十六節與第三十七節的矩陣對照。
+
+已完成：按鈕直接通報、照片 AI 輔助與四種降級、坐墊提醒、進度追蹤、B 契約 b-1 接線、
+`request_id` 冪等、抵達期限與餘裕、通知深連結依角色路由、三端 reset 一致、
+I01 三端同一事件閉環、SSE 斷線後持續重試並補狀態、視覺模型連線層與讀取層失效、
+通勤原流程回歸、無車號柱號與車機無回應。
+
+## 怎麼跑
+
+```bash
+cd /Users/chenhongfei/CC/ntpc-youbike
+export PATH=$HOME/Library/Python/3.9/bin:$PATH AWS_PROFILE=hackathon
+# 8787 是共用展示機，由使用者重啟，自己不要動，測試也不要打它
+python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8791 &
+curl -s -X POST localhost:8791/api/profile -H 'content-type: application/json' \
+  -d '{"role":"worker","home_sid":895,"work_sid":858,"out_time":"07:40","back_time":"18:10","join_rewards":true,"preference":"time","onboarded":true}'
+for t in round2 sse i01 vision_fail regress matrix; do
+  YB_BASE=http://127.0.0.1:8791 python3 tests/test_c_$t.py || echo "!! test_c_$t 失敗"
+done
+# 測完關掉，每個 server 會各自吃約 1.5 GB
+```
+
+六個測試檔都有防呆：`YB_BASE` 指向 `:8787` 會拒絕執行（它們會呼叫 `/api/reset`）。
+`test_c_matrix.py` 的 M3 需要 node，沒有會跳過並明說。
+
+## 還沒做完的
+
+1. **真機驗證**：觸控、相機 `capture="environment"`、iOS Safari 加入主畫面。
+   只有實機能驗，內嵌瀏覽器送的是滑鼠事件。**需要使用者拿手機做，不是你能補的。**
+2. **第三層獨立把關**：任務書要求 strict-deliver-loop 兩輪，要另開獨立 agent。
+   **沒有使用者明確指示不要自己開。** 第三十五節的變異反證是自證敏感度，不能取代它。
+3. 若還有時間：`docs/REWARDS.md` 的動態加碼倍率沒有實作。任務書說「保留既有獎勵流程、
+   不擴充」，所以這項不是必做。
+
+## 等 B 的兩件事（C 這側不需要再改）
+
+1. `/ops` 讀 `?ticket=<id>` 深連結。C 已經在送，已用 node 載入 sw.js 實跑驗過送出的是
+   `/ops?ticket=R007`。
+2. `/api/trip/report_bike`（`server.py:897`）仍走舊入口 `api_ticket_create`，是否下架由 B 決定。
+   `citizen.html` 已不呼叫它，C 沒有雙入口問題。
+
+## 不要做的事
+
+- 不要重訓模型、不要重跑 `pipeline/`、不要動 `app/predict.py`、`models/`、`data/processed/`（凍結）。
+- 不要改 `app/static/common.js` 的既有函式。`connectEvents` 的缺陷是在 `citizen.html` 包一層
+  `connectEventsC` 解掉的，不是去改共用檔——改了會同時動到 A／B 的畫面。
+- 不要大改視覺。通勤首頁、推薦卡、三方案切換、存摺已定案。
+- 不要在 C 自行計時宣稱工單修好，工單狀態一律以 B 的 `STATE["tickets"]` 為準。
+- 不要宣稱背景推播已完成。`/api/c/push/status` 的 `background_push.available` 是 `false`。
+- 不要因為照片看不出異常就判定車輛安全或正常。
+- 不要對 `:8787` 跑任何 POST。那是共用展示機，重啟與重置由使用者決定。
