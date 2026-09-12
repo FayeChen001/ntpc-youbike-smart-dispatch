@@ -771,6 +771,43 @@ def task_board(state):
     }
 
 
+def cycle_view(cy):
+    """
+    營運端資源帳的政府端檢視。只彙總與呈現，不重算、不改寫。
+    候選／確認／在途／已釋放是四種不同狀態，任何一種都不代表車已經到站。
+    """
+    if not isinstance(cy, dict) or "by_station" not in cy:
+        return {"available": False, "why": "營運端沒有回傳資源帳"}
+    rows = cy.get("by_station") or []
+    tot = {"candidate": 0.0, "confirmed": 0.0, "in_transit": 0.0, "released": 0.0}
+    by_kind = {}
+    for r in rows:
+        k = r.get("kind", "unknown")
+        b = by_kind.setdefault(k, {"stations": 0, "candidate": 0.0, "confirmed": 0.0,
+                                   "in_transit": 0.0, "released": 0.0})
+        b["stations"] += 1
+        for f in tot:
+            v = float(r.get(f) or 0)
+            tot[f] += v
+            b[f] += v
+    top = sorted(rows, key=lambda r: -(float(r.get("candidate") or 0) + float(r.get("confirmed") or 0)))[:12]
+    return {
+        "available": True,
+        "cycle": cy.get("cycle"), "ts": cy.get("ts"), "horizons": cy.get("horizons"),
+        "reservations": cy.get("reservations"),
+        "totals": {k: round(v, 1) for k, v in tot.items()},
+        "by_kind": {k: {f: (round(v, 1) if isinstance(v, float) else v) for f, v in b.items()}
+                    for k, b in by_kind.items()},
+        "top": [{"sid": r.get("sid"), "station": r.get("station"), "kind": r.get("kind"),
+                 "candidate": r.get("candidate"), "confirmed": r.get("confirmed"),
+                 "in_transit": r.get("in_transit"), "released": r.get("released")} for r in top],
+        "source": "GET /api/ops/cycle（B 主線，唯讀）",
+        "semantics": ("候選＝規劃中尚未確認；確認＝已佔用資源；在途＝車已出發；已釋放＝取消後歸還。"
+                      "四者都不代表車已經到站，政府端不據此宣稱站點已恢復。"
+                      "資源帳由營運端維護，政府端不重算也不改寫。"),
+    }
+
+
 def overview(state, pred, pred_df, now_ts):
     return {
         "data_ts": str(now_ts),

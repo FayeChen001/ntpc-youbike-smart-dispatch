@@ -1500,6 +1500,13 @@ def api_ledger(level: str = None, district: str = None):
         d["overview"]["availability"] = {"stations": av["stations"][:20], "count": av["count"],
                                          "semantics": av["semantics"],
                                          "source": "GET /api/ops/availability（B 主線，唯讀）"}
+        # 資源帳同樣直接呼叫 B 主線的實作，政府端只呈現不重算
+        try:
+            cy = api_ops_cycle()
+            d["overview"]["cycle"] = EV.cycle_view(cy)
+        except Exception as e:
+            d["overview"]["cycle"] = {"available": False,
+                                      "why": f"營運端資源帳讀取失敗（{type(e).__name__}）"}
     return {**d, "events": items, "owners": EV.OWNERS, "causes": EV.CAUSES}
 
 

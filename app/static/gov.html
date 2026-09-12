@@ -483,6 +483,18 @@ function ovRender(){
       </div>
       <div class="xs muted" style="margin-top:6px">${tb.stop_deadlines.note}<br>${tb.coverage_rule}</div>
       ${Object.keys(tb.by_reservation).length?`<div class="xs muted" style="margin-top:6px">資源帳狀態：${Object.entries(tb.by_reservation).map(([k,v])=>`${k} ${v}`).join('・')}${tb.cycles.length?`・cycle ${tb.cycles.join('、')}`:''}</div>`:''}</div>
+      ${o.cycle&&o.cycle.available?`<div class="card"><b class="small">營運端資源帳 <span class="badge grey">唯讀</span></b>
+        <div class="xs muted">cycle ${o.cycle.cycle}・尺度 ${(o.cycle.horizons||[]).join('／')} 分・預約 ${o.cycle.reservations}</div>
+        <div class="kpis" style="padding:0;grid-template-columns:repeat(4,1fr);margin-top:6px">
+          ${kpi(o.cycle.totals.candidate,'候選','規劃中未確認')}
+          ${kpi(o.cycle.totals.confirmed,'確認','已佔用資源')}
+          ${kpi(o.cycle.totals.in_transit,'在途','車已出發')}
+          ${kpi(o.cycle.totals.released,'已釋放','取消後歸還')}
+        </div>
+        <table style="margin-top:6px"><tr><th>站點</th><th>類別</th><th>候選</th><th>確認</th><th>在途</th></tr>
+        ${o.cycle.top.map(x=>`<tr class="trow" onclick="ovClose();openStation(${x.sid})"><td>${x.station}</td><td class="xs">${x.kind}</td><td class="mono">${x.candidate}</td><td class="mono">${x.confirmed}</td><td class="mono">${x.in_transit}</td></tr>`).join('')}</table>
+        <div class="xs muted" style="margin-top:6px">${o.cycle.semantics}<br>來源：${o.cycle.source}</div></div>`
+        :`<div class="card"><b class="small">營運端資源帳</b><div class="xs muted" style="margin-top:6px">${(o.cycle&&o.cycle.why)||'未提供'}</div></div>`}
       <div class="card"><b class="small">未覆蓋缺口（${tb.uncovered_count}）</b>
       <table><tr><th>行政區</th><th>尺度</th><th>缺口</th><th>狀態</th></tr>
       ${tb.uncovered.map(g=>`<tr><td>${g.district||'—'}</td><td class="mono">${g.horizon||'—'}</td><td class="mono">${g.deficit??'未提供'}</td><td class="xs">${g.status}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">無</td></tr>'}</table></div></div>
