@@ -204,7 +204,7 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, tFrom:null, tTo:null, trip:null, tripBusy:false};
+           filter:'all', sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -226,6 +226,7 @@ async function boot(){
     feed(live.status);
     render();
     api('/api/v2/insights').then(d=>{S.ins=d; if(S.view==='gov')render();}).catch(()=>{});
+    api('/api/v2/events').then(d=>{S.ev=d; if(S.view==='gov')render();}).catch(()=>{});
     loadForecast();
     api('/api/v2/ops/board').then(d=>{S.ops=d; if(S.view==='ops')render();}).catch(()=>{});
     api('/api/v2/rewards/board').then(d=>{S.rw=d; if(S.view==='citizen')render();}).catch(()=>{});
@@ -254,7 +255,8 @@ async function refresh(){
     S.live=live; S.stations=stations.stations; feed(live.status);
     if(S.view==='ops') api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
     else if(S.view==='citizen') api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
-    else { api('/api/v2/insights').then(d=>{S.ins=d;render();}); render(); }
+    else { api('/api/v2/insights').then(d=>{S.ins=d;render();});
+           api('/api/v2/events').then(d=>{S.ev=d;render();}).catch(()=>{}); render(); }
     loadForecast();
   }catch(e){ /* 保留上一份快照，狀態列會顯示過期 */ }
 }
@@ -391,6 +393,12 @@ function stationPanel(){
         <div class="lab">容量落差</div><div class="val">${L.capacity_gap}</div>
         <div class="note">既不可借也不可還</div></div>
     </div>
+    ${(L.docks===0||L.bikes===0||L.capacity_gap>0)?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 11px">
+      ${L.bikes===0&&L.docks===0?`<button class="chip" data-new-ev="${L.sid}" data-kind="offline">立案：整站無服務</button>`:''}
+      ${L.docks===0&&L.bikes>0?`<button class="chip" data-new-ev="${L.sid}" data-kind="no_dock">立案：無位可還</button>`:''}
+      ${L.bikes===0&&L.docks>0?`<button class="chip" data-new-ev="${L.sid}" data-kind="no_bike">立案：無車可借</button>`:''}
+      ${L.capacity_gap>0?`<button class="chip" data-new-ev="${L.sid}" data-kind="capacity_gap">立案：容量落差</button>`:''}
+    </div>`:''}
     ${H.profile?`<p class="sm" style="margin:0 0 10px">站點分型　<span class="pill info">${esc(H.profile)}</span>
       ${H.burden!=null?`<span class="pill" title="日內庫存振幅÷容量">調度負擔 ${H.burden}</span>`:''}
       ${H.alt_500m!=null?`<span class="pill">500m 內 ${H.alt_500m} 站</span>`:''}</p>`:''}
@@ -441,6 +449,43 @@ function legendDots(series){
   return `<div class="sm mute" style="display:flex;gap:14px;margin-top:6px">`+
     series.map(s=>`<span><i style="display:inline-block;width:9px;height:9px;border-radius:50%;
       background:${s.color};margin-right:5px;vertical-align:-1px"></i>${s.name}</span>`).join('')+`</div>`;
+}
+
+function eventCard(){
+  const e=S.ev;
+  if(!e) return '';
+  const sm=e.summary;
+  const rows=e.events.slice(0,12).map(x=>{
+    const late=x.open_min>60?'var(--bad)':x.open_min>30?'var(--warn)':'var(--dim)';
+    return `<tr class="click" data-sid="${x.sid}">
+      <td><b>${esc(x.name)}</b><div class="xs dim">${esc(x.district)}・${esc(x.kind_label)}</div></td>
+      <td class="mono" style="color:${late};width:62px">${x.open_min.toFixed(0)} 分</td>
+      <td style="width:96px">${x.assigned
+        ? `<span class="pill ok">${esc(x.owner)}</span>`
+        : `<span class="pill bad">未指派</span>`}</td>
+      <td style="width:74px">${x.field_recovered===true?'<span class="pill ok">現場已恢復</span>'
+        : x.field_recovered===false?'<span class="pill bad">尚未恢復</span>':'<span class="dim xs">—</span>'}</td>
+      <td style="width:120px">${x.status==='closed'?'<span class="dim xs">已結案</span>':
+        `<button class="chip" data-ev="${x.id}" data-act="assign" data-v="${x.version}">指派</button>
+         <button class="chip" data-ev="${x.id}" data-act="close" data-v="${x.version}">結案</button>`}</td>
+    </tr>`;}).join('');
+  return `<div class="card"><h3>即時事件台帳 <span class="tag live">即時</span></h3>
+    <p class="sub">紅點只是狀態，案件才有人負責。從地圖或建議清單立案之後，
+      這裡會記錄開了多久、誰負責、現場是否恢復。<b>看到了（ack）不等於有人負責（指派）。</b></p>
+    <div class="grid g4" style="gap:8px;margin-bottom:11px">
+      <div class="kpi ${sm.open?'warn':'ok'}" style="padding:10px 11px">
+        <div class="lab">開啟中</div><div class="val" style="font-size:22px">${sm.open}</div></div>
+      <div class="kpi ${sm.unassigned?'bad':'ok'}" style="padding:10px 11px">
+        <div class="lab">未指派</div><div class="val" style="font-size:22px">${sm.unassigned}</div></div>
+      <div class="kpi ${sm.over_60min?'bad':''}" style="padding:10px 11px">
+        <div class="lab">超過 60 分</div><div class="val" style="font-size:22px">${sm.over_60min}</div></div>
+      <div class="kpi info" style="padding:10px 11px">
+        <div class="lab">現場已恢復待結案</div><div class="val" style="font-size:22px">${sm.field_recovered_but_open}</div></div>
+    </div>
+    ${e.count?`<table><tbody>${rows}</tbody></table>`
+      :`<p class="sub">目前沒有案件。到「大數據分析建議」或地圖上點一個有狀況的站，就能立案追蹤。</p>`}
+    <p class="sub" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+      ${esc(e.semantics.no_eta)}　${esc(e.semantics.unassigned)}</p></div>`;
 }
 
 function forecastCard(){
@@ -557,6 +602,7 @@ function govView(){
   <div class="split" style="margin-top:14px">
     <div>
       ${mapSVG()}
+      <div style="margin-top:14px">${eventCard()}</div>
       <div class="card" style="margin-top:14px"><h3>大數據分析建議 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
         <p class="sub">把此刻的官方站況與六個月歷史交叉後自動產生，每條都附證據與口徑。</p>${insHTML}</div>
       <div class="grid g2" style="margin-top:14px">
@@ -958,6 +1004,30 @@ function render(){
   $$('[data-pt]').forEach(b=>b.onclick=()=>{S.ptab=b.dataset.pt;render();
     if(S.ptab==='wallet')loadWallet();});
   $$('[data-claim]').forEach(b=>b.onclick=()=>claim(b));
+  $$('[data-new-ev]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true; b.textContent='立案中…';
+    try{
+      await api('/api/v2/events',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({sid:+b.dataset.newEv,kind:b.dataset.kind,
+          note:'自即時看板立案',request_id:'ev'+b.dataset.newEv+b.dataset.kind+Date.now()})});
+      S.ev=await api('/api/v2/events'); render();
+    }catch(e){ b.textContent='立案失敗'; b.disabled=false; }
+  });
+  $$('[data-ev]').forEach(b=>b.onclick=async()=>{
+    const act=b.dataset.act;
+    let owner=null;
+    if(act==='assign'){ owner=prompt('指派給誰？（會留痕，ack 不等於指派）','值班調度'); if(!owner) return; }
+    b.disabled=true; const old=b.textContent; b.textContent='…';
+    try{
+      await api(`/api/v2/events/${b.dataset.ev}/action`,{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({action:act,owner,reason:'',version:+b.dataset.v})});
+      S.ev=await api('/api/v2/events'); render();
+    }catch(e){
+      b.textContent = /409/.test(e.message)?'現場未恢復':'失敗';
+      setTimeout(()=>{b.textContent=old;b.disabled=false;},2600);
+    }
+  });
   if(S.view==='citizen'&&S.ptab==='wallet')loadWallet();
 }
 async function loadWallet(){

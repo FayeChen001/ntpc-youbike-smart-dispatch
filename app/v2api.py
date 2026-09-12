@@ -76,7 +76,20 @@ def init(live_store, stations_df, state, planner=None, forecaster=None):
     _CTX["summary"] = _load(os.path.join(ANA, "summary.json"), {})
     rows = _load(os.path.join(ANA, "stations.json"), [])
     _CTX["stations"] = {int(r["sid"]): r for r in rows}
+    # 鄰站表只在啟動時讀一次；原本每個 /station 與 /trip 請求都重讀 parquet（/trip 讀兩次）
+    nbp = os.path.join(ROOT, "data", "processed", "neighbors_800m.parquet")
+    nbr = {}
+    if os.path.exists(nbp):
+        nb = pd.read_parquet(nbp).sort_values("dist_m")
+        for sid, g in nb.groupby("sid"):
+            nbr[int(sid)] = [(int(r.nsid), float(r.dist_m)) for r in g.itertuples()]
+    _CTX["neighbors"] = nbr
     return _CTX
+
+
+def _near(sid, max_m):
+    """回傳 [(鄰站 sid, 距離公尺)]，已依距離遞增排序。"""
+    return [(n, d) for n, d in _CTX.get("neighbors", {}).get(int(sid), []) if d <= max_m]
 
 
 def _sanitize(o):
@@ -166,16 +179,12 @@ def station_detail(sid: int):
             if r:
                 horizon.append({"ahead_min": m, **r})
     alts = []
-    nbp = os.path.join(ROOT, "data", "processed", "neighbors_800m.parquet")
-    if os.path.exists(nbp):
-        nb = pd.read_parquet(nbp)
-        near = nb[(nb.sid == int(sid)) & (nb.dist_m <= 500)].sort_values("dist_m")
-        for _, r in near.head(6).iterrows():
-            a = lv.station(int(r.nsid))
-            if a:
-                alts.append({"sid": int(r.nsid), "name": a["name"],
-                             "dist_m": int(r.dist_m), "walk_min": round(r.dist_m / 80.0, 1),
-                             "bikes": a["bikes"], "docks": a["docks"], "act": a["active"]})
+    for nsid, dist in _near(sid, 500)[:6]:
+        a = lv.station(nsid)
+        if a:
+            alts.append({"sid": nsid, "name": a["name"],
+                         "dist_m": int(dist), "walk_min": round(dist / 80.0, 1),
+                         "bikes": a["bikes"], "docks": a["docks"], "act": a["active"]})
     is_new = int(sid) < 0
     fc = _CTX.get("fc")
     model = fc.station(sid) if (fc is not None and not is_new) else None
@@ -410,6 +419,172 @@ def ops_board():
                           "可借與可還同時為 0 的站另列為整站無服務，派車無法解決。")}
 
 
+# ---------------------------------------------------------------- 即時事件台帳
+# 我們主張「台北做到看得見現在，但紅點是狀態不是案件」。這一段就是把話做出來：
+# 每一個被看到的問題都可以立案，並留下誰負責、什麼時候、為什麼。
+#
+# 守住既有的講話界線：
+#   * ack（看到了）不等於指派（有人負責）。未指派比例一律以 owner 計，不用 ack 代替。
+#   * 本系統不生成 ETA——沒有車隊位置、班表與載量。恢復時間只記錄「實際恢復的觀測時間」。
+#   * 事件關閉需要現場條件成立（借還恢復），不是按一個按鈕就算好了。
+EVENT_KINDS = {
+    "no_dock": "無位可還", "no_bike": "無車可借",
+    "offline": "整站無服務", "capacity_gap": "容量落差", "stale": "資料中斷",
+}
+
+
+def _events():
+    return _CTX["state"].setdefault("v2_events", [])
+
+
+def _event_view(e):
+    now = datetime.now(TZ)
+    created = datetime.fromisoformat(e["created_at"])
+    lv = _CTX.get("live")
+    cur = lv.station(e["sid"]) if lv else None
+    recovered = None
+    if cur:
+        if e["kind"] == "no_dock":
+            recovered = cur["docks"] > 0
+        elif e["kind"] == "no_bike":
+            recovered = cur["bikes"] > 0
+        elif e["kind"] == "offline":
+            recovered = not (cur["bikes"] == 0 and cur["docks"] == 0)
+        elif e["kind"] == "capacity_gap":
+            recovered = cur["capacity_gap"] <= 0
+    return {
+        **e,
+        "kind_label": EVENT_KINDS.get(e["kind"], e["kind"]),
+        "open_min": round((now - created).total_seconds() / 60.0, 1),
+        "assigned": e.get("owner") is not None,
+        "current": None if not cur else {"bikes": cur["bikes"], "docks": cur["docks"],
+                                         "gap": cur["capacity_gap"], "active": cur["active"]},
+        "field_recovered": recovered,
+        "semantics": ("field_recovered 是依官方即時資料判斷現場借還是否已恢復；"
+                      "它與工單是否結案、設備是否修好是三件不同的事。"),
+    }
+
+
+class EventIn(BaseModel):
+    sid: int
+    kind: str
+    note: str = ""
+    request_id: str = None
+
+
+@router.post("/events")
+def event_create(body: EventIn):
+    if body.kind not in EVENT_KINDS:
+        raise HTTPException(400, f"kind 必須是 {list(EVENT_KINDS)} 其中之一")
+    lv = _live()
+    cur = lv.station(body.sid)
+    if not cur:
+        raise HTTPException(404, "查無此站的即時資料")
+    evs = _events()
+    if body.request_id:
+        for e in evs:
+            if e.get("request_id") == body.request_id:
+                return {"ok": True, "idempotent": True, "event": _event_view(e)}
+    # 同一站同一類型還開著就不重複立案
+    for e in evs:
+        if e["sid"] == body.sid and e["kind"] == body.kind and e["status"] != "closed":
+            return {"ok": True, "duplicate_of": e["id"], "event": _event_view(e)}
+    now = datetime.now(TZ)
+    e = {
+        "id": f"E{len(evs) + 1:04d}",
+        "sid": body.sid, "name": cur["name"], "district": cur["district"],
+        "kind": body.kind, "note": body.note,
+        "status": "open", "owner": None, "version": 1,
+        "created_at": now.isoformat(),
+        "observed": {"bikes": cur["bikes"], "docks": cur["docks"],
+                     "capacity": cur["capacity"], "gap": cur["capacity_gap"],
+                     "info_time": cur["info_time"]},
+        "log": [{"ts": now.isoformat(), "action": "created",
+                 "by": "監看", "note": body.note or "自即時看板立案"}],
+        "request_id": body.request_id,
+    }
+    evs.append(e)
+    return {"ok": True, "event": _event_view(e)}
+
+
+class EventAction(BaseModel):
+    action: str                 # ack | assign | close | reopen
+    owner: str = None
+    reason: str = ""
+    version: int
+
+
+@router.post("/events/{eid}/action")
+def event_action(eid: str, body: EventAction):
+    e = next((x for x in _events() if x["id"] == eid), None)
+    if e is None:
+        raise HTTPException(404, "查無此事件")
+    if body.version != e["version"]:
+        raise HTTPException(409, {"error": "版本已變更，請重新載入後再操作",
+                                  "current_version": e["version"]})
+    now = datetime.now(TZ)
+    if body.action == "ack":
+        # 只記錄「已讀」。**不設定 owner**——ack 不等於指派。
+        e["acked_at"] = now.isoformat()
+    elif body.action == "assign":
+        if not body.owner:
+            raise HTTPException(400, "指派必須指定負責人")
+        e["owner"] = body.owner
+        e["status"] = "assigned"
+    elif body.action == "close":
+        v = _event_view(e)
+        if v["field_recovered"] is False:
+            raise HTTPException(409, {
+                "error": "現場尚未恢復，不能結案",
+                "detail": "官方即時資料顯示這一站的借還狀況仍未恢復。"
+                          "結案要在現場條件成立之後，不是按按鈕就算好了。",
+                "current": v["current"]})
+        e["status"] = "closed"
+        e["closed_at"] = now.isoformat()
+        e["recovery_observed_min"] = v["open_min"]
+    elif body.action == "reopen":
+        e["status"] = "open"
+        e.pop("closed_at", None)
+    else:
+        raise HTTPException(400, "action 必須是 ack / assign / close / reopen")
+    e["version"] += 1
+    e["log"].append({"ts": now.isoformat(), "action": body.action,
+                     "by": body.owner or "監看", "note": body.reason})
+    return {"ok": True, "event": _event_view(e)}
+
+
+@router.get("/events")
+def event_list(status: str = None):
+    evs = [_event_view(e) for e in _events()]
+    if status:
+        evs = [e for e in evs if e["status"] == status]
+    evs.sort(key=lambda e: (e["status"] == "closed", -e["open_min"]))
+    open_ev = [e for e in evs if e["status"] != "closed"]
+    return {
+        "count": len(evs), "events": evs,
+        "summary": {
+            "open": len(open_ev),
+            "unassigned": sum(1 for e in open_ev if not e["assigned"]),
+            "over_30min": sum(1 for e in open_ev if e["open_min"] > 30),
+            "over_60min": sum(1 for e in open_ev if e["open_min"] > 60),
+            "field_recovered_but_open": sum(1 for e in open_ev if e["field_recovered"] is True),
+        },
+        "semantics": {
+            "unassigned": "以 owner 計，不用 ack 代替——看到了不等於有人負責。",
+            "no_eta": "本系統不生成 ETA；沒有車隊位置、班表與載量，算出來的都是虛構的。",
+            "field_recovered_but_open": "現場已恢復但案件還開著，代表要回頭確認原因與結案。",
+        },
+    }
+
+
+@router.post("/events/reset")
+def event_reset():
+    """清空 v2 事件台帳。獨立於既有的 /api/reset，不動三端共用的重設流程。"""
+    n = len(_events())
+    _CTX["state"]["v2_events"] = []
+    return {"ok": True, "cleared": n}
+
+
 # ---------------------------------------------------------------- 出發前行程規劃
 def _hav(lat1, lon1, lat2, lon2):
     r = 6371000.0
@@ -479,21 +654,18 @@ def trip(from_sid: int, to_sid: int):
     })
 
     # 較穩：終點 500 公尺內、到達時風險最低的站，走回原目的地
-    nbp = os.path.join(ROOT, "data", "processed", "neighbors_800m.parquet")
     best = None
-    if os.path.exists(nbp) and to_sid >= 0:
-        nb = pd.read_parquet(nbp)
-        near = nb[(nb.sid == int(to_sid)) & (nb.dist_m <= 500)].sort_values("dist_m")
-        for _, r in near.iterrows():
-            a = lv.station(int(r.nsid))
+    if to_sid >= 0:
+        for nsid, dist in _near(to_sid, 500):
+            a = lv.station(nsid)
             if not a or not a["active"]:
                 continue
-            walk_m = float(r.dist_m) * A["walk_detour"]
+            walk_m = dist * A["walk_detour"]
             walk_min = walk_m / 1000.0 / A["walk_kmh"] * 60.0
             leg = _hav(o["lat"], o["lon"], a["lat"], a["lon"]) * A["road_detour"]
             rmin = leg / 1000.0 / A["ride_kmh"] * 60.0
-            p, src = _arrival_risk(int(r.nsid), int(round(rmin)), "dock")
-            cand = {"kind": "較穩", "station_sid": int(r.nsid), "station": a["name"],
+            p, src = _arrival_risk(nsid, int(round(rmin)), "dock")
+            cand = {"kind": "較穩", "station_sid": nsid, "station": a["name"],
                     "ride_min": round(rmin, 1), "walk_min": round(walk_min, 1),
                     "total_min": round(rmin + walk_min, 1),
                     "risk": None if p is None else round(p * 100, 1), "risk_source": src,
@@ -507,18 +679,16 @@ def trip(from_sid: int, to_sid: int):
 
     # 順路集點：終點 800 公尺內有加碼任務（需要有人還車過去）的站
     quest = None
-    if os.path.exists(nbp) and to_sid >= 0:
-        nb = pd.read_parquet(nbp)
-        near = nb[(nb.sid == int(to_sid)) & (nb.dist_m <= 800)].sort_values("dist_m")
-        for _, r in near.iterrows():
-            a = lv.station(int(r.nsid))
+    if to_sid >= 0:
+        for nsid, dist in _near(to_sid, 800):
+            a = lv.station(nsid)
             if not a or not a["active"] or a["capacity"] <= 0:
                 continue
             target = max(3, round(a["capacity"] * 0.2))
             deficit = target - a["bikes"]
             if deficit <= 0 or a["docks"] <= 0:
                 continue
-            walk_m = float(r.dist_m) * A["walk_detour"]
+            walk_m = dist * A["walk_detour"]
             walk_min = walk_m / 1000.0 / A["walk_kmh"] * 60.0
             leg = _hav(o["lat"], o["lon"], a["lat"], a["lon"]) * A["road_detour"]
             rmin = leg / 1000.0 / A["ride_kmh"] * 60.0
@@ -527,7 +697,7 @@ def trip(from_sid: int, to_sid: int):
             if extra > 12:
                 continue
             mult = _multiplier(deficit / target, 60, 8 if walk_min >= 8 else 0)
-            cand = {"kind": "順路集點", "station_sid": int(r.nsid), "station": a["name"],
+            cand = {"kind": "順路集點", "station_sid": nsid, "station": a["name"],
                     "ride_min": round(rmin, 1), "walk_min": round(walk_min, 1),
                     "total_min": round(rmin + walk_min, 1),
                     "risk": None, "risk_source": "—",

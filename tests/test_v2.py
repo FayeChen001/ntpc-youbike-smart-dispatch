@@ -366,6 +366,62 @@ def test_http():
     code3, _ = post("/api/v2/rewards/claim", {"sid": 999999, "kind": "還車到這站"})
     ck("不存在的站 → 404", code3, 404)
 
+    # ---- 即時事件台帳
+    post("/api/v2/events/reset", {})
+    nd = get("/api/v2/live/stations?only=no_dock")["stations"]
+    cand = [x for x in nd if x["b"] > 0] or nd
+    if cand:
+        sid = cand[0]["sid"]
+        code, r = post("/api/v2/events",
+                       {"sid": sid, "kind": "no_dock", "note": "測試", "request_id": "tv2"})
+        ck("立案成功", code, 200)
+        e = r["event"]
+        ck("新案件狀態為 open", e["status"], "open")
+        ck("新案件沒有負責人", e["owner"], None)
+        ck("新案件未指派", e["assigned"], False)
+        ck("無位可還的站，現場判定為尚未恢復", e["field_recovered"], False)
+        eid, ver = e["id"], e["version"]
+
+        _, r2 = post("/api/v2/events", {"sid": sid, "kind": "no_dock", "request_id": "tv2"})
+        ck_true("同一個 request_id 重送 → 冪等", r2.get("idempotent") is True)
+        _, r3 = post("/api/v2/events", {"sid": sid, "kind": "no_dock"})
+        ck_true("同站同類型未結案 → 不重複立案", r3.get("duplicate_of") == eid)
+
+        code, r4 = post(f"/api/v2/events/{eid}/action", {"action": "close", "version": ver})
+        ck("現場尚未恢復就結案 → 409", code, 409)
+        ck_true("拒絕結案時有說明原因",
+                "現場" in json.dumps(r4, ensure_ascii=False))
+
+        code, r5 = post(f"/api/v2/events/{eid}/action", {"action": "ack", "version": ver})
+        ck("ack 成功", code, 200)
+        ck("**ack 不等於指派**：owner 仍為 None", r5["event"]["owner"], None)
+        ck("ack 後仍計為未指派", r5["event"]["assigned"], False)
+        ver2 = r5["event"]["version"]
+        ck("每次動作版本號 +1", ver2, ver + 1)
+
+        code, _ = post(f"/api/v2/events/{eid}/action",
+                       {"action": "assign", "owner": "值班", "version": ver})
+        ck("用舊版本號操作 → 409 樂觀鎖", code, 409)
+
+        code, r6 = post(f"/api/v2/events/{eid}/action",
+                        {"action": "assign", "owner": "值班調度", "version": ver2})
+        ck("指派成功", code, 200)
+        ck("指派後有負責人", r6["event"]["owner"], "值班調度")
+        ck("指派後計為已指派", r6["event"]["assigned"], True)
+        ck("指派後狀態為 assigned", r6["event"]["status"], "assigned")
+
+        code, _ = post(f"/api/v2/events/{eid}/action",
+                       {"action": "assign", "version": r6["event"]["version"]})
+        ck("指派沒給負責人 → 400", code, 400)
+
+        lst = get("/api/v2/events")
+        ck_true("清單有這個案件", any(x["id"] == eid for x in lst["events"]))
+        ck("未指派計數以 owner 計，指派後歸零", lst["summary"]["unassigned"], 0)
+        ck_true("有寫明本系統不產生 ETA", "不生成 ETA" in lst["semantics"]["no_eta"])
+        ck_true("每個案件都有留痕",
+                all(len(x["log"]) >= 1 for x in lst["events"]))
+        post("/api/v2/events/reset", {})
+
     # ---- 行程規劃
     act = [x for x in stations["stations"] if x["act"] and x["sid"] >= 0]
     a, b = act[0]["sid"], act[1]["sid"]
