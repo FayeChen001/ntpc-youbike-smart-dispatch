@@ -854,6 +854,8 @@ async function boot(reload){
   $('nav-bar').style.display=''; S.dest=null; S.userPickedDest=false; S.forceExplore=false; setDefaultOD();
   const q=new URLSearchParams(location.search);
   if(q.get('tab')==='wallet'){ go('wallet'); } else go('home');
+  // 通知深連結：/citizen?report=C001 直接開該筆的處理進度
+  const deep=q.get('report'); if(deep){ setTimeout(()=>renderTrack(deep), 600); }
   await refreshHome();
   if(p.pref_prompt) openSheet(`<h3>要把預設換成「${p.pref_prompt.label}」嗎？</h3><p>你連續兩次都挑了這個方案。</p>
     <button class="btn" onclick="setPref('${p.pref_prompt.kind}')">好，換成這個</button><button class="btn ghost" onclick="closeSheet()">維持現在的</button>`);

@@ -45,7 +45,10 @@ self.addEventListener("notificationclick", e => {
   e.notification.close();
   const d = e.notification.data || {};
   const base = d.url || "/citizen";
-  const target = base + (d.event_id ? (base.includes("?") ? "&" : "?") + "focus=" + encodeURIComponent(d.event_id) : "");
+  // 每一端的深連結參數名不同：/gov 讀 event、/ops 讀 ticket、/citizen 讀 report。
+  const KEY = { "/gov": "event", "/ops": "ticket", "/citizen": "report" };
+  const key = KEY[base] || "focus";
+  const target = base + (d.event_id ? (base.includes("?") ? "&" : "?") + key + "=" + encodeURIComponent(d.event_id) : "");
   e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
     for (const c of list) {
       try {
