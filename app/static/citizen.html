@@ -8,7 +8,23 @@
 <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
 <style>
 :root{--ink:#16202c;--sub:#7b8794;--line2:#e8ecf1;--brandg:linear-gradient(135deg,#0f5fa8,#1478c9)}
-body{background:#fff;max-width:430px;margin:0 auto;height:100vh;display:flex;flex-direction:column;overflow:hidden;color:var(--ink)}
+/* 手機的 100vh 是「工具列收起時」的高度，Safari／Chrome 工具列展開時底部導覽會被推出畫面外，
+   加上 body overflow:hidden 就永遠點不到。100dvh 才是當下真正可見的高度；舊瀏覽器吃前一行。 */
+body{background:#fff;max-width:430px;margin:0 auto;height:100vh;height:100dvh;
+  display:flex;flex-direction:column;overflow:hidden;color:var(--ink);overscroll-behavior-y:none}
+/* 瀏海與動態島：加到主畫面全螢幕執行時，頂端列要自己讓開 */
+.top{padding-top:calc(14px + env(safe-area-inset-top))}
+/* 平板與桌機：置中成手機框，不要讓 430px 的內容漂在一片全白上 */
+@media (min-width:560px){
+  html{background:#eef2f6}
+  body{box-shadow:0 0 0 1px #e3e9ef,0 18px 50px rgba(16,32,48,.14);height:min(100dvh,900px);margin:calc((100dvh - min(100dvh,900px))/2) auto;border-radius:18px;overflow:hidden}
+  .sheet{border-radius:20px 20px 0 0}
+}
+/* 手機橫放或很矮的視窗：縮一點垂直留白，免得主卡被擠掉 */
+@media (max-height:620px){
+  h1.big{font-size:21px}
+  .top{padding-top:calc(8px + env(safe-area-inset-top));padding-bottom:4px}
+}
 .screen{display:none;flex:1;min-height:0;flex-direction:column}.screen.on{display:flex}
 .scroll{flex:1;overflow:auto;-webkit-overflow-scrolling:touch}
 /* 頂部 */
@@ -195,6 +211,21 @@ nav button .bdg{position:absolute;top:5px;right:calc(50% - 20px);background:#d64
 .sk{background:linear-gradient(90deg,#eef1f5 25%,#f6f8fa 37%,#eef1f5 63%);background-size:400% 100%;animation:shim 1.3s infinite;border-radius:8px}
 @keyframes shim{0%{background-position:100% 50%}100%{background-position:0 50%}}
 .sk-line{height:12px;margin-bottom:9px}.sk-big{height:38px;width:45%;margin-bottom:14px}
+.installbar{display:flex;align-items:center;gap:10px;margin:10px 18px 0;padding:11px 12px;border-radius:14px;
+  background:linear-gradient(135deg,#eaf3fb,#f3f8fd);border:1px solid #d5e5f3}
+.installbar .ico{width:34px;height:34px;border-radius:9px;flex:none}
+.installbar .tx{flex:1;min-width:0;font-size:12.5px;line-height:1.45;color:#2b3947}
+.installbar .tx b{display:block;font-size:13.5px;color:var(--ink)}
+.installbar .go{flex:none;border:0;border-radius:10px;padding:8px 13px;font-size:13px;font-weight:700;
+  color:#fff;background:var(--brandg);cursor:pointer}
+.installbar .x{flex:none;border:0;background:none;color:var(--sub);font-size:15px;cursor:pointer;padding:2px 4px}
+/* 小螢幕（iPhone SE 之類）不要讓橫幅把主卡擠下去，只留標題 */
+@media (max-width:360px){
+  .installbar{gap:8px;padding:9px 10px}
+  .installbar .ico{width:28px;height:28px}
+  .installbar .tx .sb{display:none}
+  .installbar .go{padding:7px 11px;font-size:12.5px}
+}
 .sheet{position:fixed;left:0;right:0;bottom:0;max-width:430px;margin:0 auto;background:#fff;border-radius:20px 20px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.18);z-index:900;transform:translateY(101%);transition:.25s;padding:18px 18px calc(18px + env(safe-area-inset-bottom))}
 .sheet.on{transform:none}.sheet h3{margin:0 0 4px;font-size:18px}.sheet p{margin:0 0 14px;color:var(--sub);font-size:13px}
 .backdrop{position:fixed;inset:0;background:rgba(10,18,28,.35);z-index:850;display:none}.backdrop.on{display:block}
@@ -213,6 +244,7 @@ nav button .bdg{position:absolute;top:5px;right:calc(50% - 20px);background:#d64
   <div class="top" id="top-bar"><div class="wx" id="wx">—</div><div class="t" id="clock">—</div><span class="bell" id="bell" onclick="openNotifs()">🔔<b id="bell-n" style="display:none">0</b></span></div>
   <div class="scroll">
     <div id="notices"></div>
+    <div id="install-bar"></div>
     <h1 class="big" id="greet">早安</h1><p class="sub" id="greet2"></p>
     <div class="dest" id="dest">
       <div class="destbox"><span>🔍</span><input id="dest-input" placeholder="要去哪裡？輸入地點或站名" autocomplete="off"
@@ -821,9 +853,39 @@ function osNotify(n){
 }
 
 /* ================= PWA ================= */
-window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); S.deferredInstall=e; });
+window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); S.deferredInstall=e; renderInstallBar(); });
+window.addEventListener('appinstalled',()=>{ S.deferredInstall=null; renderInstallBar();
+  pushNotice({title:'已加入主畫面',body:'之後可以從主畫面直接開啟',kind:'info',ts:S.clock&&S.clock.ts}); });
+
+/* 已經從主畫面開啟就不必再問；使用者關掉也記住，不要每次都跳出來。 */
+function isStandalone(){
+  return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
+function dismissInstall(){
+  try{ localStorage.setItem('yb-install-dismissed','1'); }catch(e){}
+  renderInstallBar();
+}
+function renderInstallBar(){
+  const el = document.getElementById('install-bar');
+  if(!el) return;
+  let hidden = false;
+  try{ hidden = localStorage.getItem('yb-install-dismissed') === '1'; }catch(e){}
+  if(isStandalone() || hidden){ el.innerHTML=''; return; }
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  // Android／桌機 Chrome 有 beforeinstallprompt，真的是一鍵；iOS Safari 沒有這個 API，
+  // 只能叫出步驟說明，按鈕文字就照實寫，不要假裝點一下就會裝好。
+  const oneTap = !!S.deferredInstall;
+  el.innerHTML = `<div class="installbar">
+    <img class="ico" src="/static/icons/icon-192.png" alt="">
+    <div class="tx"><b>加到主畫面，下次一開就用</b><span class="sb">${oneTap ? '像 App 一樣全螢幕開啟' : (ios ? '在 Safari 用分享選單加入' : '用瀏覽器選單的「安裝」加入')}</span></div>
+    <button class="go" onclick="installApp()">${oneTap ? '一鍵加入' : '看怎麼加'}</button>
+    <button class="x" onclick="dismissInstall()" aria-label="不要再顯示">✕</button>
+  </div>`;
+}
+
 async function installApp(){
   if(S.deferredInstall){ S.deferredInstall.prompt(); const r=await S.deferredInstall.userChoice; S.deferredInstall=null;
+    renderInstallBar();
     pushNotice({title:r.outcome==='accepted'?'已加入主畫面':'已取消',body:r.outcome==='accepted'?'之後可以從主畫面直接開啟':'隨時可以再從這裡加入',kind:'info',ts:S.clock.ts}); return; }
   const ios=/iPhone|iPad|iPod/.test(navigator.userAgent);
   openSheet(`<h3>加到主畫面</h3><p>加入後就像一般 App，可以從主畫面或桌面直接開啟。</p>
@@ -920,6 +982,7 @@ async function boot(reload){
   $('nav-bar').style.display=''; S.dest=null; S.userPickedDest=false; S.forceExplore=false; setDefaultOD();
   const q=new URLSearchParams(location.search);
   if(q.get('tab')==='wallet'){ go('wallet'); } else go('home');
+  renderInstallBar();
   // 通知深連結：/citizen?report=C001 直接開該筆的處理進度
   const deep=q.get('report'); if(deep){ setTimeout(()=>renderTrack(deep), 600); }
   await refreshHome();
