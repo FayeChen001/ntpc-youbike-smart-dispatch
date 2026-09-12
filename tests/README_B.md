@@ -15,6 +15,14 @@ python3 tests/test_b_http_cycle.py     # 20 項：規劃週期、任務動作、
 python3 tests/test_b_closed_loop.py    # 19 項：C 回報 → B 派查 → 處理 → 驗收
 ```
 
+跨端一致性（**目前預期有 3 項失敗，等 C 修**）：
+```bash
+python3 tests/test_b_reset_crossend.py
+```
+B 的部分（工單清空、資源帳歸零）通過；失敗的三項都是 `api_reset` 沒有清掉 C 的
+`CREPORTS`，導致回報、坐墊標記與 request_id 冪等表在 reset 後仍指向已刪除的工單。
+修法見 `docs/HANDOFF_B.md` 的「待 C 調整」。
+
 要對別的 port 跑，設 `YB_BASE`：
 ```bash
 YB_BASE=http://127.0.0.1:8787 python3 tests/test_b_http_tickets.py

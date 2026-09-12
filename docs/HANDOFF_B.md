@@ -195,9 +195,32 @@ GET /api/ops/availability?district=板橋區&sid=123&only_flagged=1
 
 工單推進到 `verified` 後會自動從不可用名單移除（實測：2 台 → 驗收 1 台 → 剩 1 台）。
 
-## 7b. 目前待 C 調整的兩件事（我已先做相容，不擋 demo）
+## 7b. 目前待 C 調整的三件事
 
-1. **坐墊標記還沒寫進工單。** C 目前存在自己的 `CREPORTS["saddle"]`，回應裡寫
+### (1) `api_reset` 沒有清掉 `CREPORTS` — **這一項會擋驗收「三端 reset 一致」**
+
+重現：`python3 tests/test_b_reset_crossend.py`（B 的部分通過，這三項失敗）
+
+```
+[FAIL] reset 後 C 的回報也該清掉         → GET /api/c/report/C001 仍回 200，ticket_id=R001（工單已刪）
+[FAIL] reset 後坐墊標記不該指向已刪工單   → /api/c/saddle_markers 仍有 ticket_id=R001
+[FAIL] reset 後同 request_id 應重新建單   → 仍回傳舊的 R001（by_request 未清）
+```
+
+後果：reset 之後 C 端會顯示一張**已經不存在的工單編號**，而且同一個 `request_id`
+再送會拿到殘影而不是新單。
+
+修法是在 `api_reset()` 加一行（`CREPORTS` 是 C 的狀態，依分工由 C 決定語意）：
+
+```python
+CREPORTS.update({"items": [], "seq": 0, "by_request": {}, "saddle": []})
+```
+
+B 這邊的對應狀態（`TK.SERVICE.reset()`、`PL.ledger_reset()`）已經在 `api_reset` 裡清了。
+
+### (2) 坐墊標記還沒寫進工單（我已先做相容，不擋 demo）
+
+C 目前把坐墊標記存在自己的 `CREPORTS["saddle"]`，回應裡寫
    「B 主線尚未提供 saddle_marker_status 欄位」——那是在我這個端點上線前寫的。
    現在 `POST /api/ops/tickets/{id}/saddle` 已經可用，請改成在記錄自己的回報後
    一併呼叫它，工單上的 `saddle_marker` 才會是權威值。
@@ -205,8 +228,10 @@ GET /api/ops/availability?district=板橋區&sid=123&only_flagged=1
    若工單的 `saddle_marker.status` 還是 `unknown`，會附一個
    `saddle_marker_external: {status, source, ts, origin:"c_report", authoritative:false}`。
    這是唯讀的，不會覆寫工單欄位，A 端請不要把它當成已確認資訊。
-2. **`merged` 欄位。** C 的程式讀 `tk.get("merged")`，我原本只回 `action`。
-   已補上 `merged: true/false` 相容欄位，C 不必改碼。
+### (3) `merged` 欄位
+
+C 的程式讀 `tk.get("merged")`，我原本只回 `action`。已補上 `merged: true/false` 相容欄位，
+C 不必改碼。
 
 ## 8. 給 A 的串接清單
 

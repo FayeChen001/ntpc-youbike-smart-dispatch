@@ -1794,8 +1794,7 @@ def api_ops_availability(district: str = "", sid: int = -1, only_flagged: int = 
         if district and r.district != district: continue
         if sid >= 0 and int(r.sid) != sid: continue
         tks = by_sid.get(int(r.sid), [])
-        if not tks and (district or sid >= 0 or only_flagged): 
-            if only_flagged or not (district or sid >= 0): continue
+        if only_flagged and not tks: continue
         bikes = None if (r.bikes is None or (isinstance(r.bikes, float) and np.isnan(r.bikes))) else int(r.bikes)
         unusable_bikes = sorted({t["bike_no"] for t in tks if t.get("asset_type") == "bike" and t.get("bike_no")})
         unusable_docks = sorted({t["dock_id"] for t in tks if t.get("asset_type") == "dock" and t.get("dock_id")})
@@ -1811,7 +1810,7 @@ def api_ops_availability(district: str = "", sid: int = -1, only_flagged: int = 
             "may_need_service_event": flag,
             "confirmed_at": iso(now_ts()) if tks else None,
         }
-        if only_flagged and not (flag or suspected): continue
+        if only_flagged and not (flag or suspected or unusable_bikes or unusable_docks): continue
         rows.append(row)
     return {
         "stations": rows[:400], "count": len(rows), "clock_source": "replay", "ts": iso(now_ts()),
