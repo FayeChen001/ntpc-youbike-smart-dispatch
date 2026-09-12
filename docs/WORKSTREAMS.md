@@ -2,11 +2,15 @@
 
 三個 Claude session 平行做三端。**共用同一個工作目錄、同一條 `main`**，靠檔案歸屬避免撞車，不開分支。
 
-| 主線 | 負責的端 | 對應角色 |
-|---|---|---|
-| A | 政府端 `/gov` | 新北市交通局：監看、事件決策、驗收 |
-| B | 微笑單車派車端 `/ops` | 營運調度與維修派工 |
-| C | 用戶端 `/citizen` | 民眾（手機框） |
+**名稱一律用中文，不要再用 A／B／C 稱呼。**（檔名與既有 commit 裡的 `HANDOFF_A/B/C.md`、
+`test_a_*`、`test_b_*`、`test_c_*` 維持原樣，改名會打斷另外兩條線的引用與歷史，
+但講話、文件內文、新寫的說明一律用中文名。）
+
+| 主線 | 路徑 | 對應角色 | 舊代號（僅存在於檔名） |
+|---|---|---|---|
+| **政府端** | `/gov` | 新北市交通局：監看、事件決策、驗收 | 政府端 |
+| **微笑單車** | `/ops` | 營運調度與維修派工 | 微笑單車 |
+| **用戶端** | `/citizen` | 民眾（手機框） | 用戶端 |
 
 ## 為什麼不開分支
 
@@ -19,9 +23,9 @@
 
 | 主線 | 這些檔案你說了算 |
 |---|---|
-| A 政府端 | `app/static/gov.html`、`app/metrics.py`、`docs/METRICS.md` |
-| B 派車端 | `app/static/ops.html`、`app/static/ops.js`、`app/static/ops_baseline.json`、`app/planner.py` 的 `plan_dispatch` / `gaps` / 組趟相關 |
-| C 用戶端 | `app/static/citizen.html`、`app/static/sw.js`、`app/static/manifest.webmanifest`、`app/static/icons/`、`app/planner.py` 的 `plan_trip` 三方案、`docs/REWARDS.md` |
+| 政府端 | `app/static/gov.html`、`app/metrics.py`、`docs/METRICS.md` |
+| 微笑單車 | `app/static/ops.html`、`app/static/ops.js`、`app/static/ops_baseline.json`、`app/planner.py` 的 `plan_dispatch` / `gaps` / 組趟相關 |
+| 用戶端 | `app/static/citizen.html`、`app/static/sw.js`、`app/static/manifest.webmanifest`、`app/static/icons/`、`app/planner.py` 的 `plan_trip` 三方案、`docs/REWARDS.md` |
 
 **不要改別人歸屬的檔案。** 需要對方改，在 chat 講，不要自己動手。
 
@@ -64,7 +68,7 @@
 
 優先序依 `docs/DIRECTION_REVIEW_2026-09-12.md`：第一優先＝事件台帳＋P0/P1 手機決策＋設備分流工單。
 
-### A 政府端
+### 政府端
 
 - [x] 驗收指標面板（服務中斷事件上下界、告警門檻取捨、流程時效、量不出來的四項）— `b717fe5`
 - [x] **事件台帳**（`376c15f`）：分級 P0／P1／長期／待查、觀測下界與上界、最後資料時間、負責人、ETA、原因與證據、狀態留痕。站群同時失效以 500 公尺鄰站關係認定，不是以行政區。API 是 `/api/ledger`（`/api/events` 已被 SSE 端點佔用）。
@@ -74,7 +78,7 @@
 - [ ] **服務可用性**：官方可借 N／已確認不可用 X／疑似異常 Y／確認時間（需要 C 線的症狀回報彙總）。
 - [ ] **接 B 的 planning cycle**：把候選／確認／在途與資源帳顯示到全域儀表板。詳見 `docs/HANDOFF_A.md` 的阻擋清單。
 
-### B 派車端
+### 微笑單車
 
 - [ ] **資源帳共用**：120 與 180 分鐘的方案目前各自規劃，會重複承諾同一批人車與庫存。要共用一本資源帳。
 - [ ] **每個送站各自的服務時限**：確認不是只用第一個送站的抵達時間判定整趟可行。
@@ -82,7 +86,7 @@
 - [ ] **工單去重改用車號／柱號**：現在以「站點＋問題類別＋2 小時」去重，會把不同設備合併。缺 `asset_type`、`dock_id`、`error_code`。
 - [ ] 保留殘量的邏輯已在 `planner.py` 修過，需要針對性測試確認。
 
-### C 用戶端
+### 用戶端
 
 - [ ] **借不到 ≠ 車壞掉**：回報流程改成「先問可觀察症狀」，不強迫使用者選根因。自動帶入站點、時間、借／還階段。
 - [ ] **交易與安全狀態**：借車未成功才建議換設備；還車未確認要保留現場證據並進官方協助，**不能假裝已停止計費**。
@@ -93,7 +97,7 @@
 
 | 交會點 | 誰主導 | 影響誰 |
 |---|---|---|
-| `evaluate_alerts` 改成事件台帳 | A | B（告警來源）、C（通知） |
-| `tickets` 結構加車號／柱號／錯誤碼 | B | C（回報表單要送這些欄位） |
+| `evaluate_alerts` 改成事件台帳 | 政府端 | 微笑單車（告警來源）、用戶端（通知） |
+| `tickets` 結構加車號／柱號／錯誤碼 | 微笑單車 | 用戶端（回報表單要送這些欄位） |
 | `notify()` 的 channel 與 payload | 三方共議 | 三端 |
 | `STATE` 新增欄位 | 誰加誰負責 `api_reset` 一起清 | 三端 |
