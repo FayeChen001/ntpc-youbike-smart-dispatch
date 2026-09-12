@@ -244,3 +244,70 @@ B 發布 `GET /api/ops/contract`（`contract_version: b-1`）之後，C 做了�
 | `/citizen` | `?report=<id>` | C | 已實作，實測 `/citizen?report=C001` 直接開該筆處理進度 |
 
 請 B 在 `/ops` 加上讀 `?ticket=` 並開啟該張工單；C 這側不需再改。
+
+
+---
+
+# 二十一、下一個 session 接手 C 主線從這裡開始
+
+## 你是誰
+
+你負責 `/Users/chenhongfei/CC/ntpc-youbike` 的 **C 用戶端主線**。先讀 `docs/WORKSTREAMS.md` 的檔案歸屬與
+git 硬規則（三個 session 共用同一個工作目錄與 HEAD，**禁止** `git add -A`、`stash`、`reset --hard`、
+`switch`、`checkout .`）。再讀本檔全文與 `docs/DIRECTION_REVIEW_2026-09-12.md`。
+
+任務書在 `/Users/chenhongfei/Documents/Codex/2026-09-12/new-chat/outputs/claude-control/第二輪正式任務書.md`，
+最末的「使用者最新修訂」優先於前文。
+
+## C 歸屬的檔案
+
+`app/static/citizen.html`、`app/static/sw.js`、`app/static/manifest.webmanifest`、`app/static/icons/`、
+`app/report_image.py`、`app/planner.py` 的 `plan_trip`、`docs/REWARDS.md`、`docs/HANDOFF_C.md`、
+`tests/test_c_round2.py`、`tests/test_c_sse.py`，以及 `app/server.py` 中
+`# C 主線（用戶端）` 到 `# A 主線（政府端）` 之間的區塊。
+
+**其他檔案一律不要動。** `app/server.py` 提交前務必 `git diff -U0 app/server.py | grep "^@@"`
+確認所有 hunk 都落在 C 區塊行號內；若別人也有未提交的改動，用
+`git show HEAD:app/server.py` 加自己的區塊重組後以 `git hash-object -w` + `git update-index --cacheinfo` 精準暫存。
+
+## 目前完成度
+
+C 後端驗收 35 項、SSE 5 項，全數通過。最後 commit `24bb00f`。
+已完成：按鈕直接通報、照片 AI 輔助與降級、坐墊提醒、進度追蹤、B 契約 b-1 接線、
+request_id 冪等、SSE 斷線重連、抵達期限與餘裕、通知深連結依角色路由。
+
+## 怎麼跑
+
+```bash
+cd /Users/chenhongfei/CC/ntpc-youbike
+export PATH=$HOME/Library/Python/3.9/bin:$PATH AWS_PROFILE=hackathon
+# 共用展示用 8787（已在跑，重啟前要在 chat 喊一聲，會清掉三端回放狀態）
+# 自己測試另開埠，測完關掉
+python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8791 &
+curl -s -X POST localhost:8791/api/profile -H 'content-type: application/json' \
+  -d '{"role":"worker","home_sid":895,"work_sid":858,"out_time":"07:40","back_time":"18:10","join_rewards":true,"preference":"time","onboarded":true}'
+YB_BASE=http://127.0.0.1:8791 python3 tests/test_c_round2.py
+YB_BASE=http://127.0.0.1:8791 python3 tests/test_c_sse.py
+```
+
+測試檔有防呆：`YB_BASE` 指向 `:8787` 會拒絕執行，因為會呼叫 `/api/reset` 清掉三端狀態。
+
+## 還沒做完的（依優先序）
+
+1. **I01 三端同一事件整合驗收**。要 A、B 同時在場跑一次：C 建報 → B 接手 → 修復 → 驗收，
+   確認同一個 `ticket_id` 三端狀態一致、修復不等於自動驗收。C 這側已備妥。
+2. **請 B 在 `/ops` 加讀 `?ticket=<id>`** 深連結並開啟該張工單。C 已經在送。
+3. **真機驗證**：觸控、相機 `capture="environment"`、iOS Safari 加入主畫面。
+   目前只在內嵌瀏覽器以滑鼠事件測過。
+4. **視覺模型連線層逾時**與**前端輪詢降級**未以真實斷網重現。
+5. 若還有時間：民眾端的獎勵流程（`docs/REWARDS.md` 的四層機制）目前只有存摺與集章，
+   動態加碼倍率沒有實作。任務書說「保留既有獎勵流程、不擴充」，所以這項不是必做。
+
+## 不要做的事
+
+- 不要重訓模型、不要重跑 `pipeline/`、不要動 `app/predict.py`、`models/`、`data/processed/`（凍結）。
+- 不要大改視覺。通勤首頁、推薦卡、三方案切換、存摺已定案。
+- 不要在 C 自行計時宣稱工單修好，工單狀態一律以 B 的 `STATE["tickets"]` 為準。
+- 不要宣稱背景推播已完成。`/api/c/push/status` 的 `background_push.available` 是 `false`，
+  iOS 關頁通知本輪是明示模擬。
+- 不要因為照片看不出異常就判定車輛安全或正常。
