@@ -309,3 +309,104 @@ python3 tests/test_b_availability.py   # 17 項：服務可用性不重扣、不
   職務怎麼分沒有來源。
 - **派車執行進度是模擬**：出車、抵達、完成不是真實車機回報。
 - **快照不是交易**：零車快照不等於有人借不到，工單數不等於實際故障台數。
+
+---
+
+# 下一個 session 接手 B 主線從這裡開始
+
+## 0. 先做這三件事
+
+```bash
+cd /Users/chenhongfei/CC/ntpc-youbike
+cat docs/WORKSTREAMS.md          # 檔案歸屬與 git 硬規則，先讀
+git log --oneline -15 && git status --short
+curl -s http://127.0.0.1:8787/api/ops/contract | python3 -m json.tool   # 確認共用機跑的是哪版
+```
+
+## 1. B 線擁有哪些檔案
+
+| 類別 | 檔案 |
+|---|---|
+| 前端 | `app/static/ops.html`、`app/static/ops.js`、`app/static/ops_baseline.json` |
+| 後端模組 | `app/tickets.py`（建單服務，純邏輯） |
+| 共用檔中的 B 區塊 | `app/server.py` 的 `submit_ticket` / `api_ticket_create` 委派 / `api_reset` 裡的 `TK.SERVICE.reset(); PL.ledger_reset()` / 檔尾「B 線（派車端）附加端點」整塊 |
+| 排程 | `app/planner.py` 的 `ASSUMPTIONS`、資源帳（`cycle_*`）、`gaps`、`plan_dispatch`。**`plan_trip` 是 C 的，不要碰** |
+| 文件與測試 | `docs/HANDOFF_B.md`、`docs/DATA_SOURCES.md`、`tests/test_b_*.py`、`tests/README_B.md` |
+
+**不要改**：`gov.html`、`metrics.py`、`events.py`、`docs/METRICS.md`、`docs/HANDOFF_A.md`（A 的）；
+`citizen.html`、`sw.js`、`manifest.webmanifest`、`icons/`、`report_image.py`、`docs/REWARDS.md`、
+`docs/HANDOFF_C.md`、`tests/test_c_*.py`（C 的）。`pipeline/`、`models/`、`data/processed/`、
+`predict.py` 凍結。
+
+## 2. 提交共用檔的作法（踩過坑，照做）
+
+`app/server.py` 三線都在改。**絕對不要 `git add app/server.py` 就了事**——2026-09-12 發生過
+一次，某線 commit 時掃走政府端還沒寫完的區塊，導致 main 上 NameError。
+
+```bash
+git diff -U0 app/server.py | grep "^@@"      # 先看有幾個 hunk
+git diff app/server.py > /tmp/full.patch     # 再逐 hunk 確認哪些是自己的
+# 只留自己的 hunk 存成 mine.patch，然後：
+git apply --cached --check /tmp/mine.patch && git apply --cached /tmp/mine.patch
+git show :app/server.py > /tmp/staged.py && python3 -c "import ast;ast.parse(open('/tmp/staged.py').read())"
+```
+確認暫存版語法過、且不含別人的新東西，才 commit。
+
+## 3. 現在做到哪
+
+已完成並驗證（`tests/` 共 8 套，B 自己的 7 套全過）：
+建單單一入口、資產識別去重、`request_id` 冪等、四種狀態分離、坐墊標記、
+顯式規劃週期資源帳（候選／已確認／在途／已釋放）、逐站服務時限、
+前置拆成新動員 15 分與在勤改道 3 分、逐段載量守恆、服務可用性彙總、
+維修派查 UI、跨區逾時主責、三端閉環 I01。
+
+## 4. 接手後第一件事：重啟 8787 並複驗兩項
+
+共用機目前跑的程式**少了兩個已經 commit 的修正**：
+
+1. `only_flagged` 過濾條件修正（`c6bb5aa`）——有已知不可用設備但未達整站門檻的站會被漏掉。
+2. C 在 `api_reset` 補的 `CREPORTS` 清除（`f8184e1`）——我的
+   `tests/test_b_reset_crossend.py` 目前有 3 項失敗，**程式碼已修，等重啟後複驗應該要全過**。
+
+```bash
+# 重啟前一定要在 chat 喊一聲，會清掉三端的回放狀態
+lsof -nP -iTCP:8787 -sTCP:LISTEN            # 找 pid，只關這個，別碰 8788/8791
+kill <pid> && python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8787 &
+# 約 45 秒載入完成後：
+YB_BASE=http://127.0.0.1:8787 python3 tests/test_b_reset_crossend.py   # 應該從 3 fail 變全過
+curl -s "http://127.0.0.1:8787/api/ops/availability?only_flagged=1" | python3 -m json.tool | head -30
+# 跑完把情境復原：
+curl -X POST http://127.0.0.1:8787/api/scenario/commute_am -H 'content-type: application/json' -d '{}'
+```
+
+## 5. 還沒做的（依重要性）
+
+1. **`service_state` 恆為 `unknown`**，沒接站點恢復判定。「已處理但未恢復」「已恢復但維修未結案」
+   目前只能從 `status` 與 `asset_state` 推。這是驗收矩陣裡明列的差異項。
+2. **`evidence[]` 未做內容驗證**（C 送什麼就存什麼）。
+3. 人力調度任務目前只能從「缺車站」分頁手動建，沒有自動從 `minor_gap` 產生。
+4. `ops_baseline.json` 的職務拆分（車組 80／人力 200／維修 70）是情境假設，公開資料只有
+   全市 350 人總數——**介面上已標示，不要偷偷把它講成實測**。
+
+## 6. 測試
+
+```bash
+python3 tests/test_b_tickets.py       # 38 項 fixture，不需伺服器
+python3 tests/test_b_ledger.py        # 32 項 fixture，不需伺服器
+python3 tests/test_b_dispatch.py      # 11 項，需要伺服器提供真實站況
+# 需要伺服器的，預設打 8789；要對 8787 跑要設 YB_BASE，而且會 /api/reset
+python3 -m uvicorn app.server:app --host 127.0.0.1 --port 8789 &
+python3 tests/test_b_http_tickets.py tests/test_b_http_cycle.py tests/test_b_closed_loop.py
+python3 tests/test_b_availability.py
+python3 tests/test_b_reset_crossend.py
+```
+**每個 server 吃約 1.5GB，測完記得關。**
+
+## 7. 講話的界線（介面與文件都要守）
+
+- 派車執行進度、車與人的位置、現場回報內容、車隊編制拆分 → **模擬／情境**，不能講成實測。
+- AI 圖片觀察是**證據**，不是現場驗收；不可放進「已確認原因」。
+- 建單不等於已確認根因、不等於遠端停租、不等於官方庫存已扣除、不等於安全復役。
+- 沒有可派資源時**不准生成 ETA**（`cross_district` 沒帶 `eta` 後端會回 400）。
+- 官方可借數與本工具的已知不可用**並列不相減**，兩者不可相加。
+- 快照零車不等於有人借不到；工單數不等於實際故障台數。
