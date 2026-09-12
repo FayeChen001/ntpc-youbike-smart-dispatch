@@ -1,0 +1,411 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>YouBike 生活圈</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"><link rel="stylesheet" href="/static/common.css">
+<style>
+:root{--ink:#16202c;--sub:#7b8794}
+body{background:#fff;max-width:430px;margin:0 auto;height:100vh;display:flex;flex-direction:column;overflow:hidden;color:var(--ink)}
+.screen{display:none;flex:1;min-height:0;flex-direction:column}.screen.on{display:flex}
+.scroll{flex:1;overflow:auto;-webkit-overflow-scrolling:touch}
+/* 頂部 */
+.top{display:flex;align-items:center;gap:8px;padding:14px 18px 8px}
+.top .wx{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--sub)}
+.top .wx b{color:var(--ink);font-weight:600}
+.top .t{margin-left:auto;font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+h1.big{font-size:26px;margin:2px 18px 2px;letter-spacing:-.4px;line-height:1.25}
+.sub{margin:0 18px 14px;color:var(--sub);font-size:13px}
+/* 卡片 */
+.pad{padding:0 18px}
+.main-card{border:1px solid #e3e8ef;border-radius:18px;padding:16px;box-shadow:0 2px 10px rgba(20,30,50,.05);margin-bottom:10px;background:#fff}
+.main-card.pri{border-color:#0f5fa8;box-shadow:0 4px 18px rgba(15,95,168,.14)}
+.tag{display:inline-block;font-size:11px;padding:3px 9px;border-radius:999px;background:#eef4fb;color:#14559b;font-weight:600}
+.tag.g{background:#e8f7ef;color:#15683a}.tag.o{background:#fff3e0;color:#8a5400}.tag.r{background:#fdeaea;color:#a12626}.tag.p{background:#f0ebff;color:#4d33b8}.tag.n{background:#f2f4f7;color:#5c6775}
+.eta{display:flex;align-items:baseline;gap:8px;margin:10px 0 2px}
+.eta .n{font-size:38px;font-weight:800;letter-spacing:-1.5px;line-height:1}
+.eta .u{font-size:14px;color:var(--sub)}.eta .arr{margin-left:auto;font-size:13px;color:var(--sub)}
+.steps{margin-top:12px;border-top:1px solid #eef1f5;padding-top:10px}
+.step{display:flex;gap:10px;align-items:flex-start;padding:7px 0}
+.step .ic{width:26px;height:26px;border-radius:50%;background:#f2f5f9;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.step .tx{flex:1;font-size:13px;line-height:1.5}.step .tx b{font-weight:600}
+.step .st{font-size:11px;color:var(--sub);margin-top:1px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.btn{display:block;width:100%;box-sizing:border-box;border:none;border-radius:14px;padding:15px;font-size:16px;font-weight:700;background:#0f5fa8;color:#fff;cursor:pointer}
+.btn:active{transform:scale(.99)}.btn.sec{background:#f2f5f9;color:#2b3542}.btn.warn{background:#fff3e0;color:#8a5400}.btn.big{padding:18px;font-size:17px;border-radius:16px}
+.btn.ghost{background:transparent;color:var(--sub);font-weight:500;font-size:13px;padding:10px}
+.alts{margin-top:4px}
+.alt{display:flex;align-items:center;gap:10px;border:1px solid #e8ecf1;border-radius:14px;padding:11px 13px;margin-bottom:8px;cursor:pointer;background:#fff}
+.alt:active{background:#f8fafc}.alt .l{flex:1;min-width:0}.alt .nm{font-size:13px;font-weight:600}.alt .ds{font-size:11px;color:var(--sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.alt .rt{text-align:right;font-size:12px;color:var(--sub);flex:none}.alt .rt b{display:block;font-size:16px;color:var(--ink)}
+/* 附近 */
+.near{border:1px solid #e8ecf1;border-radius:16px;overflow:hidden;margin-bottom:14px}
+.near .hd{display:flex;align-items:center;gap:8px;padding:11px 13px;font-size:13px}
+.near .hd b{font-weight:700}.near .hd .m{margin-left:auto;font-size:11px;color:var(--sub)}
+#mapmini{height:150px}
+.nlist{max-height:0;overflow:hidden;transition:max-height .25s}.nlist.on{max-height:320px;overflow:auto}
+.nrow{display:flex;align-items:center;gap:8px;padding:9px 13px;border-top:1px solid #f0f3f6;font-size:12px}
+.nrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.banner{display:flex;gap:10px;align-items:flex-start;border-radius:14px;padding:12px 13px;margin-bottom:10px;font-size:13px;line-height:1.5}
+.banner.ev{background:#f5f0ff;border:1px solid #e0d7fb}.banner.rain{background:#eaf3fb;border:1px solid #cfe0f2}.banner.note{background:#fff8e8;border:1px solid #f3e0b5}
+/* onboarding */
+.ob{padding:26px 22px;display:flex;flex-direction:column;height:100%}
+.ob .prog{display:flex;gap:5px;margin-bottom:22px}.ob .prog i{height:3px;flex:1;border-radius:2px;background:#e6eaef}.ob .prog i.on{background:#0f5fa8}
+.ob h2{font-size:23px;margin:0 0 6px;letter-spacing:-.4px}.ob p.h{color:var(--sub);font-size:13px;margin:0 0 22px;line-height:1.6}
+.pick{display:grid;gap:9px;margin-bottom:14px}
+.opt{border:1.5px solid #e6eaef;border-radius:14px;padding:14px;cursor:pointer;display:flex;align-items:center;gap:12px;background:#fff}
+.opt.sel{border-color:#0f5fa8;background:#f5f9fd}.opt .e{font-size:22px}.opt .tt{font-weight:700;font-size:14px}.opt .dd{font-size:11.5px;color:var(--sub);margin-top:2px}
+select,input[type=time]{width:100%;border:1.5px solid #e6eaef;border-radius:12px;padding:12px;font:inherit;background:#fff;-webkit-appearance:none;appearance:none}
+label.fl{display:block;font-size:12px;color:var(--sub);margin:14px 0 6px;font-weight:600}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+/* 導航 */
+#mapnav{flex:1;min-height:0}
+.navbar{background:#0f5fa8;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px}
+.navbar .x{background:rgba(255,255,255,.18);border:none;color:#fff;border-radius:8px;padding:5px 9px;font-size:12px}
+.navbar .ph{font-size:12px;opacity:.85}.navbar .hd2{font-size:15px;font-weight:700}
+.navcard{background:#fff;border-top:1px solid #e6eaef;padding:14px 16px 16px}
+.navins{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+.navins .ar{font-size:30px;width:42px;text-align:center}
+.navins .tx{flex:1}.navins .tx b{font-size:16px;display:block}.navins .tx span{font-size:12px;color:var(--sub)}
+.navmeta{display:flex;gap:14px;font-size:12px;color:var(--sub);margin-bottom:12px}.navmeta b{color:var(--ink);font-size:15px}
+.prog2{height:5px;background:#eef1f5;border-radius:3px;overflow:hidden;margin-bottom:12px}.prog2 i{display:block;height:100%;background:#0f5fa8;width:0;transition:width .3s}
+/* 還車 / 報修 */
+.issues{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}
+.iss{border:1.5px solid #e6eaef;border-radius:14px;padding:15px 10px;text-align:center;cursor:pointer;background:#fff}
+.iss.sel{border-color:#d64545;background:#fdf4f4}.iss .e{font-size:25px;display:block;margin-bottom:5px}.iss .t{font-size:12.5px;font-weight:600}
+/* 存摺 */
+.jar{text-align:center;padding:20px 18px 6px}
+.jar .lb{font-size:12px;color:var(--sub)}
+.jar .v{font-size:50px;font-weight:800;letter-spacing:-2.5px;line-height:1;margin:4px 0}
+.jar .v small{font-size:17px;font-weight:600;letter-spacing:0;margin-left:3px;color:var(--sub)}
+.grid4{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;padding:12px 18px}
+.mini{border:1px solid #e8ecf1;border-radius:14px;padding:12px}
+.mini .l{font-size:11px;color:var(--sub)}.mini .v{font-size:21px;font-weight:700;margin-top:2px}.mini .v small{font-size:12px;font-weight:500;color:var(--sub)}
+.ms{padding:4px 18px 0}
+.msr{margin-bottom:13px}.msr .hd{display:flex;font-size:12.5px;margin-bottom:5px}.msr .hd .r{margin-left:auto;color:var(--sub);font-size:11.5px}
+.bar{height:8px;background:#eef1f5;border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#0aa47a,#0f5fa8);border-radius:4px}
+.stamps{display:flex;flex-wrap:wrap;gap:11px;padding:6px 18px 0}
+.stp{width:70px;text-align:center;font-size:10px;color:var(--sub)}
+.stp i{display:block;width:56px;height:56px;border-radius:50%;border:2px dashed #0f5fa8;background:radial-gradient(#fff,#eef4fb);display:flex;align-items:center;justify-content:center;font-size:23px;font-style:normal;margin:0 auto 4px}
+.stp.lock i{border-color:#dde2e8;background:#f7f8fa;filter:grayscale(1);opacity:.55}
+.days{display:flex;gap:3px;align-items:flex-end;height:46px;padding:0 18px}
+.days i{flex:1;background:#cfe0f2;border-radius:2px 2px 0 0;min-height:3px}.days i.hi{background:#0f5fa8}
+/* 我的 */
+.mrow{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #f0f3f6;font-size:14px}
+.mrow .l{flex:1}.mrow .v{color:var(--sub);font-size:13px}
+/* 底部 */
+nav{display:flex;border-top:1px solid #eef1f5;background:#fff;padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:none;background:transparent;padding:9px 2px 10px;font-size:10.5px;color:#9aa4b2;border-radius:0;position:relative}
+nav button .e{display:block;font-size:19px;margin-bottom:1px;filter:grayscale(1);opacity:.55}
+nav button.on{color:#0f5fa8;font-weight:700}nav button.on .e{filter:none;opacity:1}
+nav button .bdg{position:absolute;top:5px;right:calc(50% - 20px);background:#d64545;color:#fff;border-radius:999px;font-size:9px;padding:1px 5px}
+.toasts{top:8px;right:8px;width:calc(100% - 16px)}
+.hint{font-size:11px;color:var(--sub);line-height:1.6;padding:10px 18px 20px}
+.sheet{position:fixed;left:0;right:0;bottom:0;max-width:430px;margin:0 auto;background:#fff;border-radius:20px 20px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.18);z-index:900;transform:translateY(101%);transition:.25s;padding:18px 18px calc(18px + env(safe-area-inset-bottom))}
+.sheet.on{transform:none}.sheet h3{margin:0 0 4px;font-size:18px}.sheet p{margin:0 0 14px;color:var(--sub);font-size:13px}
+.backdrop{position:fixed;inset:0;background:rgba(10,18,28,.35);z-index:850;display:none}.backdrop.on{display:block}
+</style></head><body>
+
+<!-- 設定 -->
+<section class="screen on" id="s-onboard"><div class="ob">
+  <div class="prog"><i class="on"></i><i></i><i></i></div>
+  <div id="ob-body" style="flex:1"></div>
+  <button class="btn" id="ob-next" onclick="obNext()">下一步</button>
+  <button class="btn ghost" id="ob-back" onclick="obBack()" style="display:none">上一步</button>
+</div></section>
+
+<!-- 現在 -->
+<section class="screen" id="s-home">
+  <div class="top"><div class="wx" id="wx">—</div><div class="t" id="clock">—</div></div>
+  <div class="scroll">
+    <h1 class="big" id="greet">早安</h1><p class="sub" id="greet2"></p>
+    <div class="pad" id="home-body"></div>
+    <div class="hint" id="home-hint"></div>
+  </div>
+</section>
+
+<!-- 導航 -->
+<section class="screen" id="s-nav">
+  <div class="navbar"><button class="x" onclick="exitNav()">結束</button><div><div class="ph" id="nav-phase">前往借車站</div><div class="hd2" id="nav-target">—</div></div></div>
+  <div id="mapnav"></div>
+  <div class="navcard" id="nav-card"></div>
+</section>
+
+<!-- 存摺 -->
+<section class="screen" id="s-wallet"><div class="scroll" id="wallet-body"></div></section>
+
+<!-- 我的 -->
+<section class="screen" id="s-me"><div class="scroll" id="me-body"></div></section>
+
+<nav id="nav-bar" style="display:none">
+  <button class="on" data-s="home" onclick="go('home')"><span class="e">🧭</span>現在</button>
+  <button data-s="wallet" onclick="go('wallet')"><span class="e">🏦</span>存摺</button>
+  <button data-s="me" onclick="go('me')"><span class="e">👤</span>我的</button>
+</nav>
+
+<div class="backdrop" id="bd" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script><script src="/static/common.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let S={profile:null,places:null,plan:null,near:null,wx:null,clock:null,trip:null,screen:'home',obStep:0,ob:{},sel:0,unread:0,issues:[],navTimer:null,navProg:0,legIdx:0,legs:[]};
+let mapMini=null, mapNav=null, navLayers=[], meMarker=null;
+
+/* ---------- 設定流程 ---------- */
+const OB=[
+ ()=>`<h2>你是？</h2><p class="h">我們用這個決定預設的通勤時間與任務類型。</p>
+  <div class="pick">
+   ${[['worker','🧑‍💼','上班族','住家與辦公室之間通勤'],['student','🎒','學生','上下學，放學可接順路任務']].map(([k,e,t,d])=>
+    `<div class="opt ${S.ob.role===k?'sel':''}" onclick="S.ob.role='${k}';obRender()"><div class="e">${e}</div><div><div class="tt">${t}</div><div class="dd">${d}</div></div></div>`).join('')}
+  </div>`,
+ ()=>{const P=S.places, w=S.ob.role==='student'?'school':'work';
+  return `<h2>常用地點</h2><p class="h">只要設一次。之後每天出門前會自動幫你算好。</p>
+  <label class="fl">住家附近</label><select id="ob-home">${P.home.map(p=>`<option value="${p.sid}" ${S.ob.home_sid==p.sid?'selected':''}>${p.name}（${p.district}）</option>`).join('')}</select>
+  <label class="fl">${S.ob.role==='student'?'學校':'上班地點'}</label><select id="ob-work">${P[w].map(p=>`<option value="${p.sid}" ${S.ob.work_sid==p.sid?'selected':''}>${p.name}（${p.district}）</option>`).join('')}</select>
+  <div class="row2"><div><label class="fl">${S.ob.role==='student'?'上學':'上班'}出門</label><input type="time" id="ob-out" value="${S.ob.out_time}"></div>
+  <div><label class="fl">回家</label><input type="time" id="ob-back" value="${S.ob.back_time}"></div></div>`;},
+ ()=>`<h2>集點計劃</h2><p class="h">把車借還到系統預測會缺車或滿站的地方，可以拿點數與城市章。</p>
+  <div class="pick">
+   ${[[true,'🏅','加入','幫忙分流可累積點數、集章與商家優惠'],[false,'🚫','先不要','只做路線推薦，不顯示獎勵']].map(([k,e,t,d])=>
+    `<div class="opt ${S.ob.join_rewards===k?'sel':''}" onclick="S.ob.join_rewards=${k};obRender()"><div class="e">${e}</div><div><div class="tt">${t}</div><div class="dd">${d}</div></div></div>`).join('')}
+  </div>
+  <label class="fl">路線推薦時，你最在意什麼</label>
+  <div class="pick">
+   ${[['time','⏱','準時抵達','總時間最短'],['reliable','🛡','一定借得到','借不到或還不了的風險最低'],['reward','🎯','多集點','優先推薦有獎勵的借還']].map(([k,e,t,d])=>
+    `<div class="opt ${S.ob.preference===k?'sel':''}" onclick="S.ob.preference='${k}';obRender()"><div class="e">${e}</div><div><div class="tt">${t}</div><div class="dd">${d}</div></div></div>`).join('')}
+  </div><div class="hint" style="padding:4px 0 0">之後每次你挑了別的方案，我們會問要不要換。</div>`
+];
+function obRender(){ $('ob-body').innerHTML=OB[S.obStep](); document.querySelectorAll('.ob .prog i').forEach((e,i)=>e.classList.toggle('on',i<=S.obStep)); $('ob-next').textContent=S.obStep===2?'開始使用':'下一步'; $('ob-back').style.display=S.obStep?'':'none';
+  if(S.obStep===1){ const w=S.ob.role==='student'?'school':'work'; if(!S.ob.home_sid) S.ob.home_sid=S.places.home[0].sid; if(!S.ob.work_sid||!S.places[w].some(p=>p.sid==S.ob.work_sid)) S.ob.work_sid=S.places[w][0].sid; } }
+function obBack(){ if(S.obStep){S.obStep--;obRender();} }
+async function obNext(){
+  if(S.obStep===1){ S.ob.home_sid=+$('ob-home').value; S.ob.work_sid=+$('ob-work').value; S.ob.out_time=$('ob-out').value; S.ob.back_time=$('ob-back').value; }
+  if(S.obStep===0 && S.ob.role==='student'){ S.ob.out_time='07:30'; S.ob.back_time='16:00'; }
+  if(S.obStep<2){ S.obStep++; obRender(); return; }
+  S.profile = await API.post('/api/profile',{...S.ob,onboarded:true});
+  $('nav-bar').style.display=''; go('home'); refreshHome();
+}
+
+/* ---------- 畫面切換 ---------- */
+function go(s){ S.screen=s; document.querySelectorAll('.screen').forEach(e=>e.classList.toggle('on',e.id==='s-'+s));
+  document.querySelectorAll('#nav-bar button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));
+  $('nav-bar').style.display = ['home','wallet','me'].includes(s)?'':'none';
+  if(s==='wallet') loadWallet(); if(s==='me') loadMe();
+  if(s==='home'&&mapMini) setTimeout(()=>mapMini.invalidateSize(),60);
+  if(s==='nav'&&mapNav) setTimeout(()=>mapNav.invalidateSize(),60);
+}
+function openSheet(html){ $('sheet').innerHTML=html; $('sheet').classList.add('on'); $('bd').classList.add('on'); }
+function closeSheet(){ $('sheet').classList.remove('on'); $('bd').classList.remove('on'); }
+
+/* ---------- 天氣 / 時鐘 ---------- */
+function wxIcon(w){ if(!w.available) return '❔'; if(w.rain_mm>=4) return '🌧'; if(w.is_raining) return '🌦'; if(w.code>=3) return '☁️'; if(w.code>=1) return '⛅'; return '☀️'; }
+function renderWx(){ const w=S.wx; if(!w) return; $('wx').innerHTML = w.available? `${wxIcon(w)} <b>${w.desc}</b> ${w.temp}°C${w.is_raining?`・雨 ${w.rain_mm} mm`:''}` : '天氣資料不可用'; }
+
+/* ---------- 現在 ---------- */
+function context(){ const now=S.clock?S.clock.ts.slice(11,16):'07:00'; const p=S.profile;
+  const mins=t=>+t.slice(0,2)*60+ +t.slice(3,5); const n=mins(now), o=mins(p.out_time), b=mins(p.back_time);
+  if(n < o+30) return {dir:'out',time:p.out_time,label:p.role==='student'?'上學':'上班',lead:o-n};
+  if(n < b+90) return {dir:'back',time:p.back_time,label:p.role==='student'?'放學回家':'回家',lead:b-n};
+  return {dir:'out',time:p.out_time,label:'明天'+(p.role==='student'?'上學':'上班'),lead:24*60-n+o}; }
+async function refreshHome(){
+  const c=context(); const p=S.profile; const date=S.clock.ts.slice(0,10);
+  const origin = c.dir==='out'? p.home_pos : p.work_pos;
+  const dest   = c.dir==='out'? p.work_pos : p.home_pos;
+  $('greet').textContent = c.lead>90? `今天要${c.label}` : c.lead>0? `${c.lead} 分鐘後要${c.label}` : `現在${c.label}`;
+  $('greet2').textContent = `${c.dir==='out'? (p.home.name+' 一帶') : p.work.name} → ${c.dir==='out'? p.work.name : (p.home.name+' 一帶')}`;
+  $('home-body').innerHTML = '<div class="main-card"><div class="muted small">正在算最佳路線…</div></div>';
+  const [plan, near] = await Promise.all([
+    API.post('/api/plan',{origin,dest,depart_ts:`${date} ${c.time}`,preference:p.preference}),
+    API.get(`/api/nearby?lat=${origin[0]}&lon=${origin[1]}&r=900`)]);
+  S.plan=plan; S.near=near; S.wx=plan.weather||near.weather; renderWx(); S.sel=0; renderHome(c);
+  if(plan.explain_id) pollExplain(plan.explain_id);
+}
+function riskDot(p){ return `<span class="dot" style="background:${riskColor(p)}"></span>`; }
+function renderHome(c){
+  const r=S.plan, n=S.near, p=S.profile; if(!r) return;
+  if(!r.options||!r.options.length){ $('home-body').innerHTML=`<div class="main-card">${r.error||'找不到方案'}</div>`; return; }
+  const o=r.options[S.sel]; const ev=(n&&n.events&&n.events[0])||null;
+  let html='';
+  if(S.trip&&S.trip.active) html += `<div class="banner note"><div>🚴</div><div style="flex:1">行程進行中：${S.trip.option.return.name}<br><button class="btn sec" style="margin-top:8px;padding:9px" onclick="go('nav')">繼續導航</button></div></div>`;
+  if(ev) html += `<div class="banner ev"><div>🎤</div><div><b>附近有活動</b>：${ev.title}<br>${ev.hint}</div></div>`;
+  if(S.wx&&S.wx.is_raining) html += `<div class="banner rain"><div>🌧</div><div><b>外面在下雨</b>（${S.wx.rain_mm} 毫米）。記得雨具，騎乘時間已加計 ${Math.round((((r.weather&&r.weather._factor&&r.weather._factor.time)||1.18)-1)*100)}%。</div></div>`;
+  else if(S.wx&&S.wx.will_rain_3h) html += `<div class="banner rain"><div>🌦</div><div>現在沒下雨，但未來三小時可能有雨。</div></div>`;
+  const CLS={fast:'',reliable:'g',reward:'p'}, LB={fast:'最快抵達',reliable:'借還最穩',reward:'集點最多'};
+  const kindTag=[o.kind].concat(o.also?o.also.map(a=>({'最快抵達':'fast','借還最穩':'reliable','順路集點':'reward','集點最多':'reward'}[a]||a)):[])
+    .filter((v,i,a)=>a.indexOf(v)===i).map(k=>`<span class="tag ${CLS[k]||''}">${LB[k]||k}</span>`).join(' ');
+  html += `<div class="main-card pri">
+    <div>${kindTag}${o.primary?` <span class="tag n">${o.primary_reason}</span>`:''}${o.points?` <span class="tag o">+${o.points} 點</span>`:''}</div>
+    <div class="eta"><span class="n">${Math.round(o.total_min)}</span><span class="u">分鐘</span><span class="arr">${hhmm(o.eta)} 抵達</span></div>
+    <div class="steps">
+      <div class="step"><div class="ic">🚶</div><div class="tx"><b>走 ${o.legs[0].minutes} 分</b>到 ${o.borrow.name}<div class="st">${riskDot(o.borrow.p_empty)}到站時預估 ${o.borrow.expected_bikes} 輛可借（現在 ${o.borrow.bikes_now??'–'} 輛）</div></div></div>
+      <div class="step"><div class="ic">🚲</div><div class="tx"><b>騎 ${o.legs[1].minutes} 分</b>（${(o.legs[1].dist_m/1000).toFixed(1)} 公里）到 ${o.return.name}<div class="st">${riskDot(o.return.p_full)}到站時預估 ${o.return.expected_spaces} 個空位可還</div></div></div>
+      <div class="step"><div class="ic">🚶</div><div class="tx"><b>走 ${o.legs[2].minutes} 分</b>到${c.dir==='out'?'目的地':'家'}</div></div>
+    </div>
+    <div id="reason" style="font-size:12px;color:#41505f;background:#f7f9fc;border-radius:10px;padding:9px;margin-top:11px">${o.reason||''}</div>
+    <button class="btn big" style="margin-top:12px" onclick="startTrip()">出發</button>
+  </div>`;
+  const alts=r.options.map((x,i)=>({x,i})).filter(({i})=>i!==S.sel);
+  if(alts.length) html += `<div class="alts">${alts.map(({x,i})=>`<div class="alt" onclick="S.sel=${i};renderHome(context())">
+     <div class="l"><div class="nm">${{fast:'最快抵達',reliable:'借還最穩',reward:'集點最多'}[x.kind]}${x.also&&x.also.length?' ・'+x.also.join('／'):''}${x.points?` ・+${x.points} 點`:''}</div>
+     <div class="ds">${x.borrow.name} → ${x.return.name}</div></div>
+     <div class="rt"><b>${Math.round(x.total_min)}</b>分${x.delta_min>0?`<br>+${x.delta_min}`:''}</div></div>`).join('')}</div>`;
+  if(n){ const a=n.area;
+    html += `<div class="near"><div class="hd"><span>${a.key==='easy'?'🟢':a.key==='normal'?'🟡':'🟠'}</span><b>${a.text}</b>
+      <span class="m">附近 ${a.stations_counted} 站・可借 ${a.bikes_total} 輛／${a.capacity_total} 柱</span></div>
+      <div id="mapmini"></div>
+      <div style="padding:9px 13px;font-size:11.5px;color:var(--sub);cursor:pointer" onclick="$('nlist').classList.toggle('on')">查看附近每一站 ▾</div>
+      <div class="nlist" id="nlist">${n.stations.slice(0,14).map(s=>`<div class="nrow"><span class="dot" style="background:${s.ease.color}"></span><span class="nm">${s.name}</span>
+        <span style="color:var(--sub)">走 ${Math.round(s.walk_min)} 分</span><b>${s.bikes??'–'}</b><span style="color:var(--sub)">輛／${s.spaces??'–'} 位</span></div>`).join('')}</div></div>`; }
+  $('home-body').innerHTML = html;
+  $('home-hint').innerHTML = `推薦依你設定的「${{time:'準時抵達',reliable:'一定借得到',reward:'多集點'}[p.preference]}」排序，已評估 ${r.candidates_considered} 種借還組合，並納入${(r.includes||[]).join('、')}。`
+    + `<br>${n?n.definition:''}<br>天氣：${S.wx&&S.wx.source?S.wx.source:'—'}`;
+  drawMini();
+}
+function drawMini(){ const n=S.near,o=S.plan&&S.plan.options[S.sel]; if(!n||!$('mapmini')) return;
+  if(!mapMini){ mapMini = makeMap('mapmini',[n.stations[0]?.lat||25.03,n.stations[0]?.lon||121.47],15); }
+  else { mapMini.eachLayer(l=>{ if(!(l instanceof L.TileLayer)) mapMini.removeLayer(l); }); }
+  const g=[]; n.stations.forEach(s=>{ const m=L.circleMarker([s.lat,s.lon],{radius:Math.max(5,Math.min(10,4+Math.sqrt(s.cap))),color:'#fff',weight:1.5,fillColor:s.ease.color,fillOpacity:.92})
+    .bindTooltip(`${s.name}<br>${s.ease.text}・可借 ${s.bikes??'–'} 輛／可還 ${s.spaces??'–'} 位`); m.addTo(mapMini); g.push(m); });
+  (n.events||[]).forEach(e=>{ const m=L.marker([e.lat,e.lon],{icon:L.divIcon({className:'',html:'<div style="font-size:20px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🎤</div>',iconSize:[20,20]})}).bindTooltip(e.title); m.addTo(mapMini); g.push(m); });
+  if(o){ const b=L.circleMarker([o.borrow.lat,o.borrow.lon],{radius:9,color:'#0f5fa8',weight:3,fillColor:'#fff',fillOpacity:1}).bindTooltip('建議借車：'+o.borrow.name); b.addTo(mapMini); g.push(b); }
+  setTimeout(()=>{ mapMini.invalidateSize(); if(g.length) mapMini.fitBounds(L.featureGroup(g).getBounds().pad(.15)); },60);
+}
+async function pollExplain(eid){ for(let k=0;k<14;k++){ await new Promise(r=>setTimeout(r,700));
+  try{ const e=await API.get('/api/explain/'+eid); if(e.ready){ if(e.reasons&&e.reasons[S.sel]&&$('reason')) $('reason').innerHTML=`${e.reasons[S.sel]} ${srcBadge(e.source)}`; return; } }catch(err){ return; } } }
+
+/* ---------- 導航 ---------- */
+function cumDist(g){ let d=[0]; for(let i=1;i<g.length;i++){ const a=g[i-1],b=g[i]; const dx=(b[1]-a[1])*101000*Math.cos(a[0]*Math.PI/180), dy=(b[0]-a[0])*111000; d.push(d[i-1]+Math.hypot(dx,dy)); } return d; }
+function ptAt(g,cd,m){ if(m<=0) return g[0]; if(m>=cd[cd.length-1]) return g[g.length-1];
+  let i=1; while(cd[i]<m) i++; const t=(m-cd[i-1])/Math.max(cd[i]-cd[i-1],1e-6); return [g[i-1][0]+(g[i][0]-g[i-1][0])*t, g[i-1][1]+(g[i][1]-g[i-1][1])*t]; }
+async function startTrip(){ const o=S.plan.options[S.sel];
+  S.trip = await API.post('/api/trip/start',{option:o,all_labels:S.plan.options.map(x=>x.kind)});
+  const p=S.profile; const c=context();
+  const origin = c.dir==='out'? p.home_pos : p.work_pos;
+  const dest   = c.dir==='out'? p.work_pos : p.home_pos;
+  $('nav-card').innerHTML='<div class="muted small">取得路線指示…</div>'; go('nav');
+  const [l1,l2,l3] = await Promise.all([
+    API.get(`/api/nav_route?from_lat=${origin[0]}&from_lon=${origin[1]}&to_lat=${o.borrow.lat}&to_lon=${o.borrow.lon}&mode=walk`),
+    API.get(`/api/nav_route?from_lat=${o.borrow.lat}&from_lon=${o.borrow.lon}&to_lat=${o.return.lat}&to_lon=${o.return.lon}&mode=ride`),
+    API.get(`/api/nav_route?from_lat=${o.return.lat}&from_lon=${o.return.lon}&to_lat=${dest[0]}&to_lon=${dest[1]}&mode=walk`)]);
+  S.legs=[{...l1,kind:'walk',to:o.borrow.name},{...l2,kind:'ride',to:o.return.name},{...l3,kind:'walk',to:'目的地'}];
+  S.legs.forEach(l=>{ l.cd=cumDist(l.geometry); l.total=l.cd[l.cd.length-1]||l.dist_m; });
+  S.legIdx=0; S.navProg=0; startLeg();
+}
+function startLeg(){ const l=S.legs[S.legIdx]; if(!mapNav) mapNav=makeMap('mapnav',l.geometry[0],16);
+  navLayers.forEach(x=>mapNav.removeLayer(x)); navLayers=[];
+  const col=l.kind==='ride'?'#0f5fa8':'#7b8794';
+  const line=L.polyline(l.geometry,{color:col,weight:6,opacity:.85,dashArray:l.kind==='walk'?'1 9':null,lineCap:'round'}).addTo(mapNav); navLayers.push(line);
+  const end=L.circleMarker(l.geometry[l.geometry.length-1],{radius:9,color:'#fff',weight:3,fillColor:l.kind==='ride'?'#0aa47a':'#0f5fa8',fillOpacity:1}).bindTooltip(l.to).addTo(mapNav); navLayers.push(end);
+  meMarker=L.circleMarker(l.geometry[0],{radius:8,color:'#fff',weight:3,fillColor:'#1d6ff2',fillOpacity:1}).addTo(mapNav); navLayers.push(meMarker);
+  mapNav.fitBounds(line.getBounds().pad(.18));
+  $('nav-phase').textContent = ['前往借車站','騎乘中','前往目的地'][S.legIdx];
+  $('nav-target').textContent = l.to;
+  S.navProg=0; renderNav(); playNav();
+}
+function playNav(){ clearInterval(S.navTimer); const l=S.legs[S.legIdx]; const dur=9000, tick=120;
+  S.navTimer=setInterval(()=>{ S.navProg=Math.min(1,S.navProg+tick/dur);
+    const m=l.total*S.navProg, pt=ptAt(l.geometry,l.cd,m); if(meMarker) meMarker.setLatLng(pt); mapNav.panTo(pt,{animate:true,duration:.1});
+    renderNav(); if(S.navProg>=1){ clearInterval(S.navTimer); arriveLeg(); } },tick); }
+function pauseNav(){ clearInterval(S.navTimer); S.navTimer=null; renderNav(); }
+function renderNav(){ const l=S.legs[S.legIdx]; const done=l.total*S.navProg, left=Math.max(0,l.total-done);
+  let cum=0,cur=l.steps[0]||{text:'直行',dist_m:l.total};
+  for(const st of (l.steps||[])){ if(done<cum+st.dist_m){ cur=st; break; } cum+=st.dist_m; }
+  const stepLeft=Math.max(0,Math.round(cum+ (cur.dist_m||0) - done));
+  const arrow = /左/.test(cur.text)?'↰': /右/.test(cur.text)?'↱': /抵達/.test(cur.text)?'🏁':'↑';
+  $('nav-card').innerHTML=`
+   <div class="navins"><div class="ar">${arrow}</div><div class="tx"><b>${cur.text}</b><span>${stepLeft} 公尺後</span></div></div>
+   <div class="prog2"><i style="width:${(S.navProg*100).toFixed(0)}%"></i></div>
+   <div class="navmeta"><span>剩餘 <b>${left<1000?Math.round(left)+' m':(left/1000).toFixed(1)+' km'}</b></span><span>約 <b>${Math.max(0,Math.round(l.minutes*(1-S.navProg)))}</b> 分</span>
+     <span style="margin-left:auto">${l.kind==='ride'?'🚲 騎乘':'🚶 步行'}</span></div>
+   <div style="display:flex;gap:8px">
+     <button class="btn sec" style="flex:1 1 0;width:auto;white-space:nowrap;padding:14px 6px;font-size:14px" onclick="${S.navTimer?'pauseNav()':'playNav()'}">${S.navTimer?'⏸ 暫停':'▶ 繼續'}</button>
+     <button class="btn sec" style="flex:1 1 0;width:auto;white-space:nowrap;padding:14px 6px;font-size:14px" onclick="skipLeg()">跳到終點</button>
+     <button class="btn sec" style="flex:0 0 56px;width:56px;padding:14px 0;font-size:17px" onclick="gmaps()" title="用 Google 地圖導航">🗺</button></div>
+   <div class="hint" style="padding:9px 0 0">模擬導航播放。轉彎指示與路線來自 ${l.source}；實際騎乘請用下方地圖 App。</div>`; }
+function skipLeg(){ clearInterval(S.navTimer); S.navTimer=null; S.navProg=1; renderNav(); arriveLeg(); }
+function gmaps(){ const l=S.legs[S.legIdx]; const a=l.geometry[0], b=l.geometry[l.geometry.length-1];
+  window.open(`https://www.google.com/maps/dir/?api=1&origin=${a[0]},${a[1]}&destination=${b[0]},${b[1]}&travelmode=${l.kind==='ride'?'bicycling':'walking'}`,'_blank'); }
+async function arriveLeg(){ const o=S.trip.option;
+  if(S.legIdx===0){ await API.post('/api/trip/phase',{phase:'at_borrow'});
+    $('nav-card').innerHTML=`<div class="navins"><div class="ar">🚲</div><div class="tx"><b>到了 ${o.borrow.name}</b><span>現場可借 ${o.borrow.bikes_now??'–'} 輛・車號 ${S.trip.bike_no}</span></div></div>
+      <button class="btn big" onclick="borrowed()">借車，開始騎乘</button>`; return; }
+  if(S.legIdx===1){ await API.post('/api/trip/phase',{phase:'at_return'}); returnScreen(); return; }
+  finishTrip(); }
+async function borrowed(){ await API.post('/api/trip/phase',{phase:'riding'}); S.legIdx=1; startLeg(); }
+function returnScreen(){ const o=S.trip.option;
+  $('nav-phase').textContent='還車'; $('nav-target').textContent=o.return.name;
+  $('nav-card').innerHTML=`<div class="navins"><div class="ar">🅿️</div><div class="tx"><b>到了 ${o.return.name}</b><span>目前 ${o.return.spaces_now??'–'} 個空位・車號 ${S.trip.bike_no}</span></div></div>
+    <button class="btn big" onclick="finishTrip()">完成還車</button>
+    <button class="btn warn" style="margin-top:9px" onclick="openIssues()">這台車有問題</button>`; }
+function openIssues(){ openSheet(`<h3>哪裡有問題？</h3><p>選一個就送出，微笑單車會立刻收到。車號 ${S.trip.bike_no}。</p>
+  <div class="issues">${S.issues.map(i=>`<div class="iss" onclick="sendIssue('${i.key}','${i.label}')"><span class="e">${i.icon}</span><span class="t">${i.label}</span></div>`).join('')}</div>
+  <div class="hint" style="padding:12px 0 0">請不要騎乘故障車送修。有效回報經授權店家驗收後核發維修回報章。</div>`); }
+async function sendIssue(key,label){ const o=S.trip.option;
+  await API.post('/api/tickets',{sid:o.return.sid,bike_no:S.trip.bike_no,issue:label});
+  closeSheet(); Toasts.show('已回報','微笑單車已收到，工單建立中','info');
+  $('nav-card').innerHTML=`<div class="navins"><div class="ar">✅</div><div class="tx"><b>已回報：${label}</b><span>微笑單車端已收到工單</span></div></div><button class="btn big" onclick="finishTrip()">完成還車</button>`; }
+async function finishTrip(){ clearInterval(S.navTimer); const r=await API.post('/api/trip/finish',{}); S.trip=null;
+  openSheet(`<h3>還車完成 🎉</h3><p>本趟 ${r.wallet.by_day.slice(-1)[0]?.km??''} 公里已計入存摺。</p>
+    <div class="grid4" style="padding:0 0 12px"><div class="mini"><div class="l">獲得點數</div><div class="v">+${r.points}</div></div>
+    <div class="mini"><div class="l">獲得徽章</div><div class="v" style="font-size:15px">${r.stamp.name}</div></div></div>
+    <button class="btn" onclick="closeSheet();go('wallet')">看我的存摺</button>
+    <button class="btn ghost" onclick="closeSheet();go('home');refreshHome()">回首頁</button>`); }
+function exitNav(){ clearInterval(S.navTimer); S.navTimer=null; go('home'); }
+
+/* ---------- 存摺 ---------- */
+async function loadWallet(){ const w=await API.get('/api/wallet'); const mx=Math.max(...w.by_day.map(d=>d.km),1);
+  $('wallet-body').innerHTML=`
+  <div class="jar">${w.demo_seed?'<div class="tag n" style="margin-bottom:6px">示範帳戶：本月 '+w.sim_trips+' 趟為模擬紀錄，'+w.real_trips+' 趟為本次操作</div>':''}<div class="lb">${w.month.replace('-','年')}月　累積騎乘</div><div class="v">${w.km}<small>公里</small></div>
+    <div class="lb">${w.trips} 趟・連續 ${w.streak_days} 天</div>
+    <div class="days" style="margin-top:12px">${w.by_day.map(d=>`<i class="${d.km>=mx*0.9?'hi':''}" style="height:${Math.max(8,d.km/mx*46)}px" title="${d.date} ${d.km} km"></i>`).join('')}</div></div>
+  <div class="grid4">
+    <div class="mini"><div class="l">🌱 減碳</div><div class="v">${w.co2_kg}<small> 公斤</small></div></div>
+    <div class="mini"><div class="l">💰 省下</div><div class="v">${w.saved_ntd}<small> 元</small></div></div>
+    <div class="mini"><div class="l">🪙 點數</div><div class="v">${w.points}<small> 點</small></div></div>
+    <div class="mini"><div class="l">🔥 連續</div><div class="v">${w.streak_days}<small> 天</small></div></div></div>
+  <div class="ms"><div style="font-size:13px;font-weight:700;margin:8px 0 10px">里程碑</div>
+    ${w.milestones.map(m=>`<div class="msr"><div class="hd"><span>${m.icon} ${m.label}</span><span class="r">${typeof m.now==='number'?(m.goal<=5?m.now.toFixed(2):m.now.toFixed(m.goal>=50?1:0)):m.now} / ${m.goal}</span></div><div class="bar"><i style="width:${m.pct}%"></i></div></div>`).join('')}</div>
+  <div style="font-size:13px;font-weight:700;margin:8px 18px 6px">城市圖鑑</div>
+  <div class="stamps">${[...w.stamps.map(s=>({n:s.name,e:{district:'🏙️',landmark:'📍',event:'🎤',relay:'🤝',service:'🔧'}[s.type]||'⭐',got:1})),
+      ...['板橋區生活圈章','新莊區生活圈章','土城區生活圈章','維修回報章','放學接力章'].filter(n=>!w.stamps.some(s=>s.name===n)).map(n=>({n,e:'🏙️',got:0}))]
+      .slice(0,10).map(s=>`<div class="stp ${s.got?'':'lock'}"><i>${s.e}</i>${s.n}</div>`).join('')}</div>
+  ${w.coupons.length?`<div style="font-size:13px;font-weight:700;margin:16px 18px 6px">優惠券 <span class="tag p">兌付為模擬</span></div>
+    ${w.coupons.map(c=>`<div style="margin:0 18px 8px" class="mini"><b>${c.title}</b><div class="l" style="margin-top:3px">${c.note}</div></div>`).join('')}`:''}
+  <div class="hint">${Object.entries(w.assumptions).map(([k,v])=>`${k.replace(/_/g,' ')}：${v}`).join('<br>')}</div>`; }
+
+/* ---------- 我的 ---------- */
+async function loadMe(){ const p=await API.get('/api/profile'); S.profile=p; const PR={time:'準時抵達',reliable:'一定借得到',reward:'多集點'};
+  $('me-body').innerHTML=`<h1 class="big" style="margin-top:16px">我的設定</h1><div style="height:8px"></div>
+  <div class="mrow"><div class="l">身分</div><div class="v">${p.role==='student'?'學生':'上班族'}</div></div>
+  <div class="mrow"><div class="l">住家附近</div><div class="v">${p.home?p.home.name:'—'}</div></div>
+  <div class="mrow"><div class="l">${p.role==='student'?'學校':'上班地點'}</div><div class="v">${p.work?p.work.name:'—'}</div></div>
+  <div class="mrow"><div class="l">出門／回家</div><div class="v">${p.out_time}／${p.back_time}</div></div>
+  <div class="mrow"><div class="l">最在意</div><div class="v">${PR[p.preference]}</div></div>
+  <div class="mrow"><div class="l">集點計劃</div><div class="v">${p.join_rewards?'已加入':'未加入'}</div></div>
+  <div class="mrow"><div class="l">願意步行上限</div><div class="v">${p.max_walk_min} 分鐘</div></div>
+  <div style="padding:16px 18px"><button class="btn sec" onclick="editPref()">改變推薦偏好</button>
+  <button class="btn ghost" style="margin-top:8px" onclick="S.obStep=0;S.ob={...S.ob,role:p.role,home_sid:p.home_sid,work_sid:p.work_sid,out_time:p.out_time,back_time:p.back_time,join_rewards:p.join_rewards,preference:p.preference};go('onboard');obRender()">重新設定常用地點</button></div>
+  <div class="hint">通知為頁內模擬推播，不是手機系統推播。iPhone 可用「捷徑」個人自動化在出門時間自動開啟本頁。</div>`; }
+function editPref(){ const PR=[['time','⏱','準時抵達'],['reliable','🛡','一定借得到'],['reward','🎯','多集點']];
+  openSheet(`<h3>推薦偏好</h3><p>主推薦會依這個排序。</p><div class="pick">${PR.map(([k,e,t])=>`<div class="opt ${S.profile.preference===k?'sel':''}" onclick="setPref('${k}')"><div class="e">${e}</div><div class="tt">${t}</div></div>`).join('')}</div>`); }
+async function setPref(k){ S.profile=await API.post('/api/profile',{preference:k}); closeSheet(); loadMe(); Toasts.show('已更新','下次推薦會用新的偏好','info'); }
+
+/* ---------- 事件 ---------- */
+connectEvents({
+  tick:(p)=>{ S.clock=p.clock; $('clock').textContent='回放 '+p.clock.ts.slice(5); },
+  notify:(n)=>{ if(n.channel!=='citizen') return; Toasts.show(n.title,n.body,n.kind,n.ts);
+    if(n.kind==='reminder'&&n.extra&&n.extra.plan&&S.screen==='home'){ S.plan=n.extra.plan; S.wx=n.extra.plan.weather; S.sel=0; renderWx(); renderHome(context()); } },
+  scenario: async ()=>{ await boot(true); },
+  wallet:()=>{ if(S.screen==='wallet') loadWallet(); }
+});
+
+async function boot(reload){
+  const [p, places, iss] = await Promise.all([API.get('/api/profile'), API.get('/api/places'), API.get('/api/issues')]);
+  S.profile=p; S.places=places; S.issues=iss.issues;
+  const st=await API.get('/api/state'); S.clock=st.clock; $('clock').textContent='回放 '+st.clock.ts.slice(5);
+  const w=await API.get('/api/weather'); S.wx=w.replay; renderWx();
+  S.trip = await API.get('/api/trip'); if(!S.trip.active) S.trip=null;
+  if(!p.onboarded){ S.ob={role:'worker',home_sid:null,work_sid:null,out_time:'07:40',back_time:'18:10',join_rewards:true,preference:'time'}; go('onboard'); obRender(); return; }
+  $('nav-bar').style.display=''; go('home'); await refreshHome();
+  if(p.pref_prompt) openSheet(`<h3>要換成「${p.pref_prompt.label}」嗎？</h3><p>你連續兩次都挑了這個方案，之後可以把它當主推薦。</p>
+    <button class="btn" onclick="setPref('${p.pref_prompt.kind}')">好，換成這個</button><button class="btn ghost" onclick="closeSheet()">維持現在的</button>`);
+}
+boot();
+</script></body></html>

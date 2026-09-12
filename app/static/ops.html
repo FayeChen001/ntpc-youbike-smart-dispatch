@@ -1,0 +1,58 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>微笑單車調度端｜任務與路線</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"><link rel="stylesheet" href="/static/common.css">
+<style>
+body{height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#f1f4f8}
+header{display:flex;align-items:center;gap:12px;padding:8px 14px;background:#1d2430;color:#fff}header h1{font-size:15px;margin:0}header .clock{font-weight:600;color:#9fd3ff}
+main{flex:1;display:grid;grid-template-columns:380px 1fr;gap:10px;padding:10px 14px;min-height:0}
+.left{display:flex;flex-direction:column;min-height:0;gap:8px}.left .list{overflow:auto;flex:1}
+.task{border:1px solid var(--line);border-left:4px solid var(--info);border-radius:10px;background:#fff;padding:8px 10px;margin-bottom:8px;cursor:pointer}.task.sel{box-shadow:0 0 0 2px #cfe0f7}.task.planned{border-left-color:var(--brand)}.task.dispatched,.task.en_route{border-left-color:var(--sim)}.task.done{border-left-color:var(--ok);opacity:.8}.task.too_late{border-left-color:var(--bad)}.task.needs_cross_district,.task.minor_gap{border-left-color:var(--grey)}.task.gap_summary{border-left-color:var(--brand2);background:#f3fbf7}.task.superseded,.task.cancelled{opacity:.5}
+.task .hd{display:flex;justify-content:space-between;align-items:center;font-weight:600}.task .sub{font-size:12px;color:#3a4553;margin-top:2px}.task .rs{font-size:11px;color:var(--muted);margin-top:3px}
+.right{display:grid;grid-template-rows:auto 1fr;gap:8px;min-height:0}.detail{display:grid;grid-template-columns:1fr 420px;gap:8px;min-height:0}
+#map{height:100%;min-height:260px}.stops{overflow:auto}.stop{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}.stop .no{width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;flex:none}.stop.pickup .no{background:var(--warn)}.stop.done{opacity:.55}
+.timeline{display:flex;gap:6px;align-items:center;font-size:12px;flex-wrap:wrap}.timeline .tk{background:#fff;border:1px solid var(--line);border-radius:8px;padding:5px 8px}.timeline .tk b{display:block;font-size:14px}
+.banner{background:#fff4e5;border:1px solid #f5d9a6;border-radius:10px;padding:8px 10px;font-size:12px}.banner b{color:#8a5400}
+.brief{font-size:12px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px;color:#2b3542}
+.status-filter button{font-size:11px;padding:3px 7px}.status-filter button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+</style></head><body>
+<header><h1>微笑單車（營運端）｜調度任務與路線</h1><span class="badge sim">派車執行為模擬</span><span class="clock" id="clock">–</span><span style="flex:1"></span><span class="xs" id="assump"></span></header>
+<main>
+  <div class="left">
+    <div class="banner" id="banner"><b>60 分鐘內突發</b>：<span id="sudden">目前無</span><div class="xs muted" style="margin-top:2px">突發以在勤資源與民眾分流因應；不承諾剛決策就能到站。</div></div>
+    <div class="row status-filter wrap"><button class="on" data-f="active" onclick="filt('active',this)">進行中</button><button data-f="done" onclick="filt('done',this)">已完成</button><button data-f="issue" onclick="filt('issue',this)">來不及／需跨區／缺口小</button><button data-f="all" onclick="filt('all',this)">全部</button></div>
+    <div class="list" id="tasks"></div>
+  </div>
+  <div class="right">
+    <div class="card" style="padding:10px" id="head"><div class="muted small">選擇左側任務查看路線、載量與情況</div></div>
+    <div class="detail"><div id="map"></div><div class="card stops" id="stops"></div></div>
+  </div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script><script src="/static/common.js"></script>
+<script>
+const $=id=>document.getElementById(id); const map = makeMap('map',[25.0,121.45],12); let route = L.layerGroup().addTo(map); let S={tasks:[], sel:null, filter:'active', clock:null, A:null};
+const LAB={gap_summary:'缺口摘要',planned:'已排定',dispatched:'出車中',en_route:'行進中',done:'完成',too_late:'來不及',needs_cross_district:'需跨區',minor_gap:'缺口小',superseded:'已取代',cancelled:'取消'};
+function filt(f,b){ S.filter=f; document.querySelectorAll('.status-filter button').forEach(x=>x.classList.toggle('on',x===b)); render(); }
+async function load(){ const d = await API.get('/api/tasks'); S.tasks = d.tasks; S.A = d.assumptions; $('assump').textContent = `情境假設：載量 ${S.A.truck_capacity} 輛・${S.A.truck_speed_kmh} km/h・作業 ${S.A.handling_fixed_min} 分+${S.A.handling_per_bike_min} 分/輛・決策到抵達 ≥${S.A.lead_time_min} 分・集合點＝${S.A.depot}`; render(); if(S.sel){ const t=S.tasks.find(x=>x.id===S.sel); if(t) showTask(t,false); } }
+function render(){ const f=S.filter; const items = S.tasks.filter(t=> f==='all' || (f==='active'&&['planned','dispatched','en_route'].includes(t.status)) || (f==='done'&&t.status==='done') || (f==='issue'&&['too_late','needs_cross_district','minor_gap'].includes(t.status)) || (f==='active'&&t.status==='gap_summary'));
+  $('tasks').innerHTML = items.map(t=>`<div class="task ${t.status} ${S.sel===t.id?'sel':''}" onclick="sel('${t.id}')"><div class="hd"><span>${t.id}・${t.district}${t.event_related?' 🎤':''}</span><span class="pill">${LAB[t.status]||t.status}</span></div>
+    <div class="sub">${t.stops.length? `${t.stops.filter(s=>s.action==='pickup').length} 取 ${t.stops.filter(s=>s.action==='dropoff').length} 送・載 ${t.load} 輛・${t.route_km} km／${t.route_minutes} 分` : (t.deficit_total!=null?`缺口 ${t.deficit_total} 輛`:'')}</div>
+    <div class="rs">提前 ${t.horizon} 分・目標 ${hhmm(t.target_ts)}${t.stops.length?`・最遲 ${hhmm(t.depart_by)} 出發`:''}${t.confirmed_by?'・✔ 已確認':''}</div></div>`).join('') || '<div class="muted small">無</div>'; }
+function sel(id){ S.sel=id; render(); const t=S.tasks.find(x=>x.id===id); showTask(t,true); }
+async function showTask(t, fetchRoute){ const head=$('head');
+  head.innerHTML = `<div class="row between"><div><b style="font-size:15px">${t.id}｜${t.district}</b> <span class="pill">${LAB[t.status]||t.status}</span> <span class="badge real">缺口與排程為真實計算</span> <span class="badge sim">出車進度模擬</span></div>
+    <div class="row">${t.status==='planned'?`<button class="small primary" onclick="act('${t.id}','confirm')">調度員確認</button><button class="small" onclick="act('${t.id}','dispatch_now')">立即出車</button><button class="small" onclick="act('${t.id}','cancel')">取消</button>`:''}</div></div>
+    <div class="timeline" style="margin-top:8px"><div class="tk">現在<b>${S.clock?S.clock.ts.slice(11):'–'}</b></div><span>→</span><div class="tk">最遲出發<b>${hhmm(t.depart_by)}</b></div><span>→</span><div class="tk">最早可抵達<b>${hhmm(t.earliest_arrival)}</b><span class="xs muted">含 ≥60 分前置</span></div><span>→</span><div class="tk">目標時間<b>${hhmm(t.target_ts)}</b></div><div class="tk">路程<b>${t.route_minutes} 分</b></div><div class="tk">載量<b>${t.load}/${S.A.truck_capacity}</b></div></div>
+    <div class="row" style="margin-top:8px;align-items:flex-start"><div class="brief" style="flex:1" id="brief">${t.reason}</div><span id="brief-src"></span></div>
+    ${t.history?`<div class="xs muted" style="margin-top:6px">${t.history.map(h=>`${h.ts.slice(11)} ${LAB[h.status]||h.status}：${h.note}`).join('　｜　')}</div>`:''}`;
+  $('stops').innerHTML = t.status==='gap_summary'? `<b class="small">缺口覆蓋與分流</b><div class="small" style="margin-top:6px">缺口 <b>${t.deficit_total}</b> 輛・派車補 <b>${t.covered}</b> 輛・剩餘 <b style="color:var(--bad)">${t.remaining}</b> 輛</div><div class="xs muted" style="margin:4px 0 8px">剩餘缺口交由民眾端引導至下列預測仍有車的站，並保留在勤資源因應。</div>` + (t.alternatives||[]).map(a=>`<div class="stop"><div class="no" style="background:var(--brand2)">↪</div><div><b>${a.name}</b><br><span class="muted">${t.horizon} 分後預測 ${a.pred_bikes} 輛</span></div></div>`).join('') : t.stops.length? `<b class="small">站點順序與情況</b>` + t.stops.map((s,i)=>`<div class="stop ${s.action} ${s.done?'done':''}"><div class="no">${i+1}</div><div><b>${s.action==='pickup'?'取':'送'} ${s.qty} 輛</b>　${s.name}<br><span class="muted">現況 ${s.now_bikes??'–'} 輛／柱 ${s.cap}・${t.horizon} 分後預測 ${s.pred_bikes} 輛${s.p_empty!=null?`・零車 ${fmtP(s.p_empty)}`:''}・抵達 +${s.eta_min_from_depart} 分</span><br><span class="xs muted">${s.reason}</span></div></div>`).join('') : `<div class="muted small">${t.reason}</div>`;
+  route.clearLayers(); if(t.stops.length){ if(fetchRoute){ try{ const r = await API.get(`/api/tasks/${t.id}/route`); L.polyline(r.geometry,{color:'#7a5af5',weight:5,opacity:.85}).addTo(route); $('head').insertAdjacentHTML('beforeend', `<div class="xs muted">路線幾何：${r.source}${r.dist_m?`・${(r.dist_m/1000).toFixed(1)} km`:''}</div>`); }catch(e){} }
+    L.circleMarker(t.depot,{radius:7,color:'#fff',fillColor:'#1d2430',fillOpacity:1}).bindTooltip('集合點（行政區站點重心，情境）').addTo(route);
+    t.stops.forEach((s,i)=>L.marker([s.lat,s.lon],{icon:L.divIcon({className:'',html:`<div style="width:22px;height:22px;border-radius:50%;background:${s.action==='pickup'?'#d98a00':'#0f5fa8'};color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)">${i+1}</div>`,iconSize:[22,22]})}).bindTooltip(`${s.action==='pickup'?'取':'送'} ${s.qty}・${s.name}`).addTo(route));
+    map.fitBounds(L.featureGroup(route.getLayers()).getBounds().pad(0.2));
+    try{ const b = await API.get(`/api/briefing?scope=ops&task_id=${t.id}`); $('brief').textContent = b.text.replace(/\*\*/g,''); $('brief-src').innerHTML = srcBadge(b.source); }catch(e){} } }
+async function act(id,a){ await API.post(`/api/tasks/${id}/${a}`); load(); }
+function sudden(list){ $('sudden').innerHTML = list.length? list.slice(0,4).map(a=>`<div>• ${a.message} <button class="small" onclick="API.post('/api/alerts/${a.id}/ack')">確認</button></div>`).join('') : '目前無'; }
+async function loadSudden(){ const d = await API.get('/api/alerts'); sudden(d.alerts.filter(a=>a.route==='調度端' && a.status!=='resolved')); }
+connectEvents({ tick:(p)=>{ S.clock=p.clock; $('clock').textContent='回放時間 '+p.clock.ts; load(); loadSudden(); }, task:(t)=>{ load(); if(['planned','too_late'].includes(t.status) && !t._seen){ Toasts.show(`${t.status==='planned'?'📋 新排程':'⚠️ 來不及派車'} ${t.id}・${t.district}`, t.stops.length?`${t.stops.length} 站、載 ${t.load} 輛，最遲 ${hhmm(t.depart_by)} 出發`:t.reason, t.status==='planned'?'task':'warn'); } },
+  notify:(n)=>{ if(n.channel==='ops') Toasts.show(n.title, n.body, n.kind, n.ts); }, alert:()=>loadSudden(), scenario:()=>{ S.sel=null; load(); loadSudden(); } });
+(async()=>{ const st=await API.get('/api/state'); S.clock=st.clock; $('clock').textContent='回放時間 '+st.clock.ts; await load(); loadSudden(); const first = S.tasks.find(t=>t.status==='planned'); if(first) sel(first.id); })();
+</script></body></html>

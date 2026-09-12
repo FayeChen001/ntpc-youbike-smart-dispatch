@@ -1,0 +1,84 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>新北交通局｜YouBike 預警調度儀表板</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"><link rel="stylesheet" href="/static/common.css">
+<style>
+body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;align-items:center;gap:10px;padding:6px 14px;background:#fff;border-bottom:1px solid var(--line);flex-wrap:wrap}header h1{font-size:15px;margin:0}header .clock{font-weight:600;color:var(--brand)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;padding:8px 14px}
+main{flex:1;display:grid;grid-template-columns:minmax(360px,1fr) minmax(320px,400px);gap:10px;padding:0 14px 10px;min-height:0;position:relative}
+#map{height:100%;min-height:300px}.side{display:flex;flex-direction:column;min-height:0;gap:8px}.side .card{display:flex;flex-direction:column;min-height:0;flex:1;padding:10px}.list{overflow:auto;flex:1}
+.alert{border:1px solid var(--line);border-left:4px solid var(--info);border-radius:8px;padding:7px 9px;margin-bottom:6px;background:#fff}.alert.high{border-left-color:var(--bad)}.alert.warn{border-left-color:var(--warn)}.alert.info{border-left-color:var(--grey)}.alert.acked{opacity:.75}.alert .m{font-size:12px}.alert .meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;justify-content:space-between;align-items:center}
+.ctl{display:flex;gap:6px;align-items:center;font-size:12px}.ctl select{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:6px}
+.brief{font-size:12px;background:#f6f8fb;border-radius:8px;padding:8px;color:#2b3542;min-height:40px}
+.compare{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center}.compare div{background:#f6f8fb;border-radius:8px;padding:6px}.compare .v{font-size:18px;font-weight:700}.compare .l{font-size:10px;color:var(--muted)}
+.mini{font-size:11px;color:var(--muted)}
+</style></head><body>
+<header><h1>新北市交通局｜YouBike 預警與調度儀表板</h1><span class="badge grey">政府端</span><span class="clock" id="clock">–</span><span class="mini" id="src"></span>
+  <span style="flex:1"></span>
+  <div class="ctl">圖層 <select id="layer"><option value="empty">缺車風險（零車機率）</option><option value="full">缺位風險（零位機率）</option></select> 尺度 <select id="horizon"><option value="60">60 分</option><option value="120" selected>120 分</option><option value="180">180 分</option></select> 行政區 <select id="district"><option value="">全市</option></select> <label><input type="checkbox" id="adj" checked> 含民眾意向修正</label> <button class="small" onclick="toggleLive()" id="livebtn">看即時現況</button></div>
+</header>
+<div class="kpis" id="kpis"></div>
+<main>
+  <div style="position:relative;min-height:0"><div id="map"></div>
+    <div class="drawer" id="drawer"></div></div>
+  <div class="side">
+    <div class="card" style="flex:0 0 auto"><div class="row between"><b>主管簡報</b><span id="brief-src"></span></div><div class="brief" id="brief">–</div></div>
+    <div class="card"><div class="tabs" style="margin-bottom:6px"><button class="on" onclick="sideTab('alerts',this)">即時告警 <span class="pill" id="n-alerts">0</span></button><button onclick="sideTab('check',this)">待查清單</button><button onclick="sideTab('tasks',this)">排程</button><button onclick="sideTab('model',this)">模型卡</button><button onclick="sideTab('lake',this)">資料湖</button></div>
+      <div class="list" id="side-alerts"></div><div class="list" id="side-check" style="display:none"></div><div class="list" id="side-tasks" style="display:none"></div><div class="list" id="side-model" style="display:none"></div><div class="list" id="side-lake" style="display:none"></div></div>
+  </div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script><script src="/static/common.js"></script>
+<script>
+const map = makeMap('map',[25.02,121.45],12); let markers = L.layerGroup().addTo(map); let S={stations:[], alerts:[], live:false, liveData:null, kpi:null, selected:null, tasks:[]};
+legendControl(map, `<b>風險色階</b><br><i style="background:#2fa66a"></i>&lt;20%　<i style="background:#e6c229"></i>20–35%<br><i style="background:#e08a00"></i>35–60%　<i style="background:#d64545"></i>≥60%<br><i style="background:#9aa4b2;border:1px dashed #555"></i>待查（雙零/長期不變/資料）<br><span class="xs muted">圓大小＝車柱數</span>`);
+const $ = id=>document.getElementById(id);
+async function loadStations(){ if(S.live){ return drawLive(); } const d = await API.get('/api/stations?adjusted='+($('adj').checked?1:0)); S.stations = d.stations; $('src').innerHTML = srcBadge(d.source)+' 資料時間 '+d.ts; draw(); if(!$('district').options.length>1){ const ds=[...new Set(S.stations.map(s=>s.district))].sort(); ds.forEach(x=>$('district').append(el('option',{value:x},x))); } }
+function draw(){ markers.clearLayers(); const h=+$('horizon').value, layer=$('layer').value, dist=$('district').value; S.stations.filter(s=>!dist||s.district===dist).forEach(s=>{ const m = stationMarker(s,{horizon:h,layer}); m.on('click',()=>openStation(s.sid)); markers.addLayer(m); }); if(dist){ const pts=S.stations.filter(s=>s.district===dist); if(pts.length) map.fitBounds(L.latLngBounds(pts.map(p=>[p.lat,p.lon])).pad(0.1)); } }
+async function toggleLive(){ S.live=!S.live; $('livebtn').textContent = S.live?'回到回放預測':'看即時現況'; if(S.live){ $('src').innerHTML='<span class="badge real">新北開放平台即時資料</span> 讀取中…'; try{ S.liveData = await API.get('/api/live'); drawLive(); }catch(e){ $('src').textContent='即時 API 暫時失敗'; } } else loadStations(); }
+function drawLive(){ const d=S.liveData; if(!d) return; markers.clearLayers(); $('src').innerHTML=`<span class="badge real">即時</span> ${d.fetched_at}・${d.count} 站・空 ${d.empty}／滿 ${d.full}／停用 ${d.inactive}・與歷史站鍵對得上 ${d.matched} 站`; d.stations.forEach(s=>{ const color = s.act!=='1'?'#9aa4b2': s.sbi===0?'#d64545': s.bemp===0?'#e08a00':'#2fa66a'; markers.addLayer(L.circleMarker([s.lat,s.lon],{radius:6,color:'#fff',weight:1,fillColor:color,fillOpacity:.9}).bindTooltip(`<b>${s.name}</b><br>可借 ${s.sbi}（一般 ${s.yb2}・電輔 ${s.eyb}）／可還 ${s.bemp}／柱 ${s.tot}<br>更新 ${s.mday}${s.act!=='1'?'<br><b>停用</b>':''}`)); }); }
+function kpis(k){ S.kpi=k; $('clock').textContent = '回放時間 '+k.ts; const t=(v,l,s,c)=>`<div class="kpi"><div class="v" style="color:${c||'inherit'}">${v}</div><div class="l">${l}</div>${s?`<div class="s">${s}</div>`:''}</div>`;
+  $('kpis').innerHTML = t(k.empty_now,'現在無車站','快照狀態，非失敗旅次',k.empty_now>40?'var(--bad)':'') + t(k.full_now,'現在無位站','', k.full_now>15?'var(--warn)':'') + t(k.both_zero+k.stale,'待查站','雙零／長期不變，不派車','var(--grey)') + t(k.risk_empty_120,'120 分內高風險缺車',`60 分 ${k.risk_empty_60}・180 分 ${k.risk_empty_180}`,'var(--warn)') + t(k.risk_full_120,'120 分內高風險缺位',`60 分 ${k.risk_full_60}・180 分 ${k.risk_full_180}`,'var(--warn)') + t(k.open_alerts,'開啟告警',`高 ${k.high_alerts}・平均確認 ${k.mean_ack_min??'–'} 分`,k.high_alerts?'var(--bad)':'') + t(k.tasks_planned,'排程中任務','重點三區・提前 120/180 分') + t(k.intents_active,'民眾意向',`預期分流 ${k.expected_diverted} 車次（×0.7）`,'var(--brand2)'); }
+async function loadAlerts(){ const d = await API.get('/api/alerts'); S.alerts=d.alerts; $('n-alerts').textContent = d.alerts.length; renderAlerts(); renderCheck(); }
+function renderAlerts(){ const dist=$('district').value; const items = S.alerts.filter(a=>!['stale_flat','both_zero','cap_conflict'].includes(a.type)).filter(a=>!dist||a.district===dist);
+  $('side-alerts').innerHTML = items.map(a=>`<div class="alert ${a.severity} ${a.status==='acked'?'acked':''}"><div class="m"><span class="badge ${a.severity}">${{high:'高',warn:'預警',info:'資訊'}[a.severity]}</span> ${a.message}</div><div class="meta"><span>${a.opened.slice(11)} 開啟・${a.route}${a.acked?`・${a.acked.slice(11)} 確認`:''}</span><span>${a.status==='open'?`<button class="small" onclick="act('${a.id}','ack')">確認</button>`:''}<button class="small" onclick="act('${a.id}','dispatch')">轉調度端</button><button class="small ghost" onclick="openStation(${a.sid})">看站</button></span></div></div>`).join('') || '<div class="muted small">目前沒有開啟中的告警</div>'; }
+function renderCheck(){ const items = S.alerts.filter(a=>['stale_flat','both_zero','cap_conflict'].includes(a.type)); $('side-check').innerHTML = `<div class="xs muted" style="margin-bottom:6px">這些站不會自動轉成派車任務；需查核營運狀態、資料更新或容量版本。</div>` + (items.map(a=>`<div class="alert info"><div class="m">${a.message}</div><div class="meta"><span>${a.opened.slice(11)}</span><span><button class="small" onclick="act('${a.id}','resolve')">已查核</button><button class="small ghost" onclick="openStation(${a.sid})">看站</button></span></div></div>`).join('') || '<div class="muted small">無</div>'); }
+async function act(id, a){ await API.post(`/api/alerts/${id}/${a}`); loadAlerts(); }
+async function loadTasks(){ const d = await API.get('/api/tasks'); S.tasks=d.tasks; const lab={planned:'已排定',dispatched:'出車中',en_route:'行進中',done:'完成',too_late:'來不及',needs_cross_district:'需跨區',minor_gap:'缺口小',superseded:'已取代',cancelled:'取消',proposed:'待確認'};
+  $('side-tasks').innerHTML = `<div class="xs muted" style="margin-bottom:6px">調度端排程摘要（載量 20 輛、市區 20 km/h、決策到抵達 ≥60 分為情境假設）</div>` + d.tasks.slice(0,20).map(t=>`<div class="alert ${t.status==='too_late'?'warn':'info'}"><div class="m"><b>${t.id}</b> ${t.district}・${t.horizon} 分前・<span class="pill">${lab[t.status]||t.status}</span> ${t.stops.length?`${t.stops.length} 站／載 ${t.load} 輛／最遲 ${hhmm(t.depart_by)} 出發`:''}</div><div class="meta"><span>${t.reason}</span></div></div>`).join(''); }
+async function loadModel(){ const m = await API.get('/api/model'); const e=m.eval; let html = `<div class="xs muted" style="margin-bottom:6px">資料：${m.audit.raw_rows.toLocaleString()} 筆／${m.audit.canonical_stations} 站鍵／隔離容量矛盾 ${m.audit.invalid_counts.toLocaleString()}／雙零 ${m.audit.both_zero.toLocaleString()}。切分：1–4 月訓練、5 月驗證、6 月測試。</div>`;
+  if(e.horizons){ html += '<table><tr><th>尺度</th><th>車數 MAE<br>持續值／基準／模型</th><th>新發零車事件<br>召回（模型）</th><th>零車 PR-AUC<br>新事件</th><th>排除長期不變後<br>MAE</th></tr>' + Object.entries(e.horizons).map(([h,o])=>{ const a=o.hgb.all, p=o.baselines.persistence.all, n=o.baselines.naive_drift.all; return `<tr><td>${h} 分</td><td class="mono">${p.mae_bikes.toFixed(2)}／${n.mae_bikes.toFixed(2)}／<b>${a.mae_bikes.toFixed(2)}</b></td><td class="mono">${fmtP(a.empty.new_event_recall)}（持續值 ${fmtP(p.empty.new_event_recall)}）</td><td class="mono">${a.empty.new_event_pr_auc?a.empty.new_event_pr_auc.toFixed(2):'–'}</td><td class="mono">${o.hgb.excl_flat24h.mae_bikes.toFixed(2)}</td></tr>`; }).join('') + '</table>'; html += `<div class="xs muted" style="margin-top:6px">六月曾做描述性探索，此為一次最終測試；持續值模型只能辨認「已發生且延續」的問題，新事件召回才是預測價值。所有數字為觀測快照層級，不是失敗旅次或到站成功率。</div>`; }
+  else html += '<div class="muted small">模型仍在訓練，目前以基準預測呈現。</div>';
+  $('side-model').innerHTML = html; }
+function sideTab(k, btn){ ['alerts','check','tasks','model','lake'].forEach(x=>$('side-'+x).style.display = x===k?'':'none'); document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); if(k==='tasks') loadTasks(); if(k==='model') loadModel(); if(k==='lake') loadLake(); }
+let LAKEQ=null;
+async function loadLake(q){ const box=$('side-lake');
+  if(!LAKEQ){ LAKEQ=(await API.get('/api/athena/list')).queries; }
+  q = q || LAKEQ[0].key;
+  box.innerHTML = `<div class="xs muted" style="margin-bottom:6px">直接以 Amazon Athena 查詢 S3 資料湖上的 1,332 萬筆原始觀測，非本機預先彙總。</div>
+    <div class="row wrap" style="gap:4px;margin-bottom:8px">${LAKEQ.map(x=>`<button class="small ${x.key===q?'primary':''}" onclick="loadLake('${x.key}')">${x.label}</button>`).join('')}</div>
+    <div class="muted small" id="lake-body">查詢中…</div>`;
+  try{ const d = await API.get('/api/athena?q='+q);
+    if(d.error){ $('lake-body').innerHTML = '查詢失敗：'+d.error; return; }
+    $('lake-body').innerHTML = `<div class="xs muted" style="margin-bottom:4px">掃描 ${d.scanned_mb} MB・引擎 ${d.engine_ms} ms・查詢 ID ${d.query_id.slice(0,8)}</div>
+      <table><tr>${d.columns.map(c=>`<th>${c}</th>`).join('')}</tr>${d.rows.map(r=>`<tr>${r.map(c=>`<td class="mono">${c}</td>`).join('')}</tr>`).join('')}</table>
+      <details style="margin-top:8px"><summary class="xs muted">看 SQL</summary><pre class="xs" style="white-space:pre-wrap;background:#f6f8fb;padding:8px;border-radius:8px">${d.sql}</pre></details>
+      <div class="xs muted" style="margin-top:6px">${d.source}</div>`;
+  }catch(e){ $('lake-body').textContent='查詢失敗：'+e.message; } }
+async function openStation(sid){ const d = await API.get('/api/station/'+sid); const s=d.station; const dr=$('drawer'); dr.classList.add('open'); const rf=d.raw_forecast, af=d.adjusted_forecast;
+  dr.innerHTML = `<div class="row between"><b style="font-size:15px">${s.name}</b><button class="small ghost" onclick="$('drawer').classList.remove('open')">✕</button></div><div class="small muted">${s.district}・車柱 ${s.cap}・${statusBadge(s.status)}${s.flat_run>=48?` <span class="badge grey">無變化 ${(s.flat_run/2).toFixed(0)} 小時</span>`:''}</div>
+  <div class="compare" style="margin:10px 0"><div><div class="v">${s.bikes??'–'}</div><div class="l">現在可借</div></div><div><div class="v">${s.spaces??'–'}</div><div class="l">現在可還</div></div><div><div class="v" style="color:${riskColor(s.pe_120)}">${fmtP(s.pe_120)}</div><div class="l">120 分零車</div></div><div><div class="v" style="color:${riskColor(s.pf_120)}">${fmtP(s.pf_120)}</div><div class="l">120 分零位</div></div></div>
+  <canvas class="spark" id="spk"></canvas><div class="xs muted">過去 6 小時可借車數</div>
+  <table style="margin-top:8px"><tr><th>尺度</th><th>原始預測 車／位</th><th>含意向修正</th><th>零車／零位</th></tr>${[60,120,180].map(h=>`<tr><td>${h} 分</td><td class="mono">${fmtN(rf['pb_'+h],1)}／${fmtN(rf['ps_'+h],1)}</td><td class="mono">${fmtN(af['pb_'+h],1)}／${fmtN(af['ps_'+h],1)}</td><td class="mono">${fmtP(s['pe_'+h])}／${fmtP(s['pf_'+h])}</td></tr>`).join('')}</table>
+  <div class="xs muted" style="margin-top:4px">本站登記意向 ${d.intents_here} 筆，預期分流 ${d.expected_diverted} 車次（轉換率 0.7 為假設；歷史模型已含一般需求，不重複加計）。</div>
+  <div style="margin-top:10px"><b class="small">生活圈鄰站（直線 500 m，候選資源存在≠到站成功）</b><table>${d.neighbors.slice(0,8).map(n=>`<tr><td>${n.name}</td><td class="mono">${n.dist_m} m・走 ${n.walk_min} 分</td><td class="mono">${n.bikes??'–'}／${n.spaces??'–'}</td><td>${statusBadge(n.status)}</td></tr>`).join('')}</table></div>
+  ${d.alerts.length?`<div style="margin-top:10px"><b class="small">本站告警</b>${d.alerts.map(a=>`<div class="alert ${a.severity}"><div class="m">${a.message}</div></div>`).join('')}</div>`:''}
+  <div class="row" style="margin-top:10px"><button class="small primary" onclick="API.post('/api/alerts/${(d.alerts[0]||{}).id||'x'}/dispatch').then(loadAlerts)" ${d.alerts.length?'':'disabled'}>轉調度端處理</button><button class="small" onclick="map.setView([${s.lat},${s.lon}],16)">地圖定位</button></div>`;
+  sparkline($('spk'), d.history.map(h=>h.bikes), '#0f5fa8', s.cap); map.setView([s.lat,s.lon], Math.max(map.getZoom(),15)); }
+async function brief(){ try{ const b = await API.get('/api/briefing?scope=gov'); $('brief').textContent=b.text.replace(/\*\*/g,''); $('brief-src').innerHTML = srcBadge(b.source)+(b.model?`<span class="xs muted"> ${b.model.split('.').pop()}・${b.ms} ms</span>`:''); }catch(e){} }
+['layer','horizon','district'].forEach(id=>$(id).addEventListener('change',()=>{draw(); renderAlerts();})); $('adj').addEventListener('change',loadStations);
+connectEvents({ tick:(p)=>{ kpis(p.kpi); loadStations(); loadAlerts(); brief(); if($('side-tasks').style.display!=='none') loadTasks(); },
+  alert:(a)=>{ if(a.status==='open' && a.severity!=='info'){ Toasts.show(`${a.severity==='high'?'🔴':'🟠'} ${a.station}`, a.message, a.severity, `${a.opened.slice(11)}・${a.route}`); } loadAlerts(); },
+  alert_digest:(d)=>Toasts.show('告警節流', d.message, 'info'),
+  notify:(n)=>{ if(n.channel==='gov') Toasts.show(n.title, n.body, n.kind, n.ts); },
+  scenario:()=>{ loadStations(); loadAlerts(); brief(); } });
+(async()=>{ const st = await API.get('/api/state'); kpis(st.kpi); await loadStations(); loadAlerts(); brief(); })();
+</script></body></html>

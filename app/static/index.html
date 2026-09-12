@@ -1,0 +1,41 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>新北 YouBike 生活圈協同服務</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+body{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,#eef3f9,#e6efe9);padding:24px}
+.hero{text-align:center;margin-bottom:22px;max-width:760px}
+.hero h1{font-size:26px;margin:0 0 6px}.hero p{margin:0;color:var(--muted);font-size:14px;line-height:1.7}
+.roles{display:grid;grid-template-columns:repeat(3,minmax(230px,290px));gap:16px}
+.role{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow);cursor:pointer;transition:.15s;display:flex;flex-direction:column;text-decoration:none;color:inherit}
+.role:hover{transform:translateY(-3px);box-shadow:0 10px 28px rgba(20,30,50,.14);border-color:#b9c9dd}
+.role .ic{font-size:32px;margin-bottom:8px}.role h2{font-size:17px;margin:0 0 4px}.role .who{font-size:11px;color:var(--muted);margin-bottom:10px}
+.role ul{margin:0;padding-left:17px;font-size:12px;color:#3a4553;line-height:1.85;flex:1}
+.role .go{margin-top:12px;font-size:12px;color:var(--brand);font-weight:600}
+.foot{margin-top:24px;text-align:center;font-size:11px;color:var(--muted);line-height:1.9;max-width:820px}
+.stat{display:inline-flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px}
+.stat span{background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+@media(max-width:820px){.roles{grid-template-columns:1fr}}
+</style></head><body>
+<div class="hero"><h1>新北 YouBike 生活圈協同服務</h1>
+<p>用六個月真實站點資料預測未來兩三小時的缺車與缺位，讓民眾出門前就知道去哪借、去哪還，讓營運端提前派車，讓主管即時看到預警。請選擇你的身分。</p></div>
+<div class="roles">
+  <a class="role" href="/citizen"><div class="ic">🚲</div><h2>民眾</h2><div class="who">通勤族、學生</div>
+    <ul><li>出門前收到提醒，含真實天氣</li><li>一鍵拿到最佳借還方案</li><li>導航到站、快速還車</li><li>一鍵回報車輛故障</li><li>本月里程、減碳與集點存摺</li></ul>
+    <div class="go">進入民眾端 →</div></a>
+  <a class="role" href="/ops"><div class="ic">🚚</div><h2>微笑單車（營運端）</h2><div class="who">調度人員、維修派工</div>
+    <ul><li>提前 120／180 分鐘的派車任務</li><li>站點順序、載量與路線</li><li>最遲出發與來不及的替代做法</li><li>民眾報修工單即時進來</li><li>活動散場的補車安排</li></ul>
+    <div class="go">進入調度端 →</div></a>
+  <a class="role" href="/gov"><div class="ic">🏛</div><h2>新北市交通局</h2><div class="who">主管、監控人員</div>
+    <ul><li>全市空滿風險地圖</li><li>即時跳出告警與去重節流</li><li>雙零與異常站待查清單</li><li>民眾分流成效與剩餘缺口</li><li>模型驗證與資料品質</li></ul>
+    <div class="go">進入政府端 →</div></a>
+</div>
+<div class="foot">
+  <div id="sys">載入系統狀態…</div>
+  <div class="stat"><span>真實計算：資料管線、預測、站群、缺口、排程、三方案</span><span>明示模擬：派車執行、店家維修、獎勵兌付、頁內通知</span><span>生成式 AI：Amazon Bedrock</span></div>
+  <div style="margin-top:8px"><a href="/stage">簡報用同畫面三端舞台</a>　·　快照空滿率不是失敗旅次，候選鄰站存在不是到站成功率，模擬不是實測成效。</div>
+</div>
+<script src="/static/common.js"></script>
+<script>
+(async()=>{ try{ const s = await API.get('/api/state'); const w = await API.get('/api/weather');
+  document.getElementById('sys').innerHTML = `回放時間 <b>${s.clock.ts}</b>（${w.replay.available?`${w.replay.desc}・${w.replay.temp}°C・雨量 ${w.replay.rain_mm} 毫米`:'天氣資料不可用'}）・預測尺度 ${s.model_horizons.join('／')} 分鐘・站點 ${s.kpi.stations}`;
+}catch(e){ document.getElementById('sys').textContent='系統尚未就緒'; } })();
+</script></body></html>

@@ -1,0 +1,1257 @@
+{
+ "fleet": {
+  "docks": 47153,
+  "mean_bikes_in_docks": 15971,
+  "observed_trips_per_day_lower_bound": 49799,
+  "trips_per_bike_per_day": 3.12,
+  "trips_per_dock_per_day": "1.06",
+  "note": "以觀測到的庫存下降量估算旅次，為下界；30 分鐘內一借一還會抵銷，零車期間的需求看不到。"
+ },
+ "prepositioning": {
+  "早尖峰 07:00-09:30": {
+   "window_days": 118,
+   "stations_with_deficit": 214,
+   "total_deficit_bikes": 1195,
+   "total_surplus_bikes": 4348,
+   "top_deficit": [
+    {
+     "sid": 520,
+     "district": "新店區",
+     "name": "中正民權路口",
+     "cap": 92.0,
+     "stock": 20.399999618530273,
+     "need": 30.100000381469727,
+     "deficit": 14.100000381469727,
+     "zero_share": 0.0
+    },
+    {
+     "sid": 411,
+     "district": "土城區",
+     "name": "中山1號科技總部",
+     "cap": 42.0,
+     "stock": 7.5,
+     "need": 17.600000381469727,
+     "deficit": 12.699999809265137,
+     "zero_share": 0.6
+    },
+    {
+     "sid": 848,
+     "district": "板橋區",
+     "name": "捷運新埔站(2號出口)",
+     "cap": 60.0,
+     "stock": 14.600000381469727,
+     "need": 23.5,
+     "deficit": 12.399999618530273,
+     "zero_share": 0.0
+    },
+    {
+     "sid": 767,
+     "district": "新莊區",
+     "name": "頭前國中",
+     "cap": 51.0,
+     "stock": 14.100000381469727,
+     "need": 23.0,
+     "deficit": 12.300000190734863,
+     "zero_share": 1.0
+    },
+    {
+     "sid": 454,
+     "district": "土城區",
+     "name": "捷運海山站(2號出口)",
+     "cap": 32.0,
+     "stock": 24.5,
+     "need": 31.700000762939453,
+     "deficit": 11.899999618530273,
+     "zero_share": 0.3
+    },
+    {
+     "sid": 456,
+     "district": "土城區",
+     "name": "捷運海山站(3號出口)轉乘停車場",
+     "cap": 80.0,
+     "stock": 20.700000762939453,
+     "need": 27.700000762939453,
+     "deficit": 11.100000381469727,
+     "zero_share": 0.6
+    },
+    {
+     "sid": 1465,
+     "district": "蘆洲區",
+     "name": "仁愛街70巷口",
+     "cap": 32.0,
+     "stock": 9.199999809265137,
+     "need": 17.600000381469727,
+     "deficit": 11.100000381469727,
+     "zero_share": 19.9
+    },
+    {
+     "sid": 591,
+     "district": "新店區",
+     "name": "捷運大坪林站(5號出口)",
+     "cap": 92.0,
+     "stock": 26.299999237060547,
+     "need": 32.29999923706055,
+     "deficit": 10.800000190734863,
+     "zero_share": 13.7
+    },
+    {
+     "sid": 699,
+     "district": "新莊區",
+     "name": "捷運新北產業園區站",
+     "cap": 70.0,
+     "stock": 25.100000381469727,
+     "need": 31.0,
+     "deficit": 10.5,
+     "zero_share": 7.5
+    },
+    {
+     "sid": 168,
+     "district": "三重區",
+     "name": "捷運菜寮站(3號出口)",
+     "cap": 60.0,
+     "stock": 26.5,
+     "need": 32.099998474121094,
+     "deficit": 10.399999618530273,
+     "zero_share": 0.1
+    },
+    {
+     "sid": 342,
+     "district": "五股區",
+     "name": "五工五五權路口",
+     "cap": 18.0,
+     "stock": 5.699999809265137,
+     "need": 13.899999618530273,
+     "deficit": 10.399999618530273,
+     "zero_share": 0.4
+    },
+    {
+     "sid": 936,
+     "district": "板橋區",
+     "name": "港德攤集區(中正路236巷)",
+     "cap": 20.0,
+     "stock": 2.4000000953674316,
+     "need": 11.0,
+     "deficit": 10.300000190734863,
+     "zero_share": 22.2
+    },
+    {
+     "sid": 762,
+     "district": "新莊區",
+     "name": "輔仁大學附設醫院",
+     "cap": 41.0,
+     "stock": 8.300000190734863,
+     "need": 16.100000381469727,
+     "deficit": 10.199999809265137,
+     "zero_share": 0.7
+    },
+    {
+     "sid": 455,
+     "district": "土城區",
+     "name": "捷運海山站(3號出口)",
+     "cap": 40.0,
+     "stock": 9.899999618530273,
+     "need": 17.200000762939453,
+     "deficit": 9.899999618530273,
+     "zero_share": 3.5
+    },
+    {
+     "sid": 518,
+     "district": "新店區",
+     "name": "中山路31巷(波爾多2社區)",
+     "cap": 40.0,
+     "stock": 14.899999618530273,
+     "need": 21.200000762939453,
+     "deficit": 9.5,
+     "zero_share": 6.9
+    },
+    {
+     "sid": 702,
+     "district": "新莊區",
+     "name": "捷運新莊站(2號出口)",
+     "cap": 54.0,
+     "stock": 21.399999618530273,
+     "need": 26.700000762939453,
+     "deficit": 9.399999618530273,
+     "zero_share": 0.3
+    },
+    {
+     "sid": 519,
+     "district": "新店區",
+     "name": "中正國小",
+     "cap": 36.0,
+     "stock": 9.600000381469727,
+     "need": 16.200000762939453,
+     "deficit": 9.0,
+     "zero_share": 11.4
+    },
+    {
+     "sid": 701,
+     "district": "新莊區",
+     "name": "捷運新莊站(1號出口)",
+     "cap": 69.0,
+     "stock": 25.700000762939453,
+     "need": 30.100000381469727,
+     "deficit": 9.0,
+     "zero_share": 0.1
+    },
+    {
+     "sid": 339,
+     "district": "中和區",
+     "name": "飛駝社區(興南路)",
+     "cap": 40.0,
+     "stock": 23.100000381469727,
+     "need": 27.700000762939453,
+     "deficit": 8.800000190734863,
+     "zero_share": 16.0
+    },
+    {
+     "sid": 952,
+     "district": "板橋區",
+     "name": "生態北公園",
+     "cap": 18.0,
+     "stock": 6.099999904632568,
+     "need": 13.0,
+     "deficit": 8.800000190734863,
+     "zero_share": 1.1
+    }
+   ],
+   "top_surplus": [
+    {
+     "sid": 794,
+     "district": "板橋區",
+     "name": "亞東醫院",
+     "cap": 61.0,
+     "stock": 40.900001525878906,
+     "need": 7.300000190734863,
+     "surplus": 32.599998474121094
+    },
+    {
+     "sid": 1522,
+     "district": "雙溪區",
+     "name": "牡丹車站",
+     "cap": 60.0,
+     "stock": 33.599998474121094,
+     "need": 3.0999999046325684,
+     "surplus": 30.0
+    },
+    {
+     "sid": 1069,
+     "district": "林口區",
+     "name": "林口轉運站",
+     "cap": 99.0,
+     "stock": 36.79999923706055,
+     "need": 6.5,
+     "surplus": 29.399999618530273
+    },
+    {
+     "sid": 851,
+     "district": "板橋區",
+     "name": "捷運新埔站(5號出口)",
+     "cap": 79.0,
+     "stock": 28.600000381469727,
+     "need": 2.9000000953674316,
+     "surplus": 25.299999237060547
+    },
+    {
+     "sid": 1549,
+     "district": "鶯歌區",
+     "name": "捷運鶯歌車站",
+     "cap": 34.0,
+     "stock": 25.0,
+     "need": 0.10000000149011612,
+     "surplus": 23.0
+    },
+    {
+     "sid": 1385,
+     "district": "淡水區",
+     "name": "淡水轉運站",
+     "cap": 50.0,
+     "stock": 23.799999237060547,
+     "need": 0.699999988079071,
+     "surplus": 21.799999237060547
+    },
+    {
+     "sid": 1387,
+     "district": "淡水區",
+     "name": "淡江大橋橋管中心",
+     "cap": 40.0,
+     "stock": 23.799999237060547,
+     "need": 0.800000011920929,
+     "surplus": 21.799999237060547
+    },
+    {
+     "sid": 457,
+     "district": "土城區",
+     "name": "捷運頂埔站(2號出口)",
+     "cap": 66.0,
+     "stock": 26.100000381469727,
+     "need": 4.099999904632568,
+     "surplus": 21.399999618530273
+    },
+    {
+     "sid": 253,
+     "district": "中和區",
+     "name": "台灣科技廣場",
+     "cap": 70.0,
+     "stock": 25.100000381469727,
+     "need": 3.5999999046325684,
+     "surplus": 21.0
+    },
+    {
+     "sid": 1545,
+     "district": "鶯歌區",
+     "name": "捷運國華站(2號出口)",
+     "cap": 60.0,
+     "stock": 23.0,
+     "need": 0.0,
+     "surplus": 21.0
+    },
+    {
+     "sid": 445,
+     "district": "土城區",
+     "name": "承天路4巷(MRT社區)",
+     "cap": 40.0,
+     "stock": 22.100000381469727,
+     "need": 1.2999999523162842,
+     "surplus": 20.100000381469727
+    },
+    {
+     "sid": 425,
+     "district": "土城區",
+     "name": "土城國中",
+     "cap": 50.0,
+     "stock": 28.899999618530273,
+     "need": 7.900000095367432,
+     "surplus": 19.799999237060547
+    },
+    {
+     "sid": 45,
+     "district": "三峽區",
+     "name": "捷運龍埔站",
+     "cap": 72.0,
+     "stock": 21.0,
+     "need": 0.0,
+     "surplus": 19.0
+    },
+    {
+     "sid": 1417,
+     "district": "淡水區",
+     "name": "輕軌漁人碼頭站",
+     "cap": 61.0,
+     "stock": 22.5,
+     "need": 3.299999952316284,
+     "surplus": 18.700000762939453
+    },
+    {
+     "sid": 603,
+     "district": "新店區",
+     "name": "新店新和國小",
+     "cap": 36.0,
+     "stock": 24.899999618530273,
+     "need": 5.599999904632568,
+     "surplus": 18.5
+    }
+   ],
+   "by_district": [
+    {
+     "district": "板橋區",
+     "deficit": 250.0,
+     "surplus": 336.0
+    },
+    {
+     "district": "新莊區",
+     "deficit": 199.0,
+     "surplus": 170.0
+    },
+    {
+     "district": "土城區",
+     "deficit": 152.0,
+     "surplus": 218.0
+    },
+    {
+     "district": "新店區",
+     "deficit": 136.0,
+     "surplus": 320.0
+    },
+    {
+     "district": "中和區",
+     "deficit": 125.0,
+     "surplus": 374.0
+    },
+    {
+     "district": "三重區",
+     "deficit": 92.0,
+     "surplus": 218.0
+    },
+    {
+     "district": "永和區",
+     "deficit": 71.0,
+     "surplus": 45.0
+    },
+    {
+     "district": "蘆洲區",
+     "deficit": 47.0,
+     "surplus": 48.0
+    },
+    {
+     "district": "汐止區",
+     "deficit": 31.0,
+     "surplus": 178.0
+    },
+    {
+     "district": "五股區",
+     "deficit": 25.0,
+     "surplus": 172.0
+    },
+    {
+     "district": "樹林區",
+     "deficit": 16.0,
+     "surplus": 220.0
+    },
+    {
+     "district": "泰山區",
+     "deficit": 12.0,
+     "surplus": 70.0
+    }
+   ],
+   "trips_needed_cap20": 60,
+   "uncovered_by_local_surplus": 0
+  },
+  "晚尖峰 17:00-19:30": {
+   "window_days": 118,
+   "stations_with_deficit": 314,
+   "total_deficit_bikes": 1862,
+   "total_surplus_bikes": 3146,
+   "top_deficit": [
+    {
+     "sid": 281,
+     "district": "中和區",
+     "name": "捷運南勢角站(4號出口)",
+     "cap": 96.0,
+     "stock": 21.299999237060547,
+     "need": 47.70000076293945,
+     "deficit": 33.5,
+     "zero_share": 4.4
+    },
+    {
+     "sid": 1473,
+     "district": "蘆洲區",
+     "name": "捷運蘆洲站",
+     "cap": 92.0,
+     "stock": 36.0,
+     "need": 52.20000076293945,
+     "deficit": 24.100000381469727,
+     "zero_share": 4.9
+    },
+    {
+     "sid": 845,
+     "district": "板橋區",
+     "name": "捷運府中站(3號出口)",
+     "cap": 69.0,
+     "stock": 29.100000381469727,
+     "need": 44.099998474121094,
+     "deficit": 21.5,
+     "zero_share": 8.6
+    },
+    {
+     "sid": 1559,
+     "district": "鶯歌區",
+     "name": "臺鐵鳳鳴站",
+     "cap": 40.0,
+     "stock": 8.5,
+     "need": 22.899999618530273,
+     "deficit": 17.799999237060547,
+     "zero_share": 8.5
+    },
+    {
+     "sid": 456,
+     "district": "土城區",
+     "name": "捷運海山站(3號出口)轉乘停車場",
+     "cap": 80.0,
+     "stock": 27.0,
+     "need": 38.29999923706055,
+     "deficit": 17.100000381469727,
+     "zero_share": 2.4
+    },
+    {
+     "sid": 447,
+     "district": "土城區",
+     "name": "捷運土城站(2號出口)",
+     "cap": 69.0,
+     "stock": 22.799999237060547,
+     "need": 33.900001525878906,
+     "deficit": 16.200000762939453,
+     "zero_share": 5.9
+    },
+    {
+     "sid": 853,
+     "district": "板橋區",
+     "name": "捷運板橋站(1號出口)",
+     "cap": 86.0,
+     "stock": 31.399999618530273,
+     "need": 41.29999923706055,
+     "deficit": 16.0,
+     "zero_share": 12.3
+    },
+    {
+     "sid": 168,
+     "district": "三重區",
+     "name": "捷運菜寮站(3號出口)",
+     "cap": 60.0,
+     "stock": 32.29999923706055,
+     "need": 41.20000076293945,
+     "deficit": 15.100000381469727,
+     "zero_share": 7.2
+    },
+    {
+     "sid": 1471,
+     "district": "蘆洲區",
+     "name": "捷運三民高中站(2號出口)",
+     "cap": 55.0,
+     "stock": 18.700000762939453,
+     "need": 28.600000381469727,
+     "deficit": 14.199999809265137,
+     "zero_share": 16.7
+    },
+    {
+     "sid": 164,
+     "district": "三重區",
+     "name": "捷運三重國小站",
+     "cap": 52.0,
+     "stock": 23.299999237060547,
+     "need": 31.899999618530273,
+     "deficit": 13.300000190734863,
+     "zero_share": 17.7
+    },
+    {
+     "sid": 280,
+     "district": "中和區",
+     "name": "捷運中和站",
+     "cap": 36.0,
+     "stock": 9.899999618530273,
+     "need": 20.0,
+     "deficit": 13.100000381469727,
+     "zero_share": 0.7
+    },
+    {
+     "sid": 1472,
+     "district": "蘆洲區",
+     "name": "捷運徐匯中學站(1號出口)",
+     "cap": 38.0,
+     "stock": 19.0,
+     "need": 27.799999237060547,
+     "deficit": 13.0,
+     "zero_share": 6.1
+    },
+    {
+     "sid": 842,
+     "district": "板橋區",
+     "name": "捷運亞東醫院站(2號出口)",
+     "cap": 52.0,
+     "stock": 23.299999237060547,
+     "need": 30.700000762939453,
+     "deficit": 12.0,
+     "zero_share": 18.2
+    },
+    {
+     "sid": 1488,
+     "district": "蘆洲區",
+     "name": "永平公園",
+     "cap": 26.0,
+     "stock": 7.599999904632568,
+     "need": 17.0,
+     "deficit": 11.899999618530273,
+     "zero_share": 0.8
+    },
+    {
+     "sid": 1160,
+     "district": "樹林區",
+     "name": "樹林火車站(後站)",
+     "cap": 65.0,
+     "stock": 24.299999237060547,
+     "need": 31.299999237060547,
+     "deficit": 11.699999809265137,
+     "zero_share": 2.4
+    },
+    {
+     "sid": 1465,
+     "district": "蘆洲區",
+     "name": "仁愛街70巷口",
+     "cap": 32.0,
+     "stock": 14.0,
+     "need": 22.399999618530273,
+     "deficit": 11.699999809265137,
+     "zero_share": 0.4
+    },
+    {
+     "sid": 773,
+     "district": "新莊區",
+     "name": "黃城公園",
+     "cap": 38.0,
+     "stock": 9.300000190734863,
+     "need": 18.100000381469727,
+     "deficit": 11.5,
+     "zero_share": 0.6
+    },
+    {
+     "sid": 1194,
+     "district": "永和區",
+     "name": "捷運頂溪站(中興街)",
+     "cap": 48.0,
+     "stock": 11.199999809265137,
+     "need": 19.600000381469727,
+     "deficit": 11.399999618530273,
+     "zero_share": 10.6
+    },
+    {
+     "sid": 847,
+     "district": "板橋區",
+     "name": "捷運新埔站(1號出口)",
+     "cap": 99.0,
+     "stock": 48.5,
+     "need": 51.900001525878906,
+     "deficit": 11.199999809265137,
+     "zero_share": 11.0
+    },
+    {
+     "sid": 870,
+     "district": "板橋區",
+     "name": "新北市政府(新站路)",
+     "cap": 74.0,
+     "stock": 44.400001525878906,
+     "need": 48.400001525878906,
+     "deficit": 11.199999809265137,
+     "zero_share": 5.9
+    }
+   ],
+   "top_surplus": [
+    {
+     "sid": 40,
+     "district": "三峽區",
+     "name": "捷運三峽站",
+     "cap": 61.0,
+     "stock": 34.0,
+     "need": 0.30000001192092896,
+     "surplus": 32.0
+    },
+    {
+     "sid": 1549,
+     "district": "鶯歌區",
+     "name": "捷運鶯歌車站",
+     "cap": 34.0,
+     "stock": 27.5,
+     "need": 0.10000000149011612,
+     "surplus": 25.5
+    },
+    {
+     "sid": 445,
+     "district": "土城區",
+     "name": "承天路4巷(MRT社區)",
+     "cap": 40.0,
+     "stock": 21.200000762939453,
+     "need": 1.899999976158142,
+     "surplus": 19.0
+    },
+    {
+     "sid": 1548,
+     "district": "鶯歌區",
+     "name": "捷運鶯桃福德站",
+     "cap": 75.0,
+     "stock": 21.0,
+     "need": 0.20000000298023224,
+     "surplus": 19.0
+    },
+    {
+     "sid": 45,
+     "district": "三峽區",
+     "name": "捷運龍埔站",
+     "cap": 72.0,
+     "stock": 19.5,
+     "need": 0.10000000149011612,
+     "surplus": 17.5
+    },
+    {
+     "sid": 1167,
+     "district": "樹林區",
+     "name": "臺鐵樹林車站(後站停車場)",
+     "cap": 64.0,
+     "stock": 22.899999618530273,
+     "need": 4.900000095367432,
+     "surplus": 17.299999237060547
+    },
+    {
+     "sid": 42,
+     "district": "三峽區",
+     "name": "捷運臺北大學站(1號出口)",
+     "cap": 47.0,
+     "stock": 18.5,
+     "need": 0.20000000298023224,
+     "surplus": 16.5
+    },
+    {
+     "sid": 1385,
+     "district": "淡水區",
+     "name": "淡水轉運站",
+     "cap": 50.0,
+     "stock": 19.899999618530273,
+     "need": 3.0,
+     "surplus": 16.399999618530273
+    },
+    {
+     "sid": 1000,
+     "district": "林口區",
+     "name": "三井Outlet",
+     "cap": 63.0,
+     "stock": 26.399999618530273,
+     "need": 9.199999809265137,
+     "surplus": 15.800000190734863
+    },
+    {
+     "sid": 1259,
+     "district": "汐止區",
+     "name": "忠山市民活動中心",
+     "cap": 38.0,
+     "stock": 17.700000762939453,
+     "need": 0.699999988079071,
+     "surplus": 15.699999809265137
+    },
+    {
+     "sid": 620,
+     "district": "新店區",
+     "name": "綠湖公園",
+     "cap": 44.0,
+     "stock": 21.799999237060547,
+     "need": 5.800000190734863,
+     "surplus": 15.100000381469727
+    },
+    {
+     "sid": 1545,
+     "district": "鶯歌區",
+     "name": "捷運國華站(2號出口)",
+     "cap": 60.0,
+     "stock": 17.0,
+     "need": 0.10000000149011612,
+     "surplus": 15.0
+    },
+    {
+     "sid": 457,
+     "district": "土城區",
+     "name": "捷運頂埔站(2號出口)",
+     "cap": 66.0,
+     "stock": 16.700000762939453,
+     "need": 1.600000023841858,
+     "surplus": 14.699999809265137
+    },
+    {
+     "sid": 41,
+     "district": "三峽區",
+     "name": "捷運橫溪站",
+     "cap": 43.0,
+     "stock": 16.5,
+     "need": 0.10000000149011612,
+     "surplus": 14.5
+    },
+    {
+     "sid": 708,
+     "district": "新莊區",
+     "name": "文中三平面停車場",
+     "cap": 42.0,
+     "stock": 20.100000381469727,
+     "need": 4.900000095367432,
+     "surplus": 14.5
+    }
+   ],
+   "by_district": [
+    {
+     "district": "板橋區",
+     "deficit": 397.0,
+     "surplus": 240.0
+    },
+    {
+     "district": "新莊區",
+     "deficit": 250.0,
+     "surplus": 192.0
+    },
+    {
+     "district": "中和區",
+     "deficit": 207.0,
+     "surplus": 226.0
+    },
+    {
+     "district": "三重區",
+     "deficit": 183.0,
+     "surplus": 184.0
+    },
+    {
+     "district": "土城區",
+     "deficit": 167.0,
+     "surplus": 163.0
+    },
+    {
+     "district": "蘆洲區",
+     "deficit": 160.0,
+     "surplus": 45.0
+    },
+    {
+     "district": "新店區",
+     "deficit": 125.0,
+     "surplus": 286.0
+    },
+    {
+     "district": "永和區",
+     "deficit": 119.0,
+     "surplus": 52.0
+    },
+    {
+     "district": "林口區",
+     "deficit": 41.0,
+     "surplus": 142.0
+    },
+    {
+     "district": "泰山區",
+     "deficit": 34.0,
+     "surplus": 47.0
+    },
+    {
+     "district": "樹林區",
+     "deficit": 33.0,
+     "surplus": 157.0
+    },
+    {
+     "district": "鶯歌區",
+     "deficit": 27.0,
+     "surplus": 218.0
+    }
+   ],
+   "trips_needed_cap20": 94,
+   "uncovered_by_local_surplus": 0
+  }
+ },
+ "diversion_vs_truck": {
+  "empty_halfhours": 754396,
+  "covered_within_300m": 464338,
+  "covered_within_500m": 590898,
+  "pct_300m": 61.6,
+  "pct_500m": 78.3,
+  "must_dispatch_pct": 21.7,
+  "isolated_stations_no_neighbor_500m": 88,
+  "note": "鄰站當下有車只是候選資源存在，不代表走得到或到站仍有車。"
+ },
+ "dead_capacity": {
+  "stations": 41,
+  "docks_locked": 1117,
+  "pct_of_city_docks": "2.4",
+  "top": [
+   {
+    "sid": 1522,
+    "district": "雙溪區",
+    "name": "牡丹車站",
+    "cap": 60.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 79.1,
+    "mean_bikes": 13.199999809265137,
+    "flow_day": 43.1
+   },
+   {
+    "sid": 1454,
+    "district": "萬里區",
+    "name": "野柳地質公園",
+    "cap": 60.0,
+    "both_zero_pct": 49.2,
+    "flat_pct": 85.2,
+    "mean_bikes": 4.400000095367432,
+    "flow_day": 12.8
+   },
+   {
+    "sid": 1435,
+    "district": "瑞芳區",
+    "name": "猴硐火車站",
+    "cap": 60.0,
+    "both_zero_pct": 49.4,
+    "flat_pct": 77.3,
+    "mean_bikes": 10.899999618530273,
+    "flow_day": 37.0
+   },
+   {
+    "sid": 1445,
+    "district": "石門區",
+    "name": "白沙灣",
+    "cap": 56.0,
+    "both_zero_pct": 49.2,
+    "flat_pct": 88.6,
+    "mean_bikes": 4.300000190734863,
+    "flow_day": 12.5
+   },
+   {
+    "sid": 1523,
+    "district": "雙溪區",
+    "name": "雙溪車站",
+    "cap": 55.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 82.7,
+    "mean_bikes": 8.5,
+    "flow_day": 24.0
+   },
+   {
+    "sid": 511,
+    "district": "平溪區",
+    "name": "平溪國中",
+    "cap": 55.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 93.4,
+    "mean_bikes": 3.0,
+    "flow_day": 6.9
+   },
+   {
+    "sid": 1452,
+    "district": "萬里區",
+    "name": "翡翠灣停車場",
+    "cap": 54.0,
+    "both_zero_pct": 49.7,
+    "flat_pct": 87.0,
+    "mean_bikes": 4.900000095367432,
+    "flow_day": 13.3
+   },
+   {
+    "sid": 83,
+    "district": "三芝區",
+    "name": "淺水灣",
+    "cap": 48.0,
+    "both_zero_pct": 49.2,
+    "flat_pct": 84.1,
+    "mean_bikes": 4.800000190734863,
+    "flow_day": 15.7
+   },
+   {
+    "sid": 509,
+    "district": "平溪區",
+    "name": "十分遊客中心",
+    "cap": 42.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 89.6,
+    "mean_bikes": 3.0,
+    "flow_day": 9.2
+   },
+   {
+    "sid": 278,
+    "district": "中和區",
+    "name": "德光莒光路口",
+    "cap": 30.0,
+    "both_zero_pct": 50.0,
+    "flat_pct": 91.9,
+    "mean_bikes": 4.699999809265137,
+    "flow_day": 9.0
+   },
+   {
+    "sid": 510,
+    "district": "平溪區",
+    "name": "嶺腳車站",
+    "cap": 30.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 93.1,
+    "mean_bikes": 2.5999999046325684,
+    "flow_day": 6.3
+   },
+   {
+    "sid": 1431,
+    "district": "瑞芳區",
+    "name": "三貂嶺隧道(金字橋)",
+    "cap": 30.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 82.3,
+    "mean_bikes": 4.800000190734863,
+    "flow_day": 18.3
+   },
+   {
+    "sid": 1517,
+    "district": "金山區",
+    "name": "中角灣",
+    "cap": 28.0,
+    "both_zero_pct": 49.2,
+    "flat_pct": 89.5,
+    "mean_bikes": 3.9000000953674316,
+    "flow_day": 10.3
+   },
+   {
+    "sid": 1430,
+    "district": "烏來區",
+    "name": "烏來老街",
+    "cap": 28.0,
+    "both_zero_pct": 49.4,
+    "flat_pct": 88.6,
+    "mean_bikes": 3.9000000953674316,
+    "flow_day": 10.3
+   },
+   {
+    "sid": 513,
+    "district": "平溪區",
+    "name": "菁桐老街",
+    "cap": 27.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 88.8,
+    "mean_bikes": 3.0999999046325684,
+    "flow_day": 9.1
+   },
+   {
+    "sid": 1444,
+    "district": "石門區",
+    "name": "富基漁港",
+    "cap": 26.0,
+    "both_zero_pct": 49.4,
+    "flat_pct": 92.1,
+    "mean_bikes": 2.799999952316284,
+    "flow_day": 7.1
+   },
+   {
+    "sid": 1447,
+    "district": "石門區",
+    "name": "石門風箏公園停車場",
+    "cap": 25.0,
+    "both_zero_pct": 49.4,
+    "flat_pct": 91.0,
+    "mean_bikes": 3.4000000953674316,
+    "flow_day": 9.0
+   },
+   {
+    "sid": 1442,
+    "district": "石碇區",
+    "name": "石碇",
+    "cap": 23.0,
+    "both_zero_pct": 49.4,
+    "flat_pct": 89.1,
+    "mean_bikes": 3.200000047683716,
+    "flow_day": 8.8
+   },
+   {
+    "sid": 508,
+    "district": "坪林區",
+    "name": "水柳腳立體停車場",
+    "cap": 23.0,
+    "both_zero_pct": 49.3,
+    "flat_pct": 88.0,
+    "mean_bikes": 3.700000047683716,
+    "flow_day": 11.2
+   },
+   {
+    "sid": 506,
+    "district": "坪林區",
+    "name": "坪林旅遊服務中心",
+    "cap": 22.0,
+    "both_zero_pct": 49.0,
+    "flat_pct": 87.0,
+    "mean_bikes": 3.700000047683716,
+    "flow_day": 12.3
+   }
+  ],
+  "note": "雙零可能是停站、整修或資料未更新，必須查核狀態，不可直接派車。"
+ },
+ "low_use_stations": {
+  "stations": 5,
+  "docks": 109,
+  "top": [
+   {
+    "sid": 1274,
+    "district": "汐止區",
+    "name": "汐止區綜合運動場",
+    "cap": 34.0,
+    "both_zero_pct": 0.0,
+    "flat_pct": 100.0,
+    "mean_bikes": 0.0,
+    "flow_day": 0.0
+   },
+   {
+    "sid": 1245,
+    "district": "汐止區",
+    "name": "同興大同路口",
+    "cap": 30.0,
+    "both_zero_pct": 0.0,
+    "flat_pct": 100.0,
+    "mean_bikes": 0.0,
+    "flow_day": 0.0
+   },
+   {
+    "sid": 234,
+    "district": "中和區",
+    "name": "中和慈惠堂",
+    "cap": 15.0,
+    "both_zero_pct": 0.0,
+    "flat_pct": 98.4,
+    "mean_bikes": 6.699999809265137,
+    "flow_day": 0.6
+   },
+   {
+    "sid": 291,
+    "district": "中和區",
+    "name": "景平橋和路口",
+    "cap": 15.0,
+    "both_zero_pct": 0.0,
+    "flat_pct": 100.0,
+    "mean_bikes": 0.0,
+    "flow_day": 0.0
+   },
+   {
+    "sid": 615,
+    "district": "新店區",
+    "name": "直潭淨水廠(直潭二街)",
+    "cap": 15.0,
+    "both_zero_pct": 0.0,
+    "flat_pct": 97.7,
+    "mean_bikes": 5.199999809265137,
+    "flow_day": 0.8
+   }
+  ]
+ },
+ "dock_config": {
+  "expand": [
+   {
+    "sid": 1345,
+    "district": "淡水區",
+    "name": "捷運淡水站(中正鼻頭街口)",
+    "cap": 14.0,
+    "flow_day": 82.8,
+    "zero_dock_pct": 11.2,
+    "prod": 5.91
+   },
+   {
+    "sid": 858,
+    "district": "板橋區",
+    "name": "捷運江子翠站(4號出口)",
+    "cap": 11.0,
+    "flow_day": 63.4,
+    "zero_dock_pct": 10.7,
+    "prod": 5.77
+   },
+   {
+    "sid": 682,
+    "district": "新莊區",
+    "name": "幸福路678巷口",
+    "cap": 13.0,
+    "flow_day": 55.3,
+    "zero_dock_pct": 9.0,
+    "prod": 4.25
+   }
+  ],
+  "shrink": [
+   {
+    "sid": 1548,
+    "district": "鶯歌區",
+    "name": "捷運鶯桃福德站",
+    "cap": 75.0,
+    "flow_day": 63.2,
+    "prod": 0.84
+   },
+   {
+    "sid": 45,
+    "district": "三峽區",
+    "name": "捷運龍埔站",
+    "cap": 72.0,
+    "flow_day": 17.7,
+    "prod": 0.25
+   },
+   {
+    "sid": 1167,
+    "district": "樹林區",
+    "name": "臺鐵樹林車站(後站停車場)",
+    "cap": 64.0,
+    "flow_day": 55.5,
+    "prod": 0.87
+   },
+   {
+    "sid": 1454,
+    "district": "萬里區",
+    "name": "野柳地質公園",
+    "cap": 60.0,
+    "flow_day": 25.5,
+    "prod": 0.43
+   },
+   {
+    "sid": 1545,
+    "district": "鶯歌區",
+    "name": "捷運國華站(2號出口)",
+    "cap": 60.0,
+    "flow_day": 25.9,
+    "prod": 0.43
+   },
+   {
+    "sid": 1445,
+    "district": "石門區",
+    "name": "白沙灣",
+    "cap": 56.0,
+    "flow_day": 25.0,
+    "prod": 0.45
+   },
+   {
+    "sid": 511,
+    "district": "平溪區",
+    "name": "平溪國中",
+    "cap": 55.0,
+    "flow_day": 13.8,
+    "prod": 0.25
+   },
+   {
+    "sid": 1523,
+    "district": "雙溪區",
+    "name": "雙溪車站",
+    "cap": 55.0,
+    "flow_day": 48.0,
+    "prod": 0.87
+   },
+   {
+    "sid": 987,
+    "district": "板橋區",
+    "name": "藝文一永翠路口",
+    "cap": 54.0,
+    "flow_day": 38.7,
+    "prod": 0.72
+   },
+   {
+    "sid": 1452,
+    "district": "萬里區",
+    "name": "翡翠灣停車場",
+    "cap": 54.0,
+    "flow_day": 26.7,
+    "prod": 0.49
+   },
+   {
+    "sid": 47,
+    "district": "三峽區",
+    "name": "明德高中",
+    "cap": 52.0,
+    "flow_day": 46.4,
+    "prod": 0.89
+   },
+   {
+    "sid": 831,
+    "district": "板橋區",
+    "name": "崑崙活力廣場",
+    "cap": 52.0,
+    "flow_day": 44.1,
+    "prod": 0.85
+   },
+   {
+    "sid": 357,
+    "district": "五股區",
+    "name": "成州派出所",
+    "cap": 49.0,
+    "flow_day": 24.6,
+    "prod": 0.5
+   },
+   {
+    "sid": 83,
+    "district": "三芝區",
+    "name": "淺水灣",
+    "cap": 48.0,
+    "flow_day": 31.4,
+    "prod": 0.65
+   },
+   {
+    "sid": 1546,
+    "district": "鶯歌區",
+    "name": "捷運永吉公園站",
+    "cap": 47.0,
+    "flow_day": 29.7,
+    "prod": 0.63
+   }
+  ]
+ }
+}

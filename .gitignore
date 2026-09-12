@@ -1,0 +1,17 @@
+# 大型資料與模型成品：由 pipeline 重建，或從 S3 取得
+data/
+models/
+sagemaker_src/__pycache__/
+__pycache__/
+*.pyc
+*.parquet
+*.npz
+*.joblib
+reports/*.log
+reports/station_utilization.csv
+
+# 原始 CSV 不入庫（主辦提供，約 1.1GB）
+資料集/
+*.csv.copy
+.DS_Store
+.venv/

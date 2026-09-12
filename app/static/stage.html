@@ -1,0 +1,41 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>新北 YouBike 雙端協同服務｜Demo 舞台</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+body{height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#e9edf3}
+header{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#fff;border-bottom:1px solid var(--line);flex-wrap:wrap}header h1{font-size:15px;margin:0}
+.clockbox{display:flex;align-items:center;gap:6px;background:#f1f4f8;border-radius:10px;padding:4px 8px}.clockbox .t{font-weight:700;font-size:16px;color:var(--brand);min-width:150px;font-variant-numeric:tabular-nums}
+.scen button{border-radius:999px}.scen button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+main{flex:1;display:grid;grid-template-columns:420px 1fr;gap:12px;padding:12px 14px;min-height:0}
+.phone{width:400px;height:calc(100vh - 100px);max-height:860px;background:#111;border-radius:44px;padding:12px;box-shadow:0 20px 50px rgba(0,0,0,.35);position:relative;margin:auto}.phone .notch{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:120px;height:26px;background:#111;border-radius:0 0 18px 18px;z-index:2}.phone iframe{width:100%;height:100%;border:none;border-radius:34px;background:#fff}
+.desk{display:flex;flex-direction:column;min-height:0;background:#fff;border-radius:14px;border:1px solid var(--line);overflow:hidden;box-shadow:var(--shadow)}.desk .bar{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--line);background:#f7f9fb;align-items:center}.desk .bar button{border:none;background:transparent;padding:6px 12px;border-radius:8px;color:var(--muted)}.desk .bar button.on{background:#fff;color:var(--brand);font-weight:600;box-shadow:var(--shadow)}
+.desk iframe{flex:1;border:none;width:100%}
+.legendbar{display:flex;gap:10px;align-items:center;font-size:11px;color:var(--muted);margin-left:auto}
+.help{position:fixed;right:14px;bottom:14px;width:420px;max-height:70vh;overflow:auto;z-index:50;display:none}.help.on{display:block}
+</style></head><body>
+<header><h1>新北 YouBike 雙端協同服務</h1><span class="badge grey">Demo 舞台・歷史回放 2026-06</span>
+  <div class="clockbox"><button class="small" onclick="clock('pause')">⏸</button><button class="small primary" onclick="clock('play')">▶ 播放</button><button class="small" onclick="clock('step')">⏭ +30 分</button><span class="t" id="clock">–</span><select id="speed" onchange="clock(null)"><option value="6">慢（6 秒/步）</option><option value="4" selected>中（4 秒/步）</option><option value="2">快（2 秒/步）</option></select><input id="jump" type="datetime-local" step="1800" style="font:inherit;border:1px solid var(--line);border-radius:6px;padding:2px 4px"><button class="small" onclick="jump()">跳到</button></div>
+  <div class="scen row" id="scen"></div>
+  <div class="legendbar"><span class="badge real">真實計算</span>預測・站群・缺口・排程・三方案<span class="badge sim">模擬</span>派車執行・店家・兌付・頁內通知<span class="badge ai">Bedrock</span>文字生成<button class="small" onclick="document.getElementById('help').classList.toggle('on')">說明</button><button class="small ghost" onclick="if(confirm('清除意向、工單、告警、任務與獎勵？'))API.post('/api/reset').then(()=>location.reload())">重置</button></div>
+</header>
+<main>
+  <div class="phone"><div class="notch"></div><iframe id="phone" src="/citizen"></iframe></div>
+  <div class="desk"><div class="bar"><button class="on" onclick="desk('gov',this)">🏛 政府端（交通局）</button><button onclick="desk('ops',this)">🚚 微笑單車調度端</button><span style="flex:1"></span><span class="xs muted" id="status"></span></div><iframe id="desk" src="/gov"></iframe></div>
+</main>
+<div class="card help" id="help"><b>這個 demo 怎麼看</b><ul class="small" style="padding-left:18px;margin:6px 0">
+<li><b>回放時鐘</b>：以 2026 年 6 月真實半小時快照重播；每一步用當下與之前的資料預測 30／60／120／180 分鐘後的可借、可還與零車／零位機率（1–4 月訓練、5 月驗證、6 月測試）。</li>
+<li><b>政府端</b>：風險地圖、即時跳出告警（去重、節流、待查分流）、原始預測 vs 意向修正、待查清單、模型卡。</li>
+<li><b>微笑單車調度端</b>：提前 120／180 分鐘排定的任務、站點順序與載量、最遲出發時間（決策到抵達 ≥60 分）、來不及時的替代做法。</li>
+<li><b>民眾端</b>：通勤三方案、意向登記、活動散場、報修工單、集章／點數／優惠券；通知為頁內模擬推播。</li>
+<li><b>界線</b>：快照空滿率不是失敗旅次；候選鄰站存在不等於到站成功；派車、店家、兌付為模擬；活動出席人數為情境參數。</li></ul>
+<div class="xs muted" id="sys"></div></div>
+<script src="/static/common.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+async function clock(action){ const body={}; if(action) body.action=action; body.speed=+$('speed').value; const r = await API.post('/api/clock', body); $('clock').textContent=r.clock.ts; }
+async function jump(){ const v=$('jump').value; if(!v) return; await API.post('/api/clock',{action:'set', ts:v.replace('T',' ')}); }
+function desk(k,b){ $('desk').src='/'+k; document.querySelectorAll('.desk .bar button').forEach(x=>x.classList.toggle('on',x===b)); }
+async function scenario(name,b){ document.querySelectorAll('#scen button').forEach(x=>x.classList.toggle('on',x===b)); const r = await API.post('/api/scenario/'+name,{}); $('clock').textContent=r.clock.ts; }
+async function init(){ const sc = await API.get('/api/scenarios'); $('scen').innerHTML=''; Object.entries(sc).forEach(([k,v])=>$('scen').append(el('button',{class:'small',onclick:(e)=>scenario(k,e.target)},v.label))); const st=await API.get('/api/state'); $('clock').textContent=st.clock.ts; if(st.scenario&&st.scenario.name){ document.querySelectorAll('#scen button').forEach(b=>b.classList.toggle('on', b.textContent===sc[st.scenario.name].label)); } $('jump').value = st.clock.ts.replace(' ','T'); $('status').innerHTML = `模型尺度 ${st.model_horizons.join('/')||'訓練中'}・Bedrock ${st.llm.model_fast.split('.').pop().split('-').slice(0,3).join('-')}・DynamoDB ${st.cloud.dynamodb}`; $('sys').textContent = `AWS us-west-2・Bedrock 呼叫 ${st.llm.calls} 次／退回模板 ${st.llm.fallbacks} 次・DynamoDB 寫入 ${st.cloud.writes}`; }
+connectEvents({ tick:(p)=>{ $('clock').textContent=p.clock.ts; }, scenario:()=>init() });
+init();
+</script></body></html>
