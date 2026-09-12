@@ -1,6 +1,6 @@
 # HANDOFF_A — 政府端（A 主線）第二輪交付
 
-基準 `a1c6dbb`。本輪 commit：`12ca2d8`、`9d64929`、`320547c`、`7bca386`。
+基準 `a1c6dbb`。本輪 commit：`12ca2d8`、`9d64929`、`320547c`、`7bca386`、`381de3e`。
 時間戳一律台灣時間；畫面上的時間是**回放時鐘**（2026 年 1–6 月歷史快照），不是真實時鐘。
 
 ## 一、這輪做了什麼
@@ -17,6 +17,7 @@
 | 缺車/dropoff、缺位/pickup 分開判定覆蓋 | 完成並測（含真資料） | `app/events.py` |
 | 服務可用性（消費 B 的 `/api/ops/availability`） | 完成 | `app/server.py`、`app/static/gov.html` |
 | 任務欄位對齊 B（cycle／reservation_state／逐站期限） | 完成 | `app/events.py`、`app/static/gov.html` |
+| **主管決策卡**（方案只採營運端資料、決策留痕、防雙重派工） | 完成並測 | `app/events.py`、`app/static/gov.html` |
 | 事件台帳與原因時間線（第一輪） | 沿用 | `app/events.py` |
 | 驗收指標面板（第一輪） | 沿用並修正口徑 | `app/metrics.py` |
 
@@ -26,7 +27,8 @@
 |---|---|
 | `GET /api/ledger` | 新增 `overview`（供需／新鮮度／設備／任務）、`actions`、`acked_not_assigned`、`ack_note`；事件帶 `version` |
 | `GET /api/ledger/{id}` | 回傳完整事件含 `version`、`timeline`、`observed`（`span_min`／`upper_min`／`gap_inside`） |
-| `POST /api/ledger/{id}/action` | **新增**。`{action, version?, request_id?, owner?, note?, districts?}`，動作為 `ack`／`assign`／`request_ops`／`track`／`coordinate`／`note`。版本過期回 **409**，同 `request_id` 重送回上次結果不重做 |
+| `POST /api/ledger/{id}/action` | **新增**。`{action, version?, request_id?, owner?, note?, districts?, option?, supersede?}`，動作為 `ack`／`assign`／`request_ops`／`track`／`coordinate`／`note`／`decide`。版本過期回 **409**，同 `request_id` 重送回上次結果不重做 |
+| 事件物件 | 新增 `decision_options`（P0／P1 才有，由 `refresh` 算好）、`decisions[]`；`_summary` 帶 `decision` |
 | `POST /api/ledger/{id}/assign`、`/note` | 相容保留，內部改走同一個 `apply_action`，不是第二套實作 |
 | `GET /api/metrics/service` | 欄位改名：`counts.span_ge*`、`upper.{known,unknown,ge*,gap_inside}`、`zero_snapshot_station_min`、`duration.*`、`longest[].span_min`。**移除** `lower_min`、`counts_upper`、`over_target_station_min_upper` |
 | `GET /api/metrics/threshold` | `alerts` → `candidate_cells`，新增 `unit`、`dedup_warning` |
@@ -85,6 +87,25 @@ python3 tests/test_a_coverage.py   # 15 項
 | 服務可用性由 `/api/ops/availability` 取得，A 不另算（實測 新北市立圖書館三重分館 官方可借 0、已確認不可用 2 台 YB-A1／YB-A2、`may_need_service_event=true`） | **通過** |
 | 任務欄位讀到 B 的 `cycle`（5 個 cycle）、`reservation_state`（candidate 20）、逐站期限（準時 26／來不及 55） | **通過** |
 
+### 第三批 — 主管決策卡（`381de3e`）
+
+```bash
+python3 tests/test_a_decision.py   # 38 項
+```
+
+| 項目 | 結果 |
+|---|---|
+| 方案只採營運端既有任務；沒有任務時兩個方案都標未提供，且不得帶 eta | **通過** |
+| 跨區任務的代價照抄營運端理由，ETA 保持 `None` 並說明政府端不自行估算 | **通過** |
+| 決策必須帶方案（不接受自由輸入）與理由，缺任一回 400 且版本不變 | **通過** |
+| 決策留痕保存方案、理由、事件版本、營運端任務版本、時間 | **通過** |
+| 已有有效決策時再決策回 **409** 並附既有決策；409 後仍只有一筆決策 | **通過** |
+| 帶 `supersede` 才能改決策，舊決策標記 `superseded` 並記錄取代原因 | **通過** |
+| 同 `request_id` 重送決策為冪等，決策筆數不變 | **通過** |
+| 決策不得動到營運端任務（比對 `repr` 完全未變） | **通過** |
+| HTTP 實測：送出決策 200 → 重複 409 → 重送冪等 → `tasks` 數 34 未變 | **通過** |
+| 瀏覽器實測：卡片渲染，顯示營運端真實代價（「2 站趕不上自己的服務時限，最緊 30 分鐘」）與「跨區支援 未提供」 | **通過** |
+
 ### 瀏覽器實測
 
 - `node --check` 對 `gov.html` 的 inline script 語法檢查：**通過**
@@ -116,6 +137,17 @@ want = TICKET_FLOW[min(len(TICKET_FLOW) - 1, steps)]   # steps 為負數時索�
 依分工規則這屬於共用邏輯，我沒有自行修改，請 B 或當輪整合者處理。
 我的驗證改以「重啟後先設時鐘、再建工單」繞過。
 
+## 四之三、環境觀察（未判定為程式缺陷）
+
+`/gov`、`/ops`、`/citizen` 三頁在預覽瀏覽器都出現同一則 console 錯誤
+（`SyntaxError: missing ) after argument list` 加上「An unknown error occurred when fetching the script」），
+且 `navigator.serviceWorker.getRegistrations()` 回傳 0 筆。
+
+已排除的可能：`app/static/sw.js`、`common.js` 與 `gov.html` 的 inline script 都通過 `node --check`；
+伺服器送出的 `sw.js` 與磁碟內容一致。三端同時出現、且完全沒有 SW 註冊成功，
+比較像是預覽瀏覽器沙箱擋掉 Service Worker 註冊。**沒有證據指向任何一端的程式缺陷，也沒有排除**，
+需要在一般瀏覽器再測一次才能判定。頁面功能本身不受影響（DOM 實測正常）。
+
 ## 五、模擬與界線（畫面上都有標示）
 
 - **通知情境預覽是應用內示意**。沒有 Web Push、沒有 APNs、沒有背景推播；關掉分頁不會收到任何東西。
@@ -142,7 +174,9 @@ want = TICKET_FLOW[min(len(TICKET_FLOW) - 1, steps)]   # steps 為負數時索�
 
 ### 需要 B 提供
 
-1. task 的 `version`、`cycle_id`、`event_id`（回連 A 事件）、`operator_owner`、逐站 `uncovered_gap`
+0. **改派方案端點**（決策卡最大的缺口）：就近車隊改道與跨區支援各自的抵達時間、原任務延後幾分鐘、
+   增加里程、車源來自哪一區、受影響站點。政府端不會自行估算，沒有這支端點決策卡只能顯示既有任務。
+1. task 的 `version`、`event_id`（回連 A 事件）、`operator_owner`
 2. `POST /api/ops/tickets` 接受並保存 `event_id`，讓 A 能把工單掛回事件
 3. 工單 `eta` 實際填值（目前多為 `null`）
 
