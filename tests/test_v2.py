@@ -366,6 +366,29 @@ def test_http():
     code3, _ = post("/api/v2/rewards/claim", {"sid": 999999, "kind": "還車到這站"})
     ck("不存在的站 → 404", code3, 404)
 
+    # ---- 行程規劃
+    act = [x for x in stations["stations"] if x["act"] and x["sid"] >= 0]
+    a, b = act[0]["sid"], act[1]["sid"]
+    tp = get(f"/api/v2/trip?from_sid={a}&to_sid={b}")
+    ck_true("行程規劃有回方案", len(tp["plans"]) >= 1)
+    ck("第一個方案一定是最快", tp["plans"][0]["kind"], "最快")
+    ck_true("最快方案的終點就是使用者指定的站", tp["plans"][0]["station_sid"] == b)
+    ck_true("道路距離 = 直線 × 繞路係數",
+            abs(tp["road_m"] - tp["distance_m"] * tp["assumptions"]["road_detour"]) <= 1.5)
+    for p in tp["plans"]:
+        ck_true(f"{p['kind']}：總時間 = 騎乘 + 步行",
+                abs(p["total_min"] - (p["ride_min"] + p["walk_min"])) < 0.15)
+        ck_true(f"{p['kind']}：時間不為負", p["total_min"] >= 0)
+    quests = [p for p in tp["plans"] if p["kind"] == "順路集點"]
+    for q in quests:
+        ck_true("順路集點繞路不超過 12 分鐘", q["extra_min"] <= 12.001, str(q["extra_min"]))
+        ck_true("順路集點的站確實有缺口", q["deficit"] > 0)
+        ck("順路集點的點數 = 固定四捨五入的 5×倍率", q["points"], _v2._points(q["multiplier"]))
+    ck_true("有標注這不是路線導航", "不是路線導航" in tp["caveat"])
+    ck_true("假設值有一起回傳", "ride_kmh" in tp["assumptions"])
+    same = get(f"/api/v2/trip?from_sid={a}&to_sid={a}")
+    ck_true("起訖同站仍可查詢（前端擋掉，後端不炸）", "plans" in same)
+
     det = get(f"/api/v2/station/{stations['stations'][0]['sid']}")
     ck_true("站點詳情有即時資料", det["live"] is not None)
     ck_true("站點詳情有標注風險口徑", "模型預測" in det["horizon_semantics"])

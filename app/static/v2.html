@@ -204,7 +204,7 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', sel:null, ptab:'nearby', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null};
+           filter:'all', sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, tFrom:null, tTo:null, trip:null, tripBusy:false};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -219,6 +219,10 @@ async function boot(){
       api('/api/v2/live'), api('/api/v2/live/stations'), api('/api/v2/analytics')
     ]);
     S.live=live; S.stations=stations.stations; S.ana=ana;
+    // 預設帶入 demo 錨點：板橋四維公園一帶 → 捷運江子翠站 4 號出口（早峰全市第二嚴重的無位站）
+    const pick=(kw)=>{const m=S.stations.find(x=>kw.every(k=>x.name.includes(k))); return m?m.sid:null;};
+    S.tFrom = pick(['四維公園']) ?? pick(['板橋','公園']) ?? S.stations[0]?.sid;
+    S.tTo   = pick(['江子翠','4號']) ?? pick(['板橋車站']) ?? S.stations[1]?.sid;
     feed(live.status);
     render();
     api('/api/v2/insights').then(d=>{S.ins=d; if(S.view==='gov')render();}).catch(()=>{});
@@ -463,10 +467,19 @@ function forecastCard(){
         <td style="width:80px"><div class="bar"><i style="width:${x.p}%;background:${col}"></i></div></td>
         <td class="mono" style="width:46px;color:${col}">${x.p}%</td></tr>`).join('')}</tbody></table>`;
   };
-  const cov=S.riskF?.status?.history_bins??fc.history_bins;
+  const have=fc.history_bins||0, need=fc.needed_for_full_lags||5;
+  const partial=have<need;
+  const warm=partial?`<div style="border:1px solid rgba(245,196,81,.4);background:rgba(245,196,81,.07);
+      border-radius:9px;padding:9px 11px;margin:9px 0">
+      <div class="sm" style="color:var(--warn);font-weight:600">落後特徵尚未齊全　${have}／${need} 個分箱</div>
+      <div class="bar" style="height:5px;margin:7px 0 5px"><i style="width:${Math.min(100,have/need*100)}%;
+        background:var(--warn)"></i></div>
+      <div class="xs dim" style="line-height:1.7">模型用 30／60／120 分鐘前的觀測當落後特徵，
+        官方 API 只給當下，所以本服務自己累積。缺的特徵以缺值送入（HistGradientBoosting 原生支援），
+        **這段期間的準確度會低於模型卡的離線指標**。再 ${(need-have)*0.5} 小時就齊全。</div></div>`:'';
   return `<div class="card"><h3>模型即時預警 · 120 分鐘後 <span class="tag live">即時推論</span></h3>
     <p class="sub">HistGradientBoosting 跑在官方即時站況上（來源：${esc(fc.model_origin||'—')}）。
-      已累積 ${cov} 個分箱的即時歷史。<b>這是模型預測，不是歷史同時段分布。</b></p>
+      <b>這是模型預測，不是歷史同時段分布。</b></p>${warm}
     ${tbl(S.riskF,'可能無位可還','var(--bad)')}
     ${tbl(S.riskE,'可能無車可借','var(--warn)')}
     <p class="sub" style="margin-top:11px;border-top:1px dashed var(--line);padding-top:8px">
@@ -668,7 +681,56 @@ function citizenView(){
   const worstDock=[...S.stations].filter(s=>s.act&&s.d===0).slice(0,3);
   const nearby=[...S.stations].filter(s=>s.act).sort((a,b)=>(b.b+b.d)-(a.b+a.d));
   let body='';
-  if(S.ptab==='nearby'){
+  if(S.ptab==='plan'){
+    const opts=(sel)=>[...S.stations].filter(s=>s.act)
+      .sort((a,b)=>a.district.localeCompare(b.district,'zh-Hant')||a.name.localeCompare(b.name,'zh-Hant'))
+      .map(s=>`<option value="${s.sid}" ${s.sid==sel?'selected':''}>${esc(s.district)}｜${esc(s.name)}</option>`).join('');
+    const t=S.trip;
+    const planCard=(p,i)=>{
+      const tone=p.kind==='最快'?'var(--info)':p.kind==='較穩'?'var(--ok)':'var(--warn)';
+      return `<div class="qcard" style="border-color:${i===0?'var(--line2)':'var(--line)'}">
+        <div class="top"><div style="min-width:0">
+          <span class="pill" style="color:${tone};border-color:${tone}">${esc(p.kind)}</span>
+          <div style="margin-top:6px"><b style="font-size:13px">${esc(p.station)}</b></div>
+          <div class="xs dim" style="margin-top:3px">騎 ${p.ride_min} 分${p.walk_min?`＋走 ${p.walk_min} 分`:''}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div class="mono" style="font-size:18px">${p.total_min}<span class="xs dim"> 分</span></div>
+          ${p.points?`<div class="mono" style="color:var(--warn);font-size:12px;margin-top:3px">＋${p.points} 點</div>`:''}
+        </div></div>
+        ${p.risk!=null?`<div class="xs" style="margin-top:8px;display:flex;align-items:center;gap:7px">
+          <span class="dim">到站無位機率</span>
+          <div class="bar" style="flex:1"><i style="width:${Math.min(100,p.risk)}%;
+            background:${p.risk>=30?'var(--bad)':'var(--ok)'}"></i></div>
+          <span class="mono" style="color:${p.risk>=30?'var(--bad)':'var(--ok)'}">${p.risk}%</span>
+        </div><div class="xs dim" style="margin-top:3px">依據：${esc(p.risk_source)}</div>`:''}
+        <div class="xs" style="margin-top:8px;color:var(--mute);line-height:1.6">${esc(p.note)}</div></div>`;
+    };
+    body=`<p class="xs mute" style="margin:0 0 10px;line-height:1.7">
+        出發前先看，不要到現場才發現。三個方案都用官方即時站況算，
+        到站風險優先用模型推論，沒有才退回歷史同時段。</p>
+      <div style="margin-bottom:8px"><div class="xs dim" style="margin-bottom:4px">從哪裡出發</div>
+        <select id="tfrom" style="width:100%;background:var(--bg2);border:1px solid var(--line2);
+          color:var(--fg);border-radius:9px;padding:9px;font-size:12px">${opts(S.tFrom)}</select></div>
+      <div style="margin-bottom:10px"><div class="xs dim" style="margin-bottom:4px">要去哪裡</div>
+        <select id="tto" style="width:100%;background:var(--bg2);border:1px solid var(--line2);
+          color:var(--fg);border-radius:9px;padding:9px;font-size:12px">${opts(S.tTo)}</select></div>
+      <button class="btn" id="tgo">${S.tripBusy?'規劃中…':'看三個方案'}</button>
+      ${t?(t.error?`<p class="sm" style="color:var(--bad);margin-top:12px">${esc(t.error)}</p>`:`
+        <div class="card" style="margin-top:12px;padding:11px">
+          <div class="sm"><b>${esc(t.from.name)}</b> 現在可借 
+            <b style="color:${t.from.bikes===0?'var(--bad)':'var(--ok)'}">${t.from.bikes}</b> 台
+            ${t.from.risk_no_bike!=null?`<span class="dim">・無車風險 ${t.from.risk_no_bike}%</span>`:''}</div>
+          <div class="xs dim" style="margin-top:4px">直線 ${(t.distance_m/1000).toFixed(1)} 公里，
+            估算路程 ${(t.road_m/1000).toFixed(1)} 公里（直線 × ${t.assumptions.road_detour} 繞路係數）</div></div>
+        <div style="margin-top:10px">${t.plans.map(planCard).join('')}</div>
+        <div class="card" style="margin-top:4px"><div class="xs dim" style="line-height:1.8">
+          比騎機車少排 <b style="color:var(--ok)">${t.compare.co2_saved_g_vs_scooter}</b> 公克 CO₂・
+          一般車前 ${t.compare.free_minutes} 分鐘免費（以官方公告為準）<br><br>
+          假設：騎乘 ${t.assumptions.ride_kmh} km/h、步行 ${t.assumptions.walk_kmh} km/h、
+          到場無位改站罰時 ${t.assumptions.reroute_penalty_min} 分。${esc(t.caveat)}</div></div>`):''}`;
+  }
+  else if(S.ptab==='nearby'){
     const dists=[...new Set(S.stations.map(s=>s.district))].sort();
     const q=S.cq.trim();
     let list=S.stations.filter(s=>q? s.name.includes(q) : s.district===S.cdist);
@@ -794,7 +856,7 @@ function citizenView(){
           <div class="xs dim" style="margin-top:2px">官方即時・${new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})}</div></div>
         <span class="tag live">即時</span></div></div>
       <div class="pbody" id="pbody">${body}</div>
-      <div class="ptabs">${tab('nearby','📍','站況')}${tab('quest','⚡','加碼任務')}${tab('wallet','🎁','我的獎勵')}</div>
+      <div class="ptabs">${tab('plan','🧭','規劃')}${tab('nearby','📍','站況')}${tab('quest','⚡','加碼')}${tab('wallet','🎁','獎勵')}</div>
     </div></div></div>
     <div>
       ${stationPanel()}
@@ -879,6 +941,17 @@ function render(){
       openStation(+el.dataset.sid);});
   });
   $$('[data-alt]').forEach(el=>el.onclick=()=>openStation(+el.dataset.alt));
+  const tf=$('#tfrom'), tt=$('#tto'), tg=$('#tgo');
+  if(tf) tf.onchange=()=>{S.tFrom=+tf.value;};
+  if(tt) tt.onchange=()=>{S.tTo=+tt.value;};
+  if(tg) tg.onclick=async()=>{
+    const a=+($('#tfrom').value), b=+($('#tto').value);
+    if(a===b){ S.trip={error:'起點與終點是同一站。借還同站不算分流，也不會有加碼。'}; render(); return; }
+    S.tFrom=a; S.tTo=b; S.tripBusy=true; render();
+    try{ S.trip=await api(`/api/v2/trip?from_sid=${a}&to_sid=${b}`); }
+    catch(e){ S.trip={error:'規劃失敗：'+e.message}; }
+    S.tripBusy=false; render();
+  };
   const cd=$('#cdist'); if(cd) cd.onchange=()=>{S.cdist=cd.value;S.cq='';render();};
   const cq=$('#cq'); if(cq){ cq.oninput=()=>{S.cq=cq.value;render();
       const n=$('#cq'); if(n){n.focus();n.setSelectionRange(n.value.length,n.value.length);} }; }

@@ -410,6 +410,163 @@ def ops_board():
                           "可借與可還同時為 0 的站另列為整站無服務，派車無法解決。")}
 
 
+# ---------------------------------------------------------------- 出發前行程規劃
+def _hav(lat1, lon1, lat2, lon2):
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _arrival_risk(sid, ahead_min, kind):
+    """到達當下的風險。優先用模型即時推論，沒有才退回歷史同時段分布，並回報用了哪一個。"""
+    fc = _CTX.get("fc")
+    if fc is not None:
+        st = fc.status()
+        if st.get("available"):
+            hz = st.get("horizons") or []
+            near = min(hz, key=lambda h: abs(h - ahead_min)) if hz else None
+            if near is not None:
+                one = fc.station(sid)
+                if one:
+                    for h in one["horizon"]:
+                        if h["ahead_min"] == near:
+                            return (h["p_full"] if kind == "dock" else h["p_empty"],
+                                    f"模型預測（{near} 分鐘尺度）")
+    risk = _CTX.get("risk")
+    if risk and risk.ok:
+        r = risk.at(sid, ahead_min=ahead_min)
+        if r:
+            return (r["p_no_dock"] if kind == "dock" else r["p_no_bike"]), "歷史同時段分布"
+    return None, "無資料"
+
+
+@router.get("/trip")
+def trip(from_sid: int, to_sid: int):
+    """出發前的三方案：最快／較穩／順路集點。
+
+    真實計算：兩站直線距離、既有假設下的騎乘與步行時間、兩端的即時可借可還、
+              到達時的風險（模型或歷史同時段）、替代站、加碼任務。
+    明示假設：騎乘 12 km/h、步行 4.5 km/h、直線→道路係數 1.4、到場無車或無位改站罰時 10 分，
+              全部取自 app/planner.py 的 ASSUMPTIONS，與調度端同一份。
+    不宣稱：這不是路線導航，沒有真實路網與號誌；到站成功率不等於旅次成功率。
+    """
+    import planner as PL
+    A = PL.ASSUMPTIONS
+    lv = _live()
+    o, d = lv.station(from_sid), lv.station(to_sid)
+    if not o or not d:
+        raise HTTPException(404, "起點或終點查無即時資料")
+
+    straight = _hav(o["lat"], o["lon"], d["lat"], d["lon"])
+    road_m = straight * A["road_detour"]
+    ride_min = road_m / 1000.0 / A["ride_kmh"] * 60.0
+
+    p_start, src_start = _arrival_risk(from_sid, 0, "bike")
+    p_end, src_end = _arrival_risk(to_sid, int(round(ride_min)), "dock")
+
+    plans = []
+    plans.append({
+        "kind": "最快", "station_sid": to_sid, "station": d["name"],
+        "ride_min": round(ride_min, 1), "walk_min": 0.0,
+        "total_min": round(ride_min, 1),
+        "risk": None if p_end is None else round(p_end * 100, 1),
+        "risk_source": src_end,
+        "docks_now": d["docks"],
+        "note": (f"若到場無位，改騎去鄰站估計再加 {A['reroute_penalty_min']} 分鐘"
+                 if (p_end or 0) > 0.2 else "到達時有位可還的機會高"),
+    })
+
+    # 較穩：終點 500 公尺內、到達時風險最低的站，走回原目的地
+    nbp = os.path.join(ROOT, "data", "processed", "neighbors_800m.parquet")
+    best = None
+    if os.path.exists(nbp) and to_sid >= 0:
+        nb = pd.read_parquet(nbp)
+        near = nb[(nb.sid == int(to_sid)) & (nb.dist_m <= 500)].sort_values("dist_m")
+        for _, r in near.iterrows():
+            a = lv.station(int(r.nsid))
+            if not a or not a["active"]:
+                continue
+            walk_m = float(r.dist_m) * A["walk_detour"]
+            walk_min = walk_m / 1000.0 / A["walk_kmh"] * 60.0
+            leg = _hav(o["lat"], o["lon"], a["lat"], a["lon"]) * A["road_detour"]
+            rmin = leg / 1000.0 / A["ride_kmh"] * 60.0
+            p, src = _arrival_risk(int(r.nsid), int(round(rmin)), "dock")
+            cand = {"kind": "較穩", "station_sid": int(r.nsid), "station": a["name"],
+                    "ride_min": round(rmin, 1), "walk_min": round(walk_min, 1),
+                    "total_min": round(rmin + walk_min, 1),
+                    "risk": None if p is None else round(p * 100, 1), "risk_source": src,
+                    "docks_now": a["docks"],
+                    "note": f"停在 {a['name']}，再走 {walk_min:.0f} 分鐘到原目的地"}
+            key = ((p if p is not None else 1.0), cand["total_min"])
+            if best is None or key < best[0]:
+                best = (key, cand)
+    if best and (p_end is None or best[1]["risk"] is None or best[1]["risk"] < (p_end * 100) - 5):
+        plans.append(best[1])
+
+    # 順路集點：終點 800 公尺內有加碼任務（需要有人還車過去）的站
+    quest = None
+    if os.path.exists(nbp) and to_sid >= 0:
+        nb = pd.read_parquet(nbp)
+        near = nb[(nb.sid == int(to_sid)) & (nb.dist_m <= 800)].sort_values("dist_m")
+        for _, r in near.iterrows():
+            a = lv.station(int(r.nsid))
+            if not a or not a["active"] or a["capacity"] <= 0:
+                continue
+            target = max(3, round(a["capacity"] * 0.2))
+            deficit = target - a["bikes"]
+            if deficit <= 0 or a["docks"] <= 0:
+                continue
+            walk_m = float(r.dist_m) * A["walk_detour"]
+            walk_min = walk_m / 1000.0 / A["walk_kmh"] * 60.0
+            leg = _hav(o["lat"], o["lon"], a["lat"], a["lon"]) * A["road_detour"]
+            rmin = leg / 1000.0 / A["ride_kmh"] * 60.0
+            extra = (rmin + walk_min) - ride_min
+            # 通勤族不會為了點數多繞太久。超過 12 分鐘就不算「順路」，直接不推。
+            if extra > 12:
+                continue
+            mult = _multiplier(deficit / target, 60, 8 if walk_min >= 8 else 0)
+            cand = {"kind": "順路集點", "station_sid": int(r.nsid), "station": a["name"],
+                    "ride_min": round(rmin, 1), "walk_min": round(walk_min, 1),
+                    "total_min": round(rmin + walk_min, 1),
+                    "risk": None, "risk_source": "—",
+                    "docks_now": a["docks"],
+                    "multiplier": mult, "points": _points(mult), "deficit": deficit,
+                    "extra_min": round(max(0.0, extra), 1),
+                    "points_per_extra_min": (round(_points(mult) / extra, 1) if extra > 0.5
+                                             else _points(mult)),
+                    "note": (f"這站還差 {deficit} 輛，把車還過去可得 {_points(mult)} 點"
+                             f"（×{mult} 加碼）；"
+                             + (f"只比最快方案多花 {extra:.0f} 分鐘" if extra > 0.5
+                                else "而且不比最快方案慢"))}
+            # 以「每多花一分鐘換到幾點」排序，而不是只看倍率高低
+            if quest is None or cand["points_per_extra_min"] > quest["points_per_extra_min"]:
+                quest = cand
+    if quest:
+        plans.append(quest)
+
+    co2_saved = round(road_m / 1000.0 * A["co2_scooter_g_per_km"])
+    return {
+        "from": {"sid": from_sid, "name": o["name"], "district": o["district"],
+                 "bikes": o["bikes"], "docks": o["docks"],
+                 "risk_no_bike": None if p_start is None else round(p_start * 100, 1),
+                 "risk_source": src_start},
+        "to": {"sid": to_sid, "name": d["name"], "district": d["district"],
+               "bikes": d["bikes"], "docks": d["docks"]},
+        "distance_m": round(straight), "road_m": round(road_m),
+        "plans": plans,
+        "compare": {"co2_saved_g_vs_scooter": co2_saved,
+                    "free_minutes": A["youbike_free_min"]},
+        "assumptions": {k: A[k] for k in
+                        ("ride_kmh", "walk_kmh", "road_detour", "walk_detour",
+                         "reroute_penalty_min", "youbike_free_min", "co2_scooter_g_per_km")},
+        "caveat": ("直線距離乘以繞路係數估算，不是路線導航，沒有真實路網與號誌；"
+                   "風險為到站當下無位可還的機率，不等於旅次失敗率；"
+                   "點數為示範機制，兌付尚未取得。"),
+    }
+
+
 # ---------------------------------------------------------------- 獎勵
 def _points(multiplier):
     """單次點數 = 5 × 倍率，固定四捨五入。
