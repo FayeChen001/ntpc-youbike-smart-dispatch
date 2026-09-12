@@ -5,21 +5,26 @@
 
 ## v2 一站式（分支 `v2`）
 
-`/v2` 是重做的單頁入口，三端在同一個網址切換，資料分三種模式並在畫面上逐塊標示：
+**根網址 `/` 就是一站式入口**（`/v2` 同頁），三端在同一個網址切換；
+既有的情境回放角色選單移到 `/replay`，`/gov`、`/ops`、`/citizen`、`/stage` 與所有舊端點都沒動。
+資料分三種模式並在畫面上逐塊標示：
 
 | 標籤 | 來源 | 更新 |
 |---|---|---|
 | **即時** | 新北市政府資料開放平臺 YouBike2.0 官方 API（1,605 站） | 官方每 5 分鐘，我們每 2 分鐘取一次 |
 | **歷史** | 2026-01~06 共 13,324,945 筆半小時快照的預算分析 | 靜態，重跑 `analytics/build_analytics.py` 才會變 |
-| **回放** | 既有的情境回放與訓練好的 30/60/120/180 分模型 | 走既有的 `/`、`/gov`、`/ops`、`/citizen` |
+| **即時推論** | 訓練好的模型跑在官方即時站況上（`app/liveforecast.py`） | 隨即時資料；落後特徵靠自行累積，齊全需約 2.5 小時 |
+| **回放** | 既有的情境回放與訓練好的模型 | 走 `/replay`、`/gov`、`/ops`、`/citizen`、`/stage` |
 
 ```
-app/live.py                 官方即時站況接入（背景輪詢、站鍵對應、容量落差偵測）
-app/v2api.py                /api/v2/* 全部端點（即時、分析、建議、調度看板、獎勵）
+app/live.py                 官方即時站況接入（背景輪詢、站鍵對應、容量落差偵測、即時歷史緩衝）
+app/liveforecast.py         把訓練好的模型跑在即時資料上（重建 FeatureContext，共用 make_X）
+app/v2api.py                /api/v2/* 全部端點（即時、預測、分析、建議、事件、行程、獎勵）
 app/static/v2.html          一站式單頁；自繪 SVG 地圖，零外部依賴
 analytics/build_analytics.py  歷史預算（只讀凍結資料，約 51 秒）
 data/analytics/             預算結果：站級半小時風險查表、彙總、站點清單
-tests/test_v2.py            106 項驗收（離線 + HTTP）
+data/live_history.parquet   即時歷史緩衝（模型落後特徵用，重啟不歸零）
+tests/test_v2.py            164 項驗收（離線 + HTTP）
 ```
 
 ```bash
@@ -38,6 +43,7 @@ python3 tests/test_v2.py                                  # 預設打 8790，別
 3. **借還同時為 0 不是缺車，是整站無服務。** 調度看板把這類站獨立列出，不混進送車候選——
    派車過去也沒有柱位可用。不這樣分，野柳、猴硐這種設備離線站會直接霸佔調度優先序。
 
+完整架構、端點表與誠實邊界見 [docs/V2.md](docs/V2.md)；展示腳本見 [docs/DEMO_V2.md](docs/DEMO_V2.md)。
 定位與對照見 [docs/POSITIONING.md](docs/POSITIONING.md)；
 開源調查、資料可得性與三端痛點盤點見 [docs/RESEARCH_2026-09-13.md](docs/RESEARCH_2026-09-13.md)；
 數字重算腳本 `reports/gap_vs_taipei.py`。
