@@ -180,6 +180,7 @@ tr.click{cursor:pointer} tr.click:hover td{background:var(--bg3)}
       <button data-v="gov" class="on"><span class="ic">🏛</span>政府端</button>
       <button data-v="ops"><span class="ic">🚚</span>微笑單車端</button>
       <button data-v="citizen"><span class="ic">📱</span>民眾端</button>
+      <button data-v="method"><span class="ic">🔬</span>資料與方法</button>
     </nav>
     <div class="feed">
       <span id="feedstat"><span class="lamp"></span>連線中…</span>
@@ -209,7 +210,7 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', mdist:null, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
+           filter:'all', mdist:null, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -543,7 +544,7 @@ function forecastCard(){
         background:var(--warn)"></i></div>
       <div class="xs dim" style="line-height:1.7">模型用 30／60／120 分鐘前的觀測當落後特徵，
         官方 API 只給當下，所以本服務自己累積。缺的特徵以缺值送入（HistGradientBoosting 原生支援），
-        **這段期間的準確度會低於模型卡的離線指標**。再 ${(need-have)*0.5} 小時就齊全。</div></div>`:'';
+        <b>這段期間的準確度會低於模型卡的離線指標</b>。再 ${(need-have)*0.5} 小時就齊全。</div></div>`:'';
   return `<div class="card"><h3>模型即時預警 · 120 分鐘後 <span class="tag live">即時推論</span></h3>
     <p class="sub">HistGradientBoosting 跑在官方即時站況上（來源：${esc(fc.model_origin||'—')}）。
       <b>這是模型預測，不是歷史同時段分布。</b></p>${warm}
@@ -976,6 +977,122 @@ function histOnly(){
       </tbody></table></div></div>`;
 }
 
+/* ============================================================ 資料與方法 */
+function methodView(){
+  const m=S.mth;
+  if(!m) return `<div class="card"><h3>資料與方法</h3><p class="sub">載入中…</p></div>`;
+  const d=m.data, a=m.audit, sp=m.split;
+  const num=n=>n==null?'—':Number(n).toLocaleString('zh-TW');
+  const f3=n=>n==null?'—':Number(n).toFixed(3);
+  const mae=m.model.horizons.map(r=>`<tr>
+    <td class="mono">${r.horizon_min} 分</td>
+    <td class="mono dim">${num(r.n_test)}</td>
+    <td class="mono dim">${f3(r.mae_bikes.persistence)}</td>
+    <td class="mono dim">${f3(r.mae_bikes.profile)}</td>
+    <td class="mono" style="color:var(--ok)"><b>${f3(r.mae_bikes.model)}</b></td>
+    <td class="mono dim">${f3(r.mae_spaces.persistence)}</td>
+    <td class="mono" style="color:var(--ok)"><b>${f3(r.mae_spaces.model)}</b></td></tr>`).join('');
+  const cls=(key,lab)=>m.model.horizons.map(r=>{
+    const x=r[key];
+    return `<tr><td class="mono">${r.horizon_min} 分</td>
+      <td class="mono dim">${num(x.new_events)}</td>
+      <td class="mono">${f3(x.pr_auc)}</td>
+      <td style="width:80px"><div class="bar"><i style="width:${(x.recall*100).toFixed(0)}%;
+        background:var(--warn)"></i></div></td>
+      <td class="mono">${(x.recall*100).toFixed(1)}%</td>
+      <td style="width:80px"><div class="bar"><i style="width:${(x.precision*100).toFixed(0)}%;
+        background:var(--ok)"></i></div></td>
+      <td class="mono">${(x.precision*100).toFixed(1)}%</td></tr>`;}).join('');
+  const cal=(m.calibration_120_empty||[]).map(c=>`<tr>
+    <td class="mono dim">${(c.bin/10).toFixed(1)}–${((c.bin+1)/10).toFixed(1)}</td>
+    <td class="mono dim">${num(c.n)}</td>
+    <td class="mono">${c.mean_pred.toFixed(2)}</td>
+    <td class="mono" style="color:${Math.abs(c.mean_pred-c.obs_rate)<0.08?'var(--ok)':'var(--warn)'}">
+      ${c.obs_rate.toFixed(2)}</td></tr>`).join('');
+  const li=m.live_inference||{};
+  const rates=m.comparison.rates||{};
+  return `<div class="grid g4">
+    <div class="kpi info"><div class="lab">分析筆數</div><div class="val">${(d.rows/1e6).toFixed(1)}<em>百萬</em></div>
+      <div class="note">${esc(d.period)}・${d.step}</div></div>
+    <div class="kpi"><div class="lab">站點</div><div class="val">${d.stations_analyzed}<em>/${d.stations_total}</em></div>
+      <div class="note">扣除退場與資料異常後納入分析的站</div></div>
+    <div class="kpi warn"><div class="lab">此刻容量落差</div><div class="val">${a.live_capacity_gap_stations??'—'}<em>站</em></div>
+      <div class="note">${num(a.live_capacity_gap_units)} 個車柱名目存在但借不到也還不了</div></div>
+    <div class="kpi ${li.available?'ok':'warn'}"><div class="lab">即時推論</div>
+      <div class="val" style="font-size:22px">${li.available?'運作中':'暖機中'}</div>
+      <div class="note">已累積 ${li.history_bins??0}／${li.needed_for_full_lags??5} 個分箱的即時歷史</div></div>
+  </div>
+  <div class="split" style="margin-top:14px">
+    <div>
+      <div class="card"><h3>模型卡 <span class="tag hist">六月一次性測試</span></h3>
+        <p class="sub">演算法 ${esc(m.model.algorithm)}。${esc(m.model.targets)}。<br>
+          切分：${esc(sp.train)} 訓練（抽樣 ${num(m.n_train_sample)} 筆／尺度）、${esc(sp.val)} 驗證、
+          ${esc(sp.test)} 一次最終測試。特徵只用 t 以前的觀測與日曆。<br>
+          線上使用的模型來源：${esc(m.model.origin||'—')}</p>
+        <div class="sm" style="font-weight:600;margin:12px 0 5px">車數／空位 MAE（越低越好）</div>
+        <table><thead><tr><th>尺度</th><th>測試筆數</th><th>車 持續值</th><th>車 日型</th><th>車 模型</th>
+          <th>位 持續值</th><th>位 模型</th></tr></thead><tbody>${mae}</tbody></table>
+        <div class="sm" style="font-weight:600;margin:16px 0 5px">零位「新事件」——現在有位、未來變成沒位</div>
+        <p class="sub" style="margin-bottom:6px">這是最難也最有價值的預測：不是延續現況，而是<b>預告尚未發生的失效</b>。</p>
+        <table><thead><tr><th>尺度</th><th>新事件數</th><th>PR-AUC</th><th colspan="2">召回@0.5</th>
+          <th colspan="2">精確@0.5</th></tr></thead><tbody>${cls('full_new_event')}</tbody></table>
+        <div class="sm" style="font-weight:600;margin:16px 0 5px">零車「新事件」</div>
+        <table><thead><tr><th>尺度</th><th>新事件數</th><th>PR-AUC</th><th colspan="2">召回@0.5</th>
+          <th colspan="2">精確@0.5</th></tr></thead><tbody>${cls('empty_new_event')}</tbody></table>
+        <div class="ins high" style="margin-top:14px">
+          <h4>我們自己最在意的弱點</h4>
+          <p>零車新事件的召回只有 6–13%，代表<b>多數尚未發生的缺車事件，模型不會提前叫出來</b>。
+            所以我們對缺車不只靠預警派車，而是加上民眾分流；而零位的 120／180 分鐘精確度到
+            0.935／0.972，提前三小時說「這站會滿」幾乎不會誤報，才夠格拿來排真實的人車。</p>
+          <div class="cav">不可只用 MAE 進步宣稱預警完整。</div></div>
+      </div>
+      <div class="card" style="margin-top:14px"><h3>校準 · 120 分鐘零車機率 <span class="tag hist">歷史</span></h3>
+        <p class="sub">預測機率落在某一區間的那些樣本，實際發生的比例是多少。兩者越接近，機率越可信。</p>
+        <table><thead><tr><th>預測機率箱</th><th>筆數</th><th>平均預測</th><th>實際比例</th></tr></thead>
+          <tbody>${cal}</tbody></table></div>
+    </div>
+    <div>
+      <div class="card"><h3>資料稽核</h3>
+        <p class="sub">下面每一項都已從排名與統計中剔除或單獨處理，不讓它們汙染結論。</p>
+        <table><tbody>
+          <tr><td>雙零快照</td><td class="mono">${num(a.double_zero_cells)} 格</td>
+            <td class="xs dim">涉及 ${a.double_zero_stations} 站</td></tr>
+          <tr><td>退場／未投車站</td><td class="mono">${a.dead_stations} 站</td>
+            <td class="xs dim">六月整月零車</td></tr>
+          <tr><td>此刻暫停營運</td><td class="mono">${a.live_inactive??'—'} 站</td>
+            <td class="xs dim">官方 act≠1</td></tr>
+          <tr><td>六月後新增站</td><td class="mono">${a.live_new_stations??'—'} 站</td>
+            <td class="xs dim">沒有訓練期輪廓，不做模型預測</td></tr>
+        </tbody></table>
+        <ul class="xs dim" style="margin:11px 0 0;padding-left:16px;line-height:1.9">
+          ${a.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>
+      <div class="card" style="margin-top:14px"><h3>即時推論的邊界</h3>
+        <p class="sub">${esc(li.note||'—')}</p>
+        <table><tbody>
+          <tr><td>模型來源</td><td class="mono xs">${esc(li.model_origin||'—')}</td></tr>
+          <tr><td>可用尺度</td><td class="mono">${(li.horizons||[]).join('／')} 分</td></tr>
+          <tr><td>即時歷史</td><td class="mono">${li.history_bins??0} 個分箱（${li.history_hours??0} 小時）</td></tr>
+          <tr><td>落後特徵齊全需</td><td class="mono">${li.needed_for_full_lags??5} 個分箱</td></tr>
+        </tbody></table></div>
+      <div class="card" style="margin-top:14px"><h3>與臺北同定義對照 <span class="tag hist">2026 年 6 月</span></h3>
+        <p class="sub">${esc(rates.taipei_source||'')}</p>
+        <table><thead><tr><th></th><th>臺北</th><th>新北（本專案算）</th></tr></thead><tbody>
+          <tr><td>見車率 高 ≥90%</td>
+            <td class="mono">${rates.taipei_reference?((rates.taipei_reference.avail.high/rates.taipei_reference.avail.n*100).toFixed(1)+'%'):'—'}</td>
+            <td class="mono">${rates.avail_june?((rates.avail_june.high/rates.avail_june.n*100).toFixed(1)+'%'):'—'}</td></tr>
+          <tr><td>見位率 高 ≥90%</td>
+            <td class="mono">${rates.taipei_reference?((rates.taipei_reference.park.high/rates.taipei_reference.park.n*100).toFixed(1)+'%'):'—'}</td>
+            <td class="mono">${rates.park_june?((rates.park_june.high/rates.park_june.n*100).toFixed(1)+'%'):'—'}</td></tr>
+        </tbody></table>
+        <div class="cav" style="margin-top:9px;border-top:1px dashed var(--line);padding-top:8px">
+          ${esc(rates.compare_caveat||'')}</div></div>
+      <div class="card" style="margin-top:14px"><h3>不能宣稱的事</h3>
+        <ul class="xs mute" style="margin:0;padding-left:16px;line-height:2">
+          ${m.caveats.map(c=>`<li>${esc(c)}</li>`).join('')}</ul></div>
+    </div>
+  </div>`;
+}
+
 /* ============================================================ render */
 function offlineBanner(){
   const st=S.live?.status;
@@ -1011,7 +1128,8 @@ function render(){
       bindMap(); return;
     }
     m.innerHTML = banner + (banner?'<div style="height:14px"></div>':'')
-      + (S.view==='gov'?govView():S.view==='ops'?opsView():citizenView());
+      + (S.view==='gov'?govView():S.view==='ops'?opsView()
+         :S.view==='method'?methodView():citizenView());
   }catch(e){
     m.innerHTML=`<div class="card"><h3>畫面渲染失敗</h3><p class="sub">${esc(e.message)}</p></div>`;
     console.error(e); return;
@@ -1105,6 +1223,7 @@ $$('nav.views button').forEach(b=>b.onclick=()=>{
   $$('nav.views button').forEach(x=>x.classList.toggle('on',x===b));
   if(S.view==='ops'&&!S.ops) api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
   if(S.view==='citizen'&&!S.rw) api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
+  if(S.view==='method'&&!S.mth) api('/api/v2/method').then(d=>{S.mth=d;render();}).catch(()=>{});
   render(); scrollTo({top:0,behavior:'smooth'});
 });
 boot();

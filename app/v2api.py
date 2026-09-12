@@ -258,6 +258,80 @@ def analytics():
     return s
 
 
+# ---------------------------------------------------------------- 資料與方法
+@router.get("/method")
+def method():
+    """模型卡與資料稽核。給要檢查我們有沒有唬爛的人看的。"""
+    ev = _load(os.path.join(ROOT, "reports", "model_eval.json"), {})
+    s = _CTX.get("summary", {})
+    lv = _CTX.get("live")
+    fc = _CTX.get("fc")
+    rows = []
+    for hm, h in sorted((ev.get("horizons") or {}).items(), key=lambda x: int(x[0])):
+        b, g = h.get("baselines", {}), h.get("hgb", {})
+        allg = g.get("all", {})
+        pers = (b.get("persistence") or {}).get("all", {})
+        prof = (b.get("profile") or {}).get("all", {})
+        e, f = allg.get("empty", {}), allg.get("full", {})
+        rows.append({
+            "horizon_min": int(hm), "n_test": h.get("n_test"),
+            "mae_bikes": {"persistence": pers.get("mae_bikes"),
+                          "profile": prof.get("mae_bikes"), "model": allg.get("mae_bikes")},
+            "mae_spaces": {"persistence": pers.get("mae_spaces"),
+                           "profile": prof.get("mae_spaces"), "model": allg.get("mae_spaces")},
+            "empty_new_event": {"pr_auc": e.get("new_event_pr_auc"),
+                                "recall": e.get("new_event_recall"),
+                                "precision": e.get("new_event_precision"),
+                                "positives": e.get("positives"), "new_events": e.get("new_events")},
+            "full_new_event": {"pr_auc": f.get("new_event_pr_auc"),
+                               "recall": f.get("new_event_recall"),
+                               "precision": f.get("new_event_precision"),
+                               "positives": f.get("positives"), "new_events": f.get("new_events")},
+            "segments": {k: {"mae_bikes": (g.get(k) or {}).get("mae_bikes")}
+                         for k in ("mrt", "school", "weekday_peak") if g.get(k)},
+        })
+    cal = (((ev.get("horizons") or {}).get("120") or {}).get("hgb", {})
+           .get("all", {}).get("empty", {}).get("calibration"))
+    meta = s.get("meta", {})
+    return {
+        "data": {
+            "period": meta.get("period"), "rows": meta.get("rows"),
+            "stations_total": meta.get("stations_total"),
+            "stations_analyzed": meta.get("stations_analyzed"),
+            "step": "半小時分箱", "day_window": meta.get("day_window"),
+        },
+        "audit": {
+            "double_zero_cells": meta.get("double_zero_cells"),
+            "double_zero_stations": meta.get("double_zero_stations"),
+            "dead_stations": meta.get("dead_stations"),
+            "live_capacity_gap_stations": (lv.stats() if lv else {}).get("capacity_gap_stations"),
+            "live_capacity_gap_units": (lv.stats() if lv else {}).get("capacity_gap_units"),
+            "live_new_stations": (lv.stats() if lv else {}).get("new_stations"),
+            "live_inactive": (lv.stats() if lv else {}).get("inactive"),
+            "notes": [
+                "雙零快照語意未定：可能是整站服務中斷，也可能是資料中斷。單獨統計，不混入空站或滿站。",
+                "六月整月零車的站是退場或未投車，不是調度失敗，已從所有排名剔除。",
+                "容量落差＝官方總格數−(可借+可還)。不判定根因，也不等同故障台數。",
+                "2026-06 之後新增的站沒有訓練期輪廓，不做模型預測，只給即時現況。",
+            ],
+        },
+        "split": ev.get("split"), "n_train_sample": ev.get("n_train_sample"),
+        "model": {"algorithm": "scikit-learn HistGradientBoosting",
+                  "targets": "回歸目標為變化量（t+h 減 t）；分類目標為 t+h 零車／零位",
+                  "origin": fc.status().get("model_origin") if fc else None,
+                  "horizons": rows},
+        "calibration_120_empty": cal,
+        "live_inference": fc.status() if fc else None,
+        "comparison": {"rates": s.get("rates", {})},
+        "caveats": [
+            "六月測試集是一次性的最終測試，不是即時推論的準確度。",
+            "零車新事件的召回偏低（180 分 0.131），不可只用 MAE 進步宣稱預警完整。",
+            "所有比例都是半小時快照比例，不是連續中斷時長，也不是旅次成功率。",
+            "臺北的見車率／見位率演算法可能帶容忍參數，與我們的純快照比例不是同一套，只能當量級參考。",
+        ],
+    }
+
+
 # ---------------------------------------------------------------- 建議
 @router.get("/insights")
 def insights():
