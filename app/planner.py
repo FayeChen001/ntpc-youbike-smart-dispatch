@@ -5,7 +5,7 @@ planner.py — (1) 調度端：120/180 分鐘前的人車安排（可行建議�
 """
 import math, time, threading
 from concurrent.futures import ThreadPoolExecutor
-_legpool = ThreadPoolExecutor(max_workers=9)
+_legpool = ThreadPoolExecutor(max_workers=32)
 import numpy as np, pandas as pd, json, ssl, subprocess, urllib.request, os, sys
 sys.path.insert(0, os.path.dirname(__file__))
 import awsloc as AWSLOC
@@ -271,75 +271,118 @@ def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_rewar
     lead = max(0.0, (pd.Timestamp(depart_ts) - now_ts).total_seconds() / 60)
     hot_full = float(np.nanmax([risk(b, lead + 8, "full") for _, b in ret.iterrows()] + [0.0]))
     hot_empty = float(np.nanmax([risk(a, lead + 3, "empty") for _, a in borrow.iterrows()] + [0.0]))
+    # ---- 候選網格：借車站 × 還車站，全部取真實路網後再排序 ----
+    borrow = borrow.nsmallest(5, "d_o"); ret = ret.nsmallest(5, "d_d")
     cands = []
     for _, a in borrow.iterrows():
-        w1 = leg(origin, (a.lat, a.lon), "walk", use_osrm=False); t_b = lead + w1["minutes"]
-        pe = risk(a, t_b, "empty"); eb = expected_stock(a, t_b, "bikes")
         for _, b in ret.iterrows():
             if a.sid == b.sid: continue
-            if a.d_d <= b.d_d + 150 or hav(a.lat, a.lon, b.lat, b.lon) < 400: continue   # 必須往目的地推進且騎乘段 ≥ 400m
-            rd = leg((a.lat, a.lon), (b.lat, b.lon), "ride", use_osrm=False); rd["minutes"] = round(rd["minutes"] * t_mult, 1); t_r = t_b + rd["minutes"]
-            pf = risk(b, t_r, "full"); es = expected_stock(b, t_r, "spaces")
-            w2 = leg((b.lat, b.lon), dest, "walk", use_osrm=False)
-            total = w1["minutes"] + rd["minutes"] + w2["minutes"]
-            penalty = (pe + pf) * A["reroute_penalty_min"] * r_mult
-            # 供需效益：從預測將滿的站借、還到預測將缺的站
+            if a.d_d <= b.d_d + 150 or hav(a.lat, a.lon, b.lat, b.lon) < 400: continue
             benefit = 0.0
             benefit += max(0.0, float(a["pf_120"]) - 0.2) * 1.0 + max(0.0, (float(a["bikes"]) if not np.isnan(a["bikes"]) else 0) / max(a["cap"], 1) - 0.7) * 0.5
             benefit += max(0.0, float(b["pe_120"]) - 0.2) * 1.5 + max(0.0, 0.3 - (expected_stock(b, 120, "bikes") / max(b["cap"], 1))) * 0.5
-            # 分流：附近有站將滿/將空時，選擇風險低的替代站本身就是效益
-            if hot_full >= 0.35 and pf <= 0.2: benefit += (hot_full - pf) * 0.8
-            if hot_empty >= 0.35 and pe <= 0.2: benefit += (hot_empty - pe) * 0.8
-            cands.append({"borrow": a, "return": b, "w1": w1, "ride": rd, "w2": w2, "total": total, "pe": pe, "pf": pf, "eb": eb, "es": es,
-                          "penalty": penalty, "benefit": benefit, "t_borrow_min": t_b, "t_return_min": t_r})
+            cands.append({"borrow": a, "return": b, "benefit": benefit})
     if not cands: return {"options": [], "error": "沒有可行的借還組合"}
-    fastest = min(cands, key=lambda c: c["total"])
-    reliable = min(cands, key=lambda c: c["total"] + 2.5 * c["penalty"] + (15 if (c["pe"] > 0.3 or c["pf"] > 0.3) else 0))
+
+    # ---- 路段取得：步行段全取；騎乘段先算直線下界，只查有機會勝出的組合 ----
+    # 直線距離必定不大於實際路網距離，因此直線時間是真實時間的下界，可安全剪枝。
+    walk_o = {int(r.sid): (float(r.lat), float(r.lon)) for _, r in borrow.iterrows()}
+    walk_d = {int(r.sid): (float(r.lat), float(r.lon)) for _, r in ret.iterrows()}
+    jobs = {}
+    for sid, pt in walk_o.items(): jobs[("wo", sid)] = _legpool.submit(leg, origin, pt, "walk")
+    for sid, pt in walk_d.items(): jobs[("wd", sid)] = _legpool.submit(leg, pt, dest, "walk")
+    R = {k: f.result() for k, f in jobs.items()}
+
+    def lower_bound(c):
+        bs, rs = int(c["borrow"].sid), int(c["return"].sid)
+        ride_lb = float(hav(c["borrow"].lat, c["borrow"].lon, c["return"].lat, c["return"].lon)) / 1000 / A["ride_kmh"] * 60 * t_mult
+        return R[("wo", bs)]["minutes"] + ride_lb + R[("wd", rs)]["minutes"]
+    for c in cands: c["lb"] = lower_bound(c)
+    cands.sort(key=lambda c: c["lb"])
+
+    def fetch_rides(subset):
+        fs = {(int(c["borrow"].sid), int(c["return"].sid)):
+              _legpool.submit(leg, (float(c["borrow"].lat), float(c["borrow"].lon)), (float(c["return"].lat), float(c["return"].lon)), "ride")
+              for c in subset if ("rd", int(c["borrow"].sid), int(c["return"].sid)) not in R}
+        for k, f in fs.items(): R[("rd",) + k] = f.result()
+
+    def build(c):
+        bs, rs = int(c["borrow"].sid), int(c["return"].sid)
+        w1 = R[("wo", bs)]; w2 = R[("wd", rs)]; rd = dict(R[("rd", bs, rs)])
+        rd["minutes"] = round(rd["minutes"] * t_mult, 1)
+        total = round(w1["minutes"] + rd["minutes"] + w2["minutes"], 1)
+        t_b = lead + w1["minutes"]; t_r = t_b + rd["minutes"]
+        pe = risk(c["borrow"], t_b, "empty"); pf = risk(c["return"], t_r, "full")
+        eb = expected_stock(c["borrow"], t_b, "bikes"); es = expected_stock(c["return"], t_r, "spaces")
+        penalty = (pe + pf) * A["reroute_penalty_min"] * r_mult
+        bn = c["benefit"]
+        if hot_full >= 0.35 and pf <= 0.2: bn += (hot_full - pf) * 0.8
+        if hot_empty >= 0.35 and pe <= 0.2: bn += (hot_empty - pe) * 0.8
+        return {"c": c, "legs": [w1, rd, w2], "total_min": total, "pe": pe, "pf": pf, "eb": eb, "es": es,
+                "penalty": penalty, "benefit": bn, "t_borrow_min": t_b, "t_return_min": t_r}
+
+    first = cands[:8]
+    fetch_rides(first)
+    built = [build(c) for c in first]
+    best_so_far = min(b["total_min"] for b in built) if built else 1e9
+    # 集點方案可能比最快多 10 分鐘仍值得，所以剪枝門檻放寬到 best + 10
+    rest = [c for c in cands[8:] if c["lb"] <= best_so_far + 10]
+    if rest:
+        fetch_rides(rest)
+        built += [build(c) for c in rest]
+    pruned = len(cands) - len(built)
+    if not built: return {"options": [], "error": "沒有可行的借還組合"}
+
+    # ---- 以真實路網結果排序，三個標準各取一個 ----
+    best_time = min(b["total_min"] for b in built)
+    fastest  = min(built, key=lambda b: b["total_min"])
+    reliable = min(built, key=lambda b: b["total_min"] + 2.5 * b["penalty"] + (15 if (b["pe"] > 0.3 or b["pf"] > 0.3) else 0))
     reward = None
     if want_reward:
-        pool = [c for c in cands if c["pe"] <= 0.4 and c["pf"] <= 0.4 and c["benefit"] >= 0.1 and c["total"] <= fastest["total"] + 10]
-        if pool: reward = max(pool, key=lambda c: c["benefit"] - 0.02 * (c["total"] - fastest["total"]))
-    def pack(c, kind, now_ts, depart_ts):
-        # 只對最終三方案抓 OSRM 幾何（三段並行）
-        fa = _legpool.submit(leg, origin, (c["borrow"].lat, c["borrow"].lon), "walk")
-        fb = _legpool.submit(leg, (c["borrow"].lat, c["borrow"].lon), (c["return"].lat, c["return"].lon), "ride")
-        fc = _legpool.submit(leg, (c["return"].lat, c["return"].lon), dest, "walk")
-        w1, rd, w2 = fa.result(), fb.result(), fc.result()
-        rd["minutes"] = round(rd["minutes"] * t_mult, 1)
-        total = w1["minutes"] + rd["minutes"] + w2["minutes"]
-        pts = 0
-        if kind == "reward": pts = int(min(30, round(c["benefit"] * 20)))
-        return {"kind": kind, "label": {"fast": "最快抵達", "reliable": "借還較穩", "reward": "順路集點"}[kind],
+        pool = [b for b in built if b["pe"] <= 0.4 and b["pf"] <= 0.4 and b["benefit"] >= 0.1 and b["total_min"] <= best_time + 10]
+        if pool: reward = max(pool, key=lambda b: b["benefit"] - 0.02 * (b["total_min"] - best_time))
+
+    def pack(b, kind):
+        c = b["c"]; pts = int(min(30, round(b["benefit"] * 20))) if kind == "reward" else 0
+        return {"kind": kind, "label": {"fast": "最快抵達", "reliable": "借還最穩", "reward": "順路集點"}.get(kind, "其他選擇"),
                 "borrow": {"sid": int(c["borrow"].sid), "name": c["borrow"]["name"], "lat": float(c["borrow"].lat), "lon": float(c["borrow"].lon),
                            "bikes_now": None if np.isnan(c["borrow"].bikes) else int(c["borrow"].bikes), "cap": int(c["borrow"].cap),
-                           "expected_bikes": round(c["eb"], 1), "p_empty": round(c["pe"], 2), "arrive_in_min": round(c["t_borrow_min"])},
+                           "expected_bikes": round(b["eb"], 1), "p_empty": round(b["pe"], 2), "arrive_in_min": round(b["t_borrow_min"])},
                 "return": {"sid": int(c["return"].sid), "name": c["return"]["name"], "lat": float(c["return"].lat), "lon": float(c["return"].lon),
                            "spaces_now": None if np.isnan(c["return"].spaces) else int(c["return"].spaces), "cap": int(c["return"].cap),
-                           "expected_spaces": round(c["es"], 1), "p_full": round(c["pf"], 2), "arrive_in_min": round(c["t_return_min"])},
-                "legs": [w1, rd, w2], "total_min": round(total, 1), "risk_penalty_min": round(c["penalty"], 1),
-                "points": pts, "benefit": round(c["benefit"], 2),
-                "eta": str(pd.Timestamp(depart_ts) + pd.Timedelta(minutes=total))}
-    f1 = _legpool.submit(pack, fastest, "fast", now_ts, depart_ts); f2 = _legpool.submit(pack, reliable, "reliable", now_ts, depart_ts)
-    f3 = _legpool.submit(pack, reward, "reward", now_ts, depart_ts) if reward else None
-    opts = [f1.result(), f2.result()]
-    if reward:
-        rw = f3.result()
-        if reward is fastest: rw["note"] = "與最快方案相同路線，加計集點"
-        elif reward is reliable: rw["note"] = "與較穩方案相同路線，加計集點"
-        opts.append(rw)
+                           "expected_spaces": round(b["es"], 1), "p_full": round(b["pf"], 2), "arrive_in_min": round(b["t_return_min"])},
+                "legs": b["legs"], "total_min": b["total_min"], "risk_penalty_min": round(b["penalty"], 1),
+                "points": pts, "benefit": round(b["benefit"], 2),
+                "eta": str(pd.Timestamp(depart_ts) + pd.Timedelta(minutes=b["total_min"]))}
+
+    chosen = [(fastest, "fast"), (reliable, "reliable")] + ([(reward, "reward")] if reward else [])
+    opts, by_id = [], {}
+    for b, kind in chosen:
+        key = id(b)
+        if key in by_id:                      # 同一條路線同時滿足多個標準
+            o = by_id[key]; o.setdefault("also", []).append({"fast": "最快抵達", "reliable": "借還最穩", "reward": "順路集點"}[kind])
+            if kind == "reward": o["points"] = int(min(30, round(b["benefit"] * 20)))
+            continue
+        o = pack(b, kind); by_id[key] = o; opts.append(o)
+
+    # 同一條路線贏三個標準時，補上真正不同的替代組合，讓使用者仍有選擇
+    if len(opts) < 3:
+        used = {(o["borrow"]["sid"], o["return"]["sid"]) for o in opts}
+        extras = sorted([x for x in built if (x["c"]["borrow"].sid, x["c"]["return"].sid) not in used],
+                        key=lambda x: x["total_min"] + 1.2 * x["penalty"])
+        for x in extras[: 3 - len(opts)]:
+            o = pack(x, "alt")
+            diff = []
+            if x["c"]["borrow"].sid != opts[0]["borrow"]["sid"]: diff.append("換借車站")
+            if x["c"]["return"].sid != opts[0]["return"]["sid"]: diff.append("換還車站")
+            o["diff"] = "、".join(diff) or "不同組合"
+            opts.append(o); used.add((o["borrow"]["sid"], o["return"]["sid"]))
+
     if extended:
         for o in opts:
-            if o["kind"] != "fast" and o["legs"][0]["minutes"] > max_walk_min: o["note"] = (o.get("note", "") + " 附近站散場後預測都缺車，多走幾分鐘到備援站較穩").strip()
-    # 去除完全重複的方案（借還站相同者只留主推薦優先級較高的）
-    seen = {}; uniq = []
-    for o in opts:
-        k = (o["borrow"]["sid"], o["return"]["sid"])
-        if k in seen:
-            seen[k]["also"] = seen[k].get("also", []) + [o["label"]]
-            seen[k]["points"] = max(seen[k]["points"], o["points"]); continue
-        seen[k] = o; uniq.append(o)
-    opts = uniq
-    order = {"time": ["fast", "reliable", "reward"], "reliable": ["reliable", "fast", "reward"], "reward": ["reward", "reliable", "fast"]}.get(preference, ["fast", "reliable", "reward"])
+            if o["kind"] != "fast" and o["legs"][0]["minutes"] > max_walk_min:
+                o["note"] = (o.get("note", "") + " 附近站散場後預測都缺車，多走幾分鐘到備援站較穩").strip()
+    order = {"time": ["fast", "reliable", "reward", "alt"], "reliable": ["reliable", "fast", "reward", "alt"], "reward": ["reward", "reliable", "fast", "alt"]}.get(preference, ["fast", "reliable", "reward", "alt"])
     opts.sort(key=lambda o: order.index(o["kind"]) if o["kind"] in order else 9)
     if opts:
         opts[0]["primary"] = True
@@ -347,7 +390,9 @@ def plan_trip(pred, origin, dest, depart_ts, now_ts, max_walk_min=12, want_rewar
         base = opts[0]["total_min"]
         for o in opts[1:]:
             o["primary"] = False; o["delta_min"] = round(o["total_min"] - base, 1); o["delta_points"] = o["points"] - opts[0]["points"]
-    return {"options": opts, "preference": preference, "weather_applied": (wf or {}).get("label"), "extended_search": extended, "candidates_considered": len(cands), "assumptions": {k: ASSUMPTIONS[k] for k in ["walk_kmh", "ride_kmh", "reroute_penalty_min", "intent_conversion"]}}
+    return {"options": opts, "preference": preference, "weather_applied": (wf or {}).get("label"), "extended_search": extended,
+            "candidates_considered": len(cands), "routed_candidates": len(built), "pruned_by_bound": pruned,
+            "assumptions": {k: ASSUMPTIONS[k] for k in ["walk_kmh", "ride_kmh", "reroute_penalty_min", "intent_conversion"]}}
 
 
 # ---------- 民眾端：附近可借車輛與擁擠程度 ----------

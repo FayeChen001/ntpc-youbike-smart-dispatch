@@ -380,7 +380,9 @@ function renderHome(){
   $('home-hint').innerHTML=`已評估 ${r.candidates_considered} 種借還組合，納入${(r.includes||[]).join('、')}。預設先看「${{time:'準時抵達',reliable:'一定借得到',reward:'多集點'}[S.profile.preference]}」，可在上方切換。<br>${n?n.definition:''}<br>天氣：${S.wx&&S.wx.source?S.wx.source:'—'}`;
   drawMini();
 }
-function drawMini(){ const n=S.near,o=S.plan&&S.plan.options&&S.plan.options[S.sel]; if(!n||!$('mapmini')) return;
+function drawMini(){ const n=S.near,o=S.plan&&S.plan.options&&S.plan.options[S.sel]; const box=$('mapmini'); if(!n||!box) return;
+  // 每次重繪首頁都會產生新的容器，舊的地圖物件會指向已脫離文件的節點
+  if(mapMini && mapMini.getContainer() !== box){ try{ mapMini.remove(); }catch(e){} mapMini=null; }
   if(!mapMini){ mapMini=makeMap('mapmini',[n.stations[0]?.lat||25.03,n.stations[0]?.lon||121.47],15,{layerToggle:false}); }
   else { mapMini.eachLayer(l=>{ if(!(l instanceof L.TileLayer)) mapMini.removeLayer(l); }); }
   const g=[]; n.stations.forEach(s=>{ const m=L.circleMarker([s.lat,s.lon],{radius:Math.max(5,Math.min(10,4+Math.sqrt(s.cap))),color:'#fff',weight:1.5,fillColor:s.ease.color,fillOpacity:.92})
@@ -407,7 +409,9 @@ async function startTrip(){ const o=S.plan.options[S.sel];
   S.legs=[{...l1,kind:'walk',to:o.borrow.name},{...l2,kind:'ride',to:o.return.name},{...l3,kind:'walk',to:S.dest.title.replace(' 一帶','')}];
   S.legs.forEach(l=>{ l.cd=cumDist(l.geometry); l.total=l.cd[l.cd.length-1]||l.dist_m; });
   S.legIdx=0; S.navProg=0; startLeg(); }
-function startLeg(){ const l=S.legs[S.legIdx]; if(!mapNav) mapNav=makeMap('mapnav',l.geometry[0],16,{layerToggle:false});
+function startLeg(){ const l=S.legs[S.legIdx]; const nb=$('mapnav');
+  if(mapNav && mapNav.getContainer() !== nb){ try{ mapNav.remove(); }catch(e){} mapNav=null; navLayers=[]; }
+  if(!mapNav) mapNav=makeMap('mapnav',l.geometry[0],16,{layerToggle:false});
   navLayers.forEach(x=>mapNav.removeLayer(x)); navLayers=[];
   const col=l.kind==='ride'?'#0f5fa8':'#7b8794';
   const line=L.polyline(l.geometry,{color:col,weight:6,opacity:.85,dashArray:l.kind==='walk'?'1 9':null,lineCap:'round'}).addTo(mapNav); navLayers.push(line);

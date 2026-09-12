@@ -303,6 +303,22 @@ async def _start():
     global LOOP; LOOP = asyncio.get_event_loop(); asyncio.create_task(clock_loop())
     threading.Thread(target=lambda: (time.sleep(1), set_scenario_sync("commute_am")), daemon=True).start()   # 預設情境
     threading.Thread(target=lambda: (time.sleep(3), api_live(), api_culture()), daemon=True).start()   # 預熱外部資料快取
+    threading.Thread(target=_warm_routes, daemon=True).start()
+
+def _warm_routes():
+    """預熱預設通勤路線的路段快取，讓 demo 第一次規劃就很快。"""
+    time.sleep(6)
+    try:
+        pr = STATE["profile"]
+        if pr.get("home_sid") is None or pr.get("work_sid") is None: return
+        for o, d, t in ((STATE["user"]["home"], STATE["user"]["work"], pr["out_time"]),
+                        (STATE["user"]["work"], STATE["user"]["home"], pr["back_time"])):
+            w = wx_now()
+            PL.plan_trip(apply_dispatch_to_pred(apply_event_to_pred(current_pred())), tuple(o), tuple(d),
+                         pd.Timestamp(f"{now_ts().date()} {t}"), now_ts(), pr["max_walk_min"], weather=w, preference=pr["preference"])
+        print("[warm] 預設通勤路線快取完成", flush=True)
+    except Exception as e:
+        print("[warm] skipped:", type(e).__name__, flush=True)
 
 # ------------------------------------------------------------------ 頁面
 @app.get("/", response_class=HTMLResponse)
@@ -764,6 +780,7 @@ def api_profile_set(body: dict):
         STATE["user"]["student"] = pr["role"] == "student"; STATE["user"]["max_walk_min"] = pr["max_walk_min"]
     STATE["pref_prompt"] = None
     broadcast("profile", api_profile_get())
+    threading.Thread(target=_warm_routes, daemon=True).start()
     return api_profile_get()
 
 def wallet_data():
