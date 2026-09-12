@@ -48,3 +48,27 @@ aws ssm send-command --instance-ids i-08076f512f308cce9 --document-name AWS-RunS
 - 本機開發用 `AWS_PROFILE=hackathon`；EC2 上不設這個環境變數，走執行個體角色。設成空字串會讓 botocore 把空字串當 profile 名稱而失敗。
 - CloudFront 停用快取並轉送全部標頭，因為預測與回放狀態不能被快取。
 - 即時事件走 Server-Sent Events；若經 CDN 被緩衝，前端會自動改為每四秒輪詢。
+
+## 部署後怎麼確認真的上去了
+
+**服務跑在 port 80，不是 8787。** 在機器上查健康狀態要 `curl http://127.0.0.1/api/state`，
+用 8787 會得到 000 而誤判成掛掉（2026-09-13 踩過）。
+
+安全群組只開四個現場 IP，本機直連可能不通，這時用 SSM 從機器內部查：
+
+```bash
+export AWS_PROFILE=hackathon
+aws ssm send-command --instance-ids i-08076f512f308cce9 --document-name AWS-RunShellScript \
+  --parameters 'commands=["systemctl is-active youbike","ss -lntp | head","cd /opt/youbike && md5sum app/server.py app/events.py app/static/gov.html app/static/ops.js"]' \
+  --query 'Command.CommandId' --output text
+# 再用 aws ssm get-command-invocation --command-id <id> --instance-id i-08076f512f308cce9 \
+#   --query StandardOutputContent --output text 取回輸出
+```
+
+**驗收方式是比對 md5，不是看時間戳。** 把上面的雜湊跟本機 `md5 -q <檔>` 對，
+全部相同才算這一版真的上去了。`deploy.sh` 最後那行 curl 若因來源 IP 被擋而失敗，
+不代表部署失敗，要用雜湊確認。
+
+部署會重啟服務、清掉回放狀態（告警、任務、意向、工單、獎勵、情境）。
+**重啟前先確認沒人在用**（`journalctl -u youbike --since "-2 min" | grep -c "HTTP/1.1"`），
+跑完用 `curl -X POST http://<host>/api/scenario/commute_am -H 'content-type: application/json' -d '{}'` 復原。
