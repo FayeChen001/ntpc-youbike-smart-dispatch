@@ -10,7 +10,7 @@
 | 直連位址 | http://35.93.221.246 |
 | HTTPS 位址 | https://d2gvisqxis9sbc.cloudfront.net |
 | CloudFront 發佈 | `E2YHJ9G5P1S29W` |
-| WAF Web ACL | 預設 Block，只允許 IPSet `ntpc-youbike-venue` |
+| WAF Web ACL | `ntpc-youbike-acl`，預設 Block，允許 IPSet `ntpc-youbike-venue`（IPv4）與 `ntpc-youbike-venue-v6`（IPv6） |
 | 安全群組 | `sg-08f4c61e785f6517b` 四個現場 IP 的 80/443/8787；`-` CloudFront 回源 |
 | 執行個體角色 | `NTPCYouBikeAppRole`，程式用執行個體角色取得 AWS 權限，機器上沒有任何金鑰 |
 | 服務 | systemd `youbike.service`，uvicorn 監聽 80 |
@@ -33,6 +33,15 @@ aws ssm send-command --instance-ids i-08076f512f308cce9 --document-name AWS-RunS
 ## 權限設計
 
 執行個體角色只給這個專案需要的動作：Bedrock 的 Converse、Location Service 的三個子服務、專案自己的 DynamoDB 資料表、專案自己的 S3 儲存貯體、Athena 與 Glue 的唯讀查詢。另掛 SSM 受管政策以便免 SSH 維運。
+
+## 部署前務必確認
+
+- **`git status --short` 要乾淨。** `deploy.sh` 打包的是工作目錄的當下狀態，不是 HEAD。
+  三條線共用同一個工作目錄，別人改到一半還沒提交的檔案會一起被打包上線。
+- **新相依套件要寫進 `requirements.txt`。** 本機有裝不代表機器上有。
+  2026-09-12 就因為 `python-multipart` 沒列進去，`/api/c/image` 的 `UploadFile`／`Form`
+  讓 FastAPI 在 import 時直接 RuntimeError，服務起不來，站台整個掛掉。
+- 部署會重啟服務，**線上的回放狀態會被清掉**。
 
 ## 注意
 

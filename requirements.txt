@@ -4,5 +4,6 @@ pandas==2.2.3
 pyarrow==21.0.0
 joblib==1.4.2
 fastapi==0.115.6
+python-multipart==0.0.20      # /api/c/image 的 UploadFile/Form 需要；缺了 FastAPI 會在 import 時就 RuntimeError
 uvicorn[standard]==0.34.0
 boto3>=1.35
