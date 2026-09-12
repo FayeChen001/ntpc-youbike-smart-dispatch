@@ -1469,32 +1469,73 @@ def api_ledger_get(aid: str):
     return JSONResponse({"error": "not found"}, 404)
 
 
+def _find_event(aid):
+    for a in STATE["alerts"].values():
+        if a["id"] == aid: return a
+    for a in STATE["alert_log"]:
+        if a["id"] == aid: return a
+    return None
+
+
+def _ops_echo(ev, action, body):
+    """跨區／逾時與政府端要求，一律同步警示營運端：同一個 event_id 與 version，不另建任務。"""
+    lvl = EV.LEVELS.get(ev.get("level"), {}).get("label", "")
+    obs = ev.get("observed") or {}
+    base = {"event_id": ev["id"], "event_version": ev["version"], "sid": ev.get("sid"),
+            "level": ev.get("level"), "owner": ev.get("owner"), "alert_id": ev["id"]}
+    if action == "assign":
+        notify("ops", f"政府端指派｜{ev['station']}",
+               f"{lvl} 事件指派給 {ev.get('owner')}：{ev['message']}", "warn", base)
+    elif action == "request_ops":
+        notify("ops", f"政府端要求處理｜{ev['station']}",
+               f"{lvl}｜零值快照跨度 {obs.get('span_min', '未知')} 分"
+               + (f"・站群 {ev.get('cluster_n')} 站同時無法服務" if ev.get("cluster") else "")
+               + f"。{(body or {}).get('note') or '請營運端評估處理方案與 ETA'}"
+               + "（政府端只提出要求，派工方案與人車由營運端決定）", "warn", base)
+    elif action == "coordinate":
+        ds = "、".join((body or {}).get("districts") or []) or "未指定行政區"
+        notify("ops", f"跨區協調｜{ev['station']}",
+               f"{lvl} 需要跨區支援（{ds}）。{(body or {}).get('note') or ''}"
+               "　這是協調紀錄，不是派車任務。", "warn", base)
+
+
+@app.post("/api/ledger/{aid}/action")
+def api_ledger_action(aid: str, body: dict = None):
+    """
+    政府端動作：ack／assign／request_ops／track／coordinate／note。
+    body 可帶 version（樂觀鎖，過期回 409）與 request_id（冪等，重送不重做）。
+    政府端不建立也不修改派車任務。
+    """
+    ev = _find_event(aid)
+    if ev is None: return JSONResponse({"error": "not found"}, 404)
+    action = (body or {}).get("action")
+    res, code = EV.apply_action(ev, action, body or {}, now_ts(), iso)
+    if code == 200 and not res.get("idempotent"):
+        ddb_put("yb_alerts", ev); broadcast("alert", ev)
+        _ops_echo(ev, action, body)
+    return JSONResponse(res, code)
+
+
 @app.post("/api/ledger/{aid}/assign")
 def api_ledger_assign(aid: str, body: dict = None):
-    owner = (body or {}).get("owner")
-    for a in STATE["alerts"].values():
-        if a["id"] == aid:
-            prev = a.get("owner")
-            a["owner"] = owner
-            a.setdefault("timeline", []).append({"ts": iso(now_ts()), "action": "assign", "actor": "政府端",
-                                                 "note": (f"負責人 {prev} → {owner}" if prev else f"指派負責人：{owner}")})
-            if a.get("status") == "open": a["status"] = "acked"; a["acked"] = a.get("acked") or iso(now_ts())
-            ddb_put("yb_alerts", a); broadcast("alert", a)
-            notify("ops", f"政府端指派｜{a['station']}", f"{EV.LEVELS.get(a.get('level'), {}).get('label', '')} 事件指派給 {owner}：{a['message']}", "warn",
-                   {"alert_id": aid, "sid": a["sid"], "owner": owner})
-            return a
-    return JSONResponse({"error": "not found"}, 404)
+    """相容舊呼叫；內部走同一個 apply_action，不另外實作一套。"""
+    ev = _find_event(aid)
+    if ev is None: return JSONResponse({"error": "not found"}, 404)
+    res, code = EV.apply_action(ev, "assign", {**(body or {})}, now_ts(), iso)
+    if code != 200: return JSONResponse(res, code)
+    if not res.get("idempotent"):
+        ddb_put("yb_alerts", ev); broadcast("alert", ev); _ops_echo(ev, "assign", body)
+    return ev
 
 
 @app.post("/api/ledger/{aid}/note")
 def api_ledger_note(aid: str, body: dict = None):
-    text = ((body or {}).get("note") or "").strip()
-    if not text: return JSONResponse({"error": "note is empty"}, 400)
-    for a in list(STATE["alerts"].values()) + STATE["alert_log"]:
-        if a["id"] == aid:
-            a.setdefault("timeline", []).append({"ts": iso(now_ts()), "action": "note", "actor": "政府端", "note": text})
-            ddb_put("yb_alerts", a); return a
-    return JSONResponse({"error": "not found"}, 404)
+    ev = _find_event(aid)
+    if ev is None: return JSONResponse({"error": "not found"}, 404)
+    res, code = EV.apply_action(ev, "note", body or {}, now_ts(), iso)
+    if code != 200: return JSONResponse(res, code)
+    ddb_put("yb_alerts", ev)
+    return ev
 
 
 # ================================================================== B 線（派車端）附加端點
