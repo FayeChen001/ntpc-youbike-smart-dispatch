@@ -429,8 +429,13 @@ def test_http():
     ck_true("行程規劃有回方案", len(tp["plans"]) >= 1)
     ck("第一個方案一定是最快", tp["plans"][0]["kind"], "最快")
     ck_true("最快方案的終點就是使用者指定的站", tp["plans"][0]["station_sid"] == b)
-    ck_true("道路距離 = 直線 × 繞路係數",
-            abs(tp["road_m"] - tp["distance_m"] * tp["assumptions"]["road_detour"]) <= 1.5)
+    if tp.get("nav") and tp["nav"].get("dist_m"):
+        # 拿得到真實路線時，road_m 會換成實際路程，不再是直線乘係數
+        ck("有真實路線時 road_m 等於實際路程", tp["road_m"], tp["nav"]["dist_m"])
+        ck_true("實際路程不短於直線距離", tp["road_m"] >= tp["distance_m"] - 1)
+    else:
+        ck_true("沒有真實路線時 road_m = 直線 × 繞路係數",
+                abs(tp["road_m"] - tp["distance_m"] * tp["assumptions"]["road_detour"]) <= 1.5)
     for p in tp["plans"]:
         ck_true(f"{p['kind']}：總時間 = 騎乘 + 步行",
                 abs(p["total_min"] - (p["ride_min"] + p["walk_min"])) < 0.15)
@@ -608,6 +613,83 @@ def test_http():
     ck_true("有帶車號的去重說明", "車號" in fr["dedup"])
     ck_true("建單不等於確認根因的免責", "不等於已確認根因" in fr["caveat"])
     post("/api/v2/ops/tasks/reset", {})
+
+    # ---- 民眾端：地點搜尋、推薦、接案、回報
+    gs = get("/api/v2/citizen/geosearch?q=" + urllib.parse.quote("板橋車站"))
+    ck_true("站名比對找得到", len(gs["stations"]) > 0)
+    for pl in gs.get("places", []):
+        ck_true(f"地理編碼結果落在雙北範圍內（{pl['title']}）",
+                121.20 <= pl["lon"] <= 122.06 and 24.60 <= pl["lat"] <= 25.35,
+                f"{pl['lat']:.3f},{pl['lon']:.3f}")
+        ck_true(f"{pl['title']}：有標明來源", "Amazon Location" in pl["source"])
+    ck("空查詢回空", get("/api/v2/citizen/geosearch?q=")["stations"], [])
+
+    _, sug = post("/api/v2/citizen/suggest", {"places": [], "history": []})
+    ck("沒有輸入時不硬推薦", len(sug["suggestions"]), 0)
+    ck("沒有輸入時如實標記", sug["has_input"], False)
+    ck_true("有寫明資料只存在使用者瀏覽器", "只存在你自己的瀏覽器" in sug["privacy"])
+    ck_true("有寫明我們沒有借還紀錄", "拿不到" in sug["semantics"])
+
+    two = [x["sid"] for x in stations["stations"] if x["act"] and x["sid"] >= 0][:2]
+    _, sug2 = post("/api/v2/citizen/suggest",
+                   {"places": [{"label": "家", "sid": two[0]}, {"label": "公司", "sid": two[1]}],
+                    "dow": 1, "hour": 8})
+    ck_true("有常用地點就給得出推薦", len(sug2["suggestions"]) > 0)
+    ck("平日早上是週二", sug2["now"]["dow_label"], "週二")
+    for r in sug2["suggestions"]:
+        ck_true(f"{r['from']}→{r['to']}：有說明為什麼推薦", bool(r["why"]))
+
+    tp2 = get(f"/api/v2/trip?from_sid={two[0]}&to_sid={two[1]}")
+    ck_true("行程有外部地圖連結", tp2["maps_url"].startswith("https://www.google.com/maps"))
+    ck_true("有標明路線來源或退回估算", bool(tp2["nav_note"]))
+    if tp2["nav"]:
+        ck_true("逐段指示有內容", len(tp2["nav"]["steps"]) > 0)
+        ck_true("路線來源有標明", "Amazon Location" in tp2["nav"]["source"])
+
+    qs = get("/api/v2/citizen/quests")
+    ck_true("接案區有規則", "倍率" in qs["rules"]["formula"])
+    ck_true("有寫明接下不保證還有缺口", "不保證" in qs["caveat"])
+    ck("保留時間 30 分鐘", qs["hold_minutes"], 30)
+    ck_true("每個案子都有狀態", all(q["state"] in ("open", "taken", "done", "expired")
+                                for q in qs["quests"]))
+    if qs["quests"]:
+        q0 = next((q for q in qs["quests"] if q["state"] == "open"), None)
+        if q0:
+            code, ac = post("/api/v2/citizen/quests/accept",
+                            {"sid": q0["sid"], "kind": q0["kind"]})
+            ck("接案成功", code, 200)
+            ck("接案有回保留時間", ac["hold_minutes"], 30)
+            # 重複接同一個案子要回報「已經接過」並給剩餘時間。
+            # 不去斷言它還在清單上——缺口被別人補滿就會消失，那是設計如此。
+            _, ac2 = post("/api/v2/citizen/quests/accept",
+                          {"sid": q0["sid"], "kind": q0["kind"]})
+            ck_true("重複接同一案 → 回報已接過", ac2.get("already") is True)
+            ck_true("已接過時給得出剩餘保留時間",
+                    isinstance(ac2.get("minutes_left"), (int, float)))
+            again = get("/api/v2/citizen/quests")
+            still = next((q for q in again["quests"]
+                          if q["quest_key"] == q0["quest_key"]), None)
+            if still:
+                ck("案子還在清單上時狀態為 taken", still["state"], "taken")
+            else:
+                ck_true("案子不在清單上＝缺口已被補滿，屬預期行為", True)
+
+    code, rp = post("/api/v2/citizen/report",
+                    {"sid": two[0], "kind": "fewer_than_official", "actual_bikes": 0,
+                     "request_id": "creport-" + str(os.getpid())})
+    ck("民眾回報成功", code, 200)
+    ck_true("回報同時記下官方數字", "official_bikes" in rp["report"])
+    ck("落差＝官方減實際", rp["report"]["gap"],
+       rp["report"]["official_bikes"] - rp["report"]["actual_bikes"])
+    ck_true("有免責：不會修改官方數字", "不會修改官方數字" in rp["caveat"])
+    code2, rp2 = post("/api/v2/citizen/report",
+                      {"sid": two[0], "kind": "fewer_than_official", "actual_bikes": 0,
+                       "request_id": "creport-" + str(os.getpid())})
+    ck_true("同一個 request_id 重送 → 冪等", rp2.get("idempotent") is True)
+    code3, _ = post("/api/v2/citizen/report", {"sid": two[0], "kind": "亂寫"})
+    ck("不合法的回報類型 → 400", code3, 400)
+    rr = get("/api/v2/citizen/reports")
+    ck_true("回報彙總有並列說明", "不相減" in rr["semantics"])
 
     page = urllib.request.urlopen(BASE + "/v2", timeout=30).read().decode()
     ck_true("一站式頁面可取得", "新北 YouBike 智慧調度" in page)

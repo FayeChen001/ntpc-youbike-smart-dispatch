@@ -799,7 +799,7 @@ def _arrival_risk(sid, ahead_min, kind):
 
 
 @router.get("/trip")
-def trip(from_sid: int, to_sid: int):
+def trip(from_sid: int, to_sid: int, real_route: bool = True):
     """出發前的三方案：最快／較穩／順路集點。
 
     真實計算：兩站直線距離、既有假設下的騎乘與步行時間、兩端的即時可借可還、
@@ -897,8 +897,35 @@ def trip(from_sid: int, to_sid: int):
     if quest:
         plans.append(quest)
 
+    # 真實路線與繁中逐段指示。拿不到就退回直線估算，並在畫面上標明來源。
+    nav = None
+    if real_route:
+        try:
+            import awsloc as AL
+            r = AL.route((o["lat"], o["lon"]), (d["lat"], d["lon"]), "ride")
+            if r:
+                nav = {"dist_m": r.get("dist_m"), "duration_s": r.get("aws_duration_s"),
+                       "steps": (r.get("steps") or [])[:12],
+                       "geometry": (r.get("geometry") or [])[:400],
+                       "source": r.get("source")}
+        except Exception:                                     # noqa: BLE001
+            nav = None
+    if nav and nav.get("dist_m"):
+        ride_min = nav["duration_s"] / 60.0 if nav.get("duration_s") else \
+            nav["dist_m"] / 1000.0 / A["ride_kmh"] * 60.0
+        road_m = nav["dist_m"]
+        plans[0]["ride_min"] = round(ride_min, 1)
+        plans[0]["total_min"] = round(ride_min, 1)
+        plans[0]["route_source"] = nav["source"]
+
     co2_saved = round(road_m / 1000.0 * A["co2_scooter_g_per_km"])
     return {
+        "nav": nav,
+        "nav_note": ("路線與逐段指示來自 Amazon Location Service（Scooter 模式近似單車）。"
+                     if nav else "取不到實際路線，時間與距離是直線乘繞路係數的估算。"),
+        "maps_url": (f"https://www.google.com/maps/dir/?api=1"
+                     f"&origin={o['lat']},{o['lon']}&destination={d['lat']},{d['lon']}"
+                     f"&travelmode=bicycling"),
         "from": {"sid": from_sid, "name": o["name"], "district": o["district"],
                  "bikes": o["bikes"], "docks": o["docks"],
                  "risk_no_bike": None if p_start is None else round(p_start * 100, 1),
@@ -1900,3 +1927,344 @@ def ops_tasks_reset():
     n = len(_tasks())
     _CTX["state"]["v2_tasks"] = []
     return {"ok": True, "cleared": n}
+
+
+# ==================================================================== 民眾端
+# 「常去路線」不是猜的：使用者第一次自己填常用地點，之後把實際查過的路線存在瀏覽器裡，
+# 由前端帶上來。伺服器只負責用此刻的站況與歷史同時段風險把它加工成可用的建議。
+# 我們沒有任何使用者的旅次紀錄，也不會蒐集——這一點畫面上要寫清楚。
+CROWD_KINDS = {
+    "fewer_than_official": "實際可借比官方顯示少",
+    "more_than_official": "實際可借比官方顯示多",
+    "broken_bike": "有壞車",
+    "dock_problem": "車柱有問題",
+    "all_good": "現場正常",
+}
+
+
+def _crowd():
+    return _CTX["state"].setdefault("v2_crowd", [])
+
+
+def _quests():
+    return _CTX["state"].setdefault("v2_quests", {})
+
+
+@router.get("/citizen/geosearch")
+def citizen_geosearch(q: str, limit: int = 8):
+    """打字搜尋：先比對站名與地址，再問 Amazon Location 的地理編碼。
+
+    回傳的每一筆都標明來源——站點是我們自己的即時資料，地點是外部地理編碼服務。
+    地點會附上最近的三個站，因為使用者要的是「從這裡出發能騎什麼」。
+    """
+    q = (q or "").strip()
+    if len(q) < 1:
+        return {"stations": [], "places": [], "query": q}
+    lv = _live()
+    snap = list(lv.snapshot().values())
+    meta = _CTX.get("stations", {})
+    hits = []
+    for x in snap:
+        score = None
+        if q == x["name"]:
+            score = 0
+        elif q in x["name"]:
+            score = 1
+        elif q in (x["address"] or ""):
+            score = 2
+        elif q in x["district"]:
+            score = 3
+        if score is not None:
+            m = meta.get(x["sid"], {})
+            hits.append((score, {
+                "sid": x["sid"], "name": x["name"], "district": x["district"],
+                "address": x["address"], "lat": x["lat"], "lon": x["lon"],
+                "bikes": x["bikes"], "docks": x["docks"], "cap": x["capacity"],
+                "electric": x["bikes_electric"], "act": x["active"],
+                "profile": m.get("profile"), "source": "官方即時站況"}))
+    hits.sort(key=lambda z: (z[0], -z[1]["bikes"]))
+    stations = [h[1] for h in hits[:limit]]
+
+    places = []
+    try:
+        import awsloc as AL
+        for p in (AL.geocode(q) or [])[:4]:
+            near = []
+            for x in snap:
+                if not x["active"]:
+                    continue
+                d = _hav(p["lat"], p["lon"], x["lat"], x["lon"])
+                if d <= 800:
+                    near.append((d, x))
+            near.sort(key=lambda z: z[0])
+            places.append({
+                "title": p["title"], "lat": p["lat"], "lon": p["lon"],
+                "source": "Amazon Location Service 地理編碼",
+                "near": [{"sid": x["sid"], "name": x["name"], "dist_m": round(d),
+                          "walk_min": round(d * 1.3 / 1000 / 4.5 * 60, 1),
+                          "bikes": x["bikes"], "docks": x["docks"]}
+                         for d, x in near[:3]],
+            })
+    except Exception as e:                                    # noqa: BLE001
+        places = []
+        return {"stations": stations, "places": [], "query": q,
+                "places_error": f"{type(e).__name__}",
+                "note": "地理編碼暫時不可用，只顯示站名與地址的比對結果。"}
+    return {"stations": stations, "places": places, "query": q,
+            "note": "站點來自官方即時資料；地點來自 Amazon Location Service，"
+                    "並列出 800 公尺內的站——那才是你真正騎得到的。"}
+
+
+class SuggestIn(BaseModel):
+    places: list = []          # [{label, sid?, lat?, lon?}]
+    history: list = []         # [{from_sid, to_sid, dow, hour, count}]
+    dow: int = None            # 0=週一
+    hour: int = None
+
+
+@router.post("/citizen/suggest")
+def citizen_suggest(body: SuggestIn):
+    """依星期幾與時段推薦路線。
+
+    資料全部由前端帶上來（存在使用者自己的瀏覽器），伺服器不保存也不認得使用者。
+    伺服器只做一件事：用此刻的站況與歷史同時段風險，把建議加工成能直接用的東西。
+    """
+    now = datetime.now(TZ)
+    dow = body.dow if body.dow is not None else now.weekday()
+    hour = body.hour if body.hour is not None else now.hour
+    lv = _live()
+    risk = _CTX.get("risk")
+    weekday = dow < 5
+
+    def station(sid):
+        return lv.station(int(sid)) if sid is not None else None
+
+    out = []
+    # 1) 使用者實際查過的路線：同一個星期幾、時段相近的優先
+    for h in body.history:
+        try:
+            f, t = int(h["from_sid"]), int(h["to_sid"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        same_dow = h.get("dow") == dow
+        hour_gap = abs((h.get("hour") if h.get("hour") is not None else hour) - hour)
+        if hour_gap > 3 and not same_dow:
+            continue
+        a, b = station(f), station(t)
+        if not a or not b:
+            continue
+        score = (h.get("count", 1) * 10) + (20 if same_dow else 0) + max(0, 10 - hour_gap * 3)
+        out.append({"kind": "history", "from_sid": f, "to_sid": t,
+                    "from": a["name"], "to": b["name"], "score": score,
+                    "why": ("你在" + "一二三四五六日"[dow] + f" {hour:02d} 點左右查過這條"
+                            if same_dow else f"你查過這條（{hour_gap} 小時內的時段）")})
+    # 2) 常用地點兩兩配對：用時段猜方向（早上往外、傍晚往回）
+    pl = [p for p in body.places if p.get("sid") is not None]
+    if len(pl) >= 2:
+        home = next((p for p in pl if p.get("label") == "家"), pl[0])
+        others = [p for p in pl if p is not home]
+        morning = weekday and 5 <= hour <= 11
+        evening = weekday and 15 <= hour <= 22
+        for o in others:
+            if morning:
+                f, t, why = home, o, f"平日早上，通常是從{home.get('label','家')}出發"
+            elif evening:
+                f, t, why = o, home, f"平日傍晚，通常是回{home.get('label','家')}"
+            else:
+                f, t, why = home, o, "依你設定的常用地點"
+            a, b = station(f["sid"]), station(t["sid"])
+            if not a or not b:
+                continue
+            out.append({"kind": "places", "from_sid": int(f["sid"]), "to_sid": int(t["sid"]),
+                        "from": a["name"], "to": b["name"],
+                        "score": 40 if (morning or evening) else 15, "why": why})
+
+    # 去重、補上此刻狀況與風險
+    seen, final = set(), []
+    for r in sorted(out, key=lambda z: -z["score"]):
+        key = (r["from_sid"], r["to_sid"])
+        if key in seen:
+            continue
+        seen.add(key)
+        a, b = station(r["from_sid"]), station(r["to_sid"])
+        ra = risk.at(r["from_sid"], ahead_min=0) if (risk and risk.ok) else None
+        rb = risk.at(r["to_sid"], ahead_min=15) if (risk and risk.ok) else None
+        alert = None
+        if a["bikes"] == 0:
+            alert = f"{a['name']} 現在沒有車可借"
+        elif b["docks"] == 0:
+            alert = f"{b['name']} 現在沒有位可還"
+        elif a["bikes"] <= 2:
+            alert = f"{a['name']} 只剩 {a['bikes']} 台，快沒了"
+        final.append({
+            **r,
+            "from_bikes": a["bikes"], "from_docks": a["docks"],
+            "to_bikes": b["bikes"], "to_docks": b["docks"],
+            "from_electric": a["bikes_electric"],
+            "risk_from_no_bike": round(ra["p_no_bike"] * 100, 1) if ra else None,
+            "risk_to_no_dock": round(rb["p_no_dock"] * 100, 1) if rb else None,
+            "alert": alert,
+        })
+        if len(final) >= 4:
+            break
+
+    label = ["一", "二", "三", "四", "五", "六", "日"][dow]
+    return {
+        "now": {"dow": dow, "dow_label": f"週{label}", "hour": hour,
+                "weekday": weekday, "time": now.strftime("%H:%M")},
+        "suggestions": final,
+        "has_input": bool(body.places or body.history),
+        "privacy": ("常用地點與查詢紀錄只存在你自己的瀏覽器，每次查詢才帶上來，"
+                    "伺服器不保存也不認得你是誰。"),
+        "semantics": ("推薦只根據你自己填的常用地點與查過的路線，"
+                      "我們沒有你的實際借還紀錄——那是悠遊卡資料，我們拿不到。"),
+    }
+
+
+class CrowdIn(BaseModel):
+    sid: int
+    kind: str
+    actual_bikes: int = None
+    note: str = ""
+    request_id: str = None
+
+
+@router.post("/citizen/report")
+def citizen_report(body: CrowdIn):
+    """民眾回報現場實況。重點是「官方顯示幾台 vs 現場實際幾台」的落差。
+
+    這正是名目庫存看不到的那一塊：官方說有 5 台，但其中 3 台是壞的。
+    我們**不修改官方數字**，只把兩者並列，並記錄回報時間與人數。
+    """
+    if body.kind not in CROWD_KINDS:
+        raise HTTPException(400, f"kind 必須是 {list(CROWD_KINDS)} 其中之一")
+    lv = _live()
+    cur = lv.station(body.sid)
+    if not cur:
+        raise HTTPException(404, "查無此站的即時資料")
+    rows = _crowd()
+    if body.request_id and any(r.get("request_id") == body.request_id for r in rows):
+        return {"ok": True, "idempotent": True}
+    now = datetime.now(TZ)
+    rec = {
+        "id": f"C{len(rows) + 1:04d}",
+        "sid": body.sid, "name": cur["name"], "district": cur["district"],
+        "kind": body.kind, "kind_label": CROWD_KINDS[body.kind],
+        "official_bikes": cur["bikes"], "official_docks": cur["docks"],
+        "actual_bikes": body.actual_bikes,
+        "gap": (None if body.actual_bikes is None else cur["bikes"] - body.actual_bikes),
+        "note": body.note, "ts": now.isoformat(), "request_id": body.request_id,
+    }
+    rows.append(rec)
+    same = [r for r in rows if r["sid"] == body.sid
+            and (now - datetime.fromisoformat(r["ts"])).total_seconds() < 3600]
+    return {"ok": True, "report": rec, "reports_last_hour": len(same),
+            "caveat": ("回報不會修改官方數字，也不代表官方庫存已扣除。"
+                       "單一回報只是一個人的觀察；多人回報同一件事才比較可信。")}
+
+
+@router.get("/citizen/reports")
+def citizen_reports(sid: int = None, hours: int = 6):
+    now = datetime.now(TZ)
+    rows = [r for r in _crowd()
+            if (now - datetime.fromisoformat(r["ts"])).total_seconds() < hours * 3600
+            and (sid is None or r["sid"] == int(sid))]
+    by_station = {}
+    for r in rows:
+        d = by_station.setdefault(r["sid"], {"sid": r["sid"], "name": r["name"], "n": 0,
+                                             "fewer": 0, "broken": 0, "gap_sum": 0, "gap_n": 0})
+        d["n"] += 1
+        d["fewer"] += int(r["kind"] == "fewer_than_official")
+        d["broken"] += int(r["kind"] == "broken_bike")
+        if r["gap"] is not None:
+            d["gap_sum"] += r["gap"]; d["gap_n"] += 1
+    for d in by_station.values():
+        d["avg_gap"] = round(d["gap_sum"] / d["gap_n"], 1) if d["gap_n"] else None
+    return {"count": len(rows), "reports": rows[-40:],
+            "by_station": sorted(by_station.values(), key=lambda d: -d["n"])[:20],
+            "semantics": ("官方可借與民眾回報的實際台數並列，兩者不相減也不互相取代。"
+                          "這是名目庫存看不到的服務可用性落差。")}
+
+
+# ---------------------------------------------------------------- 小幫手接案區
+class QuestAct(BaseModel):
+    sid: int
+    kind: str
+    request_id: str = None
+
+
+@router.get("/citizen/quests")
+def citizen_quests(near_sid: int = None, limit: int = 20):
+    """接案區：把加碼任務做成可以「接下來做」的案子，而不是被動領獎勵。
+
+    接下之後會保留 30 分鐘；期間如果那一站的缺口被別人補滿，案子會自動失效並說明原因——
+    加碼本來就是缺口補滿就解除，不會因為有人接了就一直算數。
+    """
+    lv = _live()
+    board = rewards_board()
+    taken = _quests()
+    now = datetime.now(TZ)
+    origin = lv.station(near_sid) if near_sid else None
+    out = []
+    for q in board["quests"]:
+        key = f"{q['sid']}:{q['kind']}"
+        t = taken.get(key)
+        state, left = "open", None
+        if t:
+            age = (now - datetime.fromisoformat(t["ts"])).total_seconds() / 60.0
+            if t.get("done"):
+                state = "done"
+            elif age > 30:
+                state = "expired"
+            else:
+                state, left = "taken", round(30 - age, 1)
+        item = {**q, "quest_key": key, "state": state, "minutes_left": left}
+        if origin:
+            d = _hav(origin["lat"], origin["lon"], q["lat"], q["lon"])
+            item["dist_m"] = round(d)
+            item["ride_min"] = round(d * 1.4 / 1000 / 12 * 60, 1)
+        out.append(item)
+    if origin:
+        out.sort(key=lambda z: (z["state"] != "open", z["dist_m"] / max(1, z["points"])))
+    else:
+        out.sort(key=lambda z: (z["state"] != "open", -z["points"]))
+    return {
+        "quests": out[:limit],
+        "near": None if not origin else {"sid": origin["sid"], "name": origin["name"]},
+        "taken_count": sum(1 for v in taken.values() if not v.get("done")),
+        "rules": board["rules"], "wallet": board["wallet"],
+        "hold_minutes": 30,
+        "caveat": ("接下案子只是保留提醒，不會幫你把車鎖起來，也不保證還有缺口——"
+                   "缺口被別人補滿就自動解除。" + board["caveat"]),
+    }
+
+
+@router.post("/citizen/quests/accept")
+def citizen_quest_accept(body: QuestAct):
+    lv = _live()
+    if not lv.station(body.sid):
+        raise HTTPException(404, "查無此站的即時資料")
+    key = f"{body.sid}:{body.kind}"
+    q = _quests()
+    if key in q and not q[key].get("done"):
+        age = (datetime.now(TZ) - datetime.fromisoformat(q[key]["ts"])).total_seconds() / 60.0
+        if age <= 30:
+            return {"ok": True, "already": True, "quest_key": key,
+                    "minutes_left": round(30 - age, 1)}
+    q[key] = {"sid": body.sid, "kind": body.kind, "ts": datetime.now(TZ).isoformat(),
+              "request_id": body.request_id}
+    return {"ok": True, "quest_key": key, "hold_minutes": 30,
+            "caveat": "保留 30 分鐘。缺口被別人補滿就自動失效，這是設計如此。"}
+
+
+@router.post("/citizen/quests/complete")
+def citizen_quest_complete(body: QuestAct):
+    """完成接案＝領取加碼。走既有的 rewards/claim，缺口已解除時一樣會擋下來。"""
+    key = f"{body.sid}:{body.kind}"
+    res = rewards_claim(ClaimIn(sid=body.sid, kind=body.kind,
+                                request_id=body.request_id or f"q{key}"))
+    q = _quests()
+    if key in q:
+        q[key]["done"] = True
+        q[key]["done_ts"] = datetime.now(TZ).isoformat()
+    return {**res, "quest_key": key}

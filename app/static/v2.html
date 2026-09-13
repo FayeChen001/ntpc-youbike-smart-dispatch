@@ -206,6 +206,13 @@ tr.click.on td{background:var(--bg3);box-shadow:inset 2px 0 0 var(--info)}
 .stamp{aspect-ratio:1;border-radius:10px;border:1px dashed var(--line2);display:flex;
   align-items:center;justify-content:center;font-size:17px;color:var(--dim)}
 .stamp.on{border:1px solid var(--ok);background:rgba(56,211,159,.12);color:var(--ok)}
+.acbox{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;background:var(--bg2);
+  border:1px solid var(--line2);border-radius:10px;max-height:230px;overflow:auto;
+  box-shadow:var(--shadow)}
+.acrow{display:flex;justify-content:space-between;gap:9px;padding:9px 11px;font-size:12px;
+  cursor:pointer;border-bottom:1px solid rgba(34,44,61,.5)}
+.acrow:last-child{border-bottom:none}
+.acrow:hover{background:var(--bg3)}
 .streak{display:flex;gap:5px;margin:9px 0}
 .streak i{flex:1;height:26px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;
   justify-content:center;font-size:9.5px;color:var(--dim);font-style:normal}
@@ -263,7 +270,10 @@ const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
            filter:'all', mdist:null, mv:{k:1,tx:0,ty:0}, gtab:'desk', otab:'monitor', mon:null, obatch:new Set(), odist:null, oassign:'張班長',
-           wdist:[], wstart:null, wcap:20, wload:0, wboard:null, wsel:new Set(), wroute:null, wbusy:false, hand:null, freport:null, dec:null, gq:'', gres:null, gdist:null, gdd:null, opt:null, optPeriod:'m1', orderFor:null, orderAct:null, orderMsg:'', orderBusy:false, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
+           wdist:[], wstart:null, wcap:20, wload:0, wboard:null, wsel:new Set(), wroute:null, wbusy:false, hand:null, freport:null, dec:null, gq:'', gres:null, gdist:null, gdd:null, opt:null, optPeriod:'m1', orderFor:null, orderAct:null, orderMsg:'', orderBusy:false, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null,
+           cplaces:[], chist:[], cpins:[], csug:null, csetup:false,
+           cfrom:null, cto:null, cfq:'', ctq:'', cfres:null, ctres:null, cfocus:null,
+           cnav:false, cq:null, cquests:null, creport:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -282,6 +292,7 @@ async function boot(){
     const pick=(kw)=>{const m=S.stations.find(x=>kw.every(k=>x.name.includes(k))); return m?m.sid:null;};
     S.tFrom = pick(['四維公園']) ?? pick(['板橋','公園']) ?? S.stations[0]?.sid;
     S.tTo   = pick(['江子翠','4號']) ?? pick(['板橋車站']) ?? S.stations[1]?.sid;
+    loadLocal();
     feed(live.status);
     render();
     api('/api/v2/insights').then(d=>{S.ins=d; if(S.view==='gov')render();}).catch(()=>{});
@@ -1388,186 +1399,43 @@ function workerView(){
 }
 
 /* ============================================================ 民眾端 */
+/* ---------------------------------------------- 民眾端：本機儲存 */
+const LS={
+  get(k,d){ try{ const v=localStorage.getItem('yb_'+k); return v?JSON.parse(v):d; }catch(e){ return d; } },
+  set(k,v){ try{ localStorage.setItem('yb_'+k,JSON.stringify(v)); }catch(e){} },
+};
+function loadLocal(){
+  S.cplaces=LS.get('places',[]); S.chist=LS.get('hist',[]); S.cpins=LS.get('pins',[]);
+  S.csetup=LS.get('setup',false);
+}
+function rememberTrip(f,t){
+  const now=new Date();
+  const h=S.chist.filter(x=>!(x.from_sid===f&&x.to_sid===t));
+  const prev=S.chist.find(x=>x.from_sid===f&&x.to_sid===t);
+  h.unshift({from_sid:f,to_sid:t,dow:(now.getDay()+6)%7,hour:now.getHours(),
+             count:(prev?.count||0)+1});
+  S.chist=h.slice(0,30); LS.set('hist',S.chist);
+}
+async function loadSuggest(){
+  try{
+    S.csug=await api('/api/v2/citizen/suggest',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({places:S.cplaces,history:S.chist})});
+  }catch(e){ S.csug=null; }
+  if(S.view==='citizen') render();
+}
+
+/* ---------------------------------------------- 民眾端 */
 function citizenView(){
-  const rw=S.rw;
-  const worstDock=[...S.stations].filter(s=>s.act&&s.d===0).slice(0,3);
-  const nearby=[...S.stations].filter(s=>s.act).sort((a,b)=>(b.b+b.d)-(a.b+a.d));
+  const tab=(id,ic,lab,n)=>`<button class="${S.ptab===id?'on':''}" data-pt="${id}">
+    <span class="ic">${ic}</span>${lab}${n?`<span style="color:var(--warn)">・${n}</span>`:''}</button>`;
   let body='';
-  if(S.ptab==='plan'){
-    const opts=(sel)=>[...S.stations].filter(s=>s.act)
-      .sort((a,b)=>a.district.localeCompare(b.district,'zh-Hant')||a.name.localeCompare(b.name,'zh-Hant'))
-      .map(s=>`<option value="${s.sid}" ${s.sid==sel?'selected':''}>${esc(s.district)}｜${esc(s.name)}</option>`).join('');
-    const t=S.trip;
-    const planCard=(p,i)=>{
-      const tone=p.kind==='最快'?'var(--info)':p.kind==='較穩'?'var(--ok)':'var(--warn)';
-      return `<div class="qcard" style="border-color:${i===0?'var(--line2)':'var(--line)'}">
-        <div class="top"><div style="min-width:0">
-          <span class="pill" style="color:${tone};border-color:${tone}">${esc(p.kind)}</span>
-          <div style="margin-top:6px"><b style="font-size:13px">${esc(p.station)}</b></div>
-          <div class="xs dim" style="margin-top:3px">騎 ${p.ride_min} 分${p.walk_min?`＋走 ${p.walk_min} 分`:''}</div>
-        </div>
-        <div style="text-align:right;flex-shrink:0">
-          <div class="mono" style="font-size:18px">${p.total_min}<span class="xs dim"> 分</span></div>
-          ${p.points?`<div class="mono" style="color:var(--warn);font-size:14px;margin-top:3px;font-weight:700">＋${p.points} 元</div>`:''}
-        </div></div>
-        ${p.risk!=null?`<div class="xs" style="margin-top:8px;display:flex;align-items:center;gap:7px">
-          <span class="dim">到站無位機率</span>
-          <div class="bar" style="flex:1"><i style="width:${Math.min(100,p.risk)}%;
-            background:${p.risk>=30?'var(--bad)':'var(--ok)'}"></i></div>
-          <span class="mono" style="color:${p.risk>=30?'var(--bad)':'var(--ok)'}">${p.risk}%</span>
-        </div><div class="xs dim" style="margin-top:3px">依據：${esc(p.risk_source)}</div>`:''}
-        <div class="xs" style="margin-top:8px;color:var(--mute);line-height:1.6">${esc(p.note)}</div></div>`;
-    };
-    body=`<p class="xs mute" style="margin:0 0 10px;line-height:1.7">
-        出發前先看，不要到現場才發現。三個方案都用官方即時站況算，
-        到站風險優先用模型推論，沒有才退回歷史同時段。</p>
-      <div style="margin-bottom:8px"><div class="xs dim" style="margin-bottom:4px">從哪裡出發</div>
-        <select id="tfrom" style="width:100%;background:var(--bg2);border:1px solid var(--line2);
-          color:var(--fg);border-radius:9px;padding:9px;font-size:12px">${opts(S.tFrom)}</select></div>
-      <div style="margin-bottom:10px"><div class="xs dim" style="margin-bottom:4px">要去哪裡</div>
-        <select id="tto" style="width:100%;background:var(--bg2);border:1px solid var(--line2);
-          color:var(--fg);border-radius:9px;padding:9px;font-size:12px">${opts(S.tTo)}</select></div>
-      <button class="btn" id="tgo">${S.tripBusy?'規劃中…':'看三個方案'}</button>
-      ${t?(t.error?`<p class="sm" style="color:var(--bad);margin-top:12px">${esc(t.error)}</p>`:`
-        <div class="card" style="margin-top:12px;padding:11px">
-          <div class="sm"><b>${esc(t.from.name)}</b> 現在可借 
-            <b style="color:${t.from.bikes===0?'var(--bad)':'var(--ok)'}">${t.from.bikes}</b> 台
-            ${t.from.risk_no_bike!=null?`<span class="dim">・無車風險 ${t.from.risk_no_bike}%</span>`:''}</div>
-          <div class="xs dim" style="margin-top:4px">直線 ${(t.distance_m/1000).toFixed(1)} 公里，
-            估算路程 ${(t.road_m/1000).toFixed(1)} 公里（直線 × ${t.assumptions.road_detour} 繞路係數）</div></div>
-        <div style="margin-top:10px">${t.plans.map(planCard).join('')}</div>
-        <div class="card" style="margin-top:4px"><div class="xs dim" style="line-height:1.8">
-          比騎機車少排 <b style="color:var(--ok)">${t.compare.co2_saved_g_vs_scooter}</b> 公克 CO₂・
-          一般車前 ${t.compare.free_minutes} 分鐘免費（以官方公告為準）<br><br>
-          假設：騎乘 ${t.assumptions.ride_kmh} km/h、步行 ${t.assumptions.walk_kmh} km/h、
-          到場無位改站罰時 ${t.assumptions.reroute_penalty_min} 分。${esc(t.caveat)}</div></div>`):''}`;
-  }
-  else if(S.ptab==='nearby'){
-    const dists=[...new Set(S.stations.map(s=>s.district))].sort();
-    const q=S.cq.trim();
-    let list=S.stations.filter(s=>q? s.name.includes(q) : s.district===S.cdist);
-    // 有問題的排前面：整站無服務 → 沒車／沒位 → 快見底 → 正常
-    const rank=s=>(!s.act?4:(s.b===0&&s.d===0)?0:(s.b===0||s.d===0)?1:(s.b<=2||s.d<=2)?2:3);
-    list.sort((a,b)=>rank(a)-rank(b)||b.cap-a.cap);
-    const cards=list.slice(0,18).map(s=>{
-      const off=s.b===0&&s.d===0, note=
-        !s.act?['var(--dim)','官方標示暫停營運']:
-        off?['var(--purple)','整站無服務：借還同時為 0，通常是設備離線，不是缺車']:
-        s.b===0?['var(--warn)','此刻沒有車可借，點開看 500 公尺內哪一站有']:
-        s.d===0?['var(--bad)','此刻沒有位可還，點開看 500 公尺內哪一站可以']:
-        (s.b<=2||s.d<=2)?['var(--warn)','快見底了，出發前再確認一次']:null;
-      return `<div class="qcard" data-sid="${s.sid}" style="cursor:pointer">
-        <div class="top"><div style="min-width:0"><b style="font-size:13px">${esc(s.name)}</b>
-          <div class="xs dim" style="margin-top:2px">${esc(s.district)}${s.prof?'・'+esc(s.prof):''}</div></div>
-          <div style="text-align:right;flex-shrink:0">
-            <div class="mono" style="font-size:15px;color:${s.b===0?'var(--bad)':'var(--ok)'}">${s.b}</div>
-            <div class="xs dim">可借</div></div>
-          <div style="text-align:right;flex-shrink:0">
-            <div class="mono" style="font-size:15px;color:${s.d===0?'var(--bad)':'var(--ok)'}">${s.d}</div>
-            <div class="xs dim">可還</div></div></div>
-        ${note?`<div class="xs" style="color:${note[0]};margin-top:7px">${note[1]}</div>`:''}
-      </div>`;}).join('');
-    body=`<div style="display:flex;gap:6px;margin-bottom:10px">
-        <select id="cdist" style="flex:1;background:var(--bg2);border:1px solid var(--line2);color:var(--fg);
-          border-radius:9px;padding:8px;font-size:12px">
-          ${dists.map(d=>`<option ${d===S.cdist?'selected':''}>${esc(d)}</option>`).join('')}</select>
-        <input id="cq" placeholder="搜尋站名" value="${esc(S.cq)}" style="flex:1;background:var(--bg2);
-          border:1px solid var(--line2);color:var(--fg);border-radius:9px;padding:8px;font-size:12px">
-      </div>
-      <p class="xs mute" style="margin:0 0 11px;line-height:1.7">
-        ${q?`符合「${esc(q)}」的站 ${list.length} 個`:`${esc(S.cdist)} 共 ${list.length} 站`}，有狀況的排在前面。
-        全市此刻 ${S.live.stats.no_bike} 站沒車、${S.live.stats.no_dock} 站沒位。出發前先看，不要到現場才發現。</p>
-      ${cards||'<p class="sm dim">找不到符合的站</p>'}`;
-  }
-  else if(S.ptab==='quest'){
-    if(!rw) body='<p class="sm mute">載入中…</p>';
-    else{
-      const qs=rw.quests.slice(0,12).map((q,i)=>`<div class="qcard">
-        <div class="top"><div><b style="font-size:13px">${esc(q.name)}</b>
-          <div class="xs dim" style="margin-top:2px">${esc(q.district)}</div>
-          <div class="xs" style="margin-top:5px;color:var(--info)">${esc(q.kind)}</div></div>
-          <div style="text-align:right">
-            <div class="mult">${q.points}<span style="font-size:12px"> 元</span>
-              <small>×${q.multiplier} 加碼</small></div></div></div>
-        <div class="xs dim" style="margin-top:8px">還差 <b style="color:var(--warn)">${q.remaining_to_clear}</b> 輛就解除加碼
-          ${q.hist_risk_60!=null?`・歷史同時段一小時後風險 ${q.hist_risk_60}%`:''}</div>
-        <button class="btn" data-claim="${q.sid}" data-kind="${esc(q.kind)}">接下任務</button></div>`).join('');
-      body=`<div class="card" style="background:linear-gradient(135deg,rgba(245,196,81,.14),rgba(242,97,91,.08));
-          border-color:rgba(245,196,81,.3);margin-bottom:12px">
-          <div class="sm" style="color:var(--warn);font-weight:600">此刻有 ${rw.quest_total} 個加碼任務</div>
-          <div style="font-size:12px;margin-top:6px">最高一單 
-            <b style="color:var(--warn);font-size:19px">${rw.quests[0]?rw.quests[0].points:0}</b> 元
-            <span class="dim">・騎一趟就有</span></div>
-          <div class="xs dim" style="margin-top:6px;line-height:1.7">
-            <b>1 點 = 1 元</b>。價格跟著缺口走：越缺、越急、要多走幾步，倍率越高，單次上限 25 元。
-            不缺的站不會有加碼——這樣才不會「該去的沒人去、不缺的一直有人領」。</div></div>
-        ${qs}
-        <div class="card" style="margin-top:4px"><div class="sm" style="font-weight:600;margin-bottom:6px">規則</div>
-          <div class="xs dim" style="line-height:1.8">${rw.rules.formula}<br>
-            ${rw.rules.guards.join('・')}<br><br>${esc(rw.rules.baseline)}</div>
-          <div class="xs dim" style="margin-top:9px;border-top:1px dashed var(--line);padding-top:8px">
-            ${esc(rw.caveat)}</div></div>`;
-    }
-  }
-  else{
-    if(!rw) body='<p class="sm mute">載入中…</p>';
-    else{
-      const w=rw.wallet, inCard=w.stamps_in_card||0;
-      const stamps=Array.from({length:10},(_,i)=>
-        `<div class="stamp ${i<inCard?'on':''}">${i<inCard?'🚲':''}</div>`).join('');
-      const days=['一','二','三','四','五','六','日'].map((d,i)=>
-        `<i class="${i<w.streak_days?'on':''}">${d}</i>`).join('');
-      const cat=w.catalog.map(c=>{
-        const got=w.points>=c.tier;
-        return `<div style="display:flex;justify-content:space-between;align-items:center;
-          padding:7px 0;border-bottom:1px solid rgba(34,44,61,.5)">
-          <div><div class="sm" style="color:${got?'var(--ok)':'var(--mute)'}">${esc(c.title)}</div>
-            <div class="xs dim">${esc(c.note)}</div></div>
-          <div class="mono ${got?'':'dim'}" style="font-size:12px;white-space:nowrap">
-            ${got?'可兌換':c.tier+' 元'}</div></div>`;}).join('');
-      body=`<div class="card" style="background:linear-gradient(135deg,rgba(56,211,159,.16),rgba(90,169,247,.07));
-          border-color:rgba(56,211,159,.3)">
-          <div class="xs dim">目前累積</div>
-          <div style="font-size:34px;font-weight:700;line-height:1.1;margin:3px 0">${w.points}
-            <span style="font-size:15px;font-weight:400;color:var(--mute)">元</span></div>
-          <div class="sm" style="color:var(--ok)">${esc(w.level)}
-            <span class="dim">・再 ${Math.max(0,w.next_level_at-w.stamps)} 枚章升級</span></div>
-          ${w.next_reward?`<div class="xs" style="margin-top:9px;color:var(--warn)">
-            再 <b>${w.points_to_next}</b> 元就能換「${esc(w.next_reward.title)}」</div>`:''}
-        </div>
-        <div class="card" style="margin-top:11px">
-          <div class="sm" style="font-weight:600">接力章　${inCard}／10
-            ${w.cards_completed?`<span class="pill ok" style="margin-left:6px">已集滿 ${w.cards_completed} 張</span>`:''}</div>
-          <div class="xs dim" style="margin-top:3px">集滿 10 枚換 50 元券。
-            ${w.seeded?`註冊就先送你 ${w.seeded} 枚，不用從零開始。`:''}</div>
-          <div class="stampgrid">${stamps}</div></div>
-        <div class="card" style="margin-top:11px">
-          <div class="sm" style="font-weight:600">連續天數　${w.streak_days} 天</div>
-          <div class="xs dim" style="margin-top:3px">
-            ${w.streak_days_to_milestone!=null
-              ? `再 <b style="color:var(--warn)">${w.streak_days_to_milestone}</b> 天就到 ${w.streak_next_milestone} 天門檻，可拿一次加碼週。斷了就重來。`
-              : '已達最高門檻。'}</div>
-          <div class="streak">${days}</div></div>
-        <div class="card" style="margin-top:11px">
-          <div class="sm" style="font-weight:600">可以換什麼</div>
-          <div class="xs dim" style="margin:4px 0 6px">點數看得到能換什麼，才會想繼續賺</div>
-          ${cat}
-          <div class="xs dim" style="margin-top:9px">全部為示範品項，合作商家尚未洽談，不代表可實際兌換。</div></div>
-        <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">本週任務</div>
-          <div id="wk" class="xs dim" style="margin-top:6px">載入中…</div></div>
-        <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">團體賽</div>
-          <div id="lb" class="xs dim" style="margin-top:6px">載入中…</div></div>
-        <div class="card" style="margin-top:11px">
-          <div class="sm" style="font-weight:600">今日加碼</div>
-          <div class="xs dim" style="margin-top:6px;line-height:1.8">
-            此刻有 <b style="color:var(--warn)">${rw.quest_total}</b> 個加碼任務，
-            今日已發出 <b>${rw.issued_today_points}</b> 元。<br>
-            單站每半小時的加碼預算上限＝該站缺口 × 25 元；補滿就自動解除。</div></div>
-        ${impactCard(rw.impact)}`;
-    }
-  }
-  const tab=(id,ic,lab)=>`<button class="${S.ptab===id?'on':''}" data-pt="${id}">
-    <span class="ic">${ic}</span>${lab}</button>`;
+  if(S.cnav) body=navBody();
+  else if(S.ptab==='plan') body=planBody();
+  else if(S.ptab==='nearby') body=nearbyBody();
+  else if(S.ptab==='quest') body=questBody();
+  else body=scoreBody();
+  const taken=S.cquests?S.cquests.taken_count:0;
   return `<div class="split">
     <div class="phonewrap"><div class="phone"><div class="pscreen">
       <div class="ptop"><div style="display:flex;justify-content:space-between;align-items:center">
@@ -1575,42 +1443,316 @@ function citizenView(){
           <div class="xs dim" style="margin-top:2px">官方即時・${new Date().toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})}</div></div>
         <span class="tag live">即時</span></div></div>
       <div class="pbody" id="pbody">${body}</div>
-      <div class="ptabs">${tab('plan','🧭','規劃')}${tab('nearby','📍','站況')}${tab('quest','⚡','加碼')}${tab('wallet','🎁','獎勵')}</div>
+      <div class="ptabs">${tab('plan','🧭','規劃')}${tab('nearby','📍','站況')}
+        ${tab('quest','⚡','接案',taken)}${tab('wallet','🏆','積分板')}</div>
     </div></div></div>
-    <div>
-      ${stationPanel()}
-      <div class="card" style="margin-top:14px"><h3>為什麼分流值得做</h3>
-        <p class="sub">我們算過：零車發生的當下，<b>97.6%</b> 的情況在 500 公尺內還有一站有車；
-          零位時也有 <b>96.8%</b> 找得到可還的站。
-          也就是說痛點不是「沒有替代站」，而是<b>使用者出發前不知道、到現場才發現</b>。
-          分流的物理條件幾乎總是成立，缺的是資訊與誘因。</p>
-        <p class="sub">官方友愛接力已經驗證過效果，但固定 5 元的問題是「該去的地方沒人去」。
-          改成跟著缺口浮動，並加上集點、連續天數與團體賽，才會有人每天回來。</p></div>
-      <div class="card" style="margin-top:14px"><h3>誠實說明</h3>
-        <p class="sub">推播：本頁的通知是<b>應用內示意</b>，不是手機背景推播。
-          Service Worker 目前只有快取，沒有 push 與 notificationclick，關掉分頁不會收到任何東西。<br>
-          獎勵：點數、優惠券、合作商家與排行榜對手都是<b>示範</b>，兌付尚未取得，不代表可實際兌換。<br>
-          回報：借不到不等於車壞掉。我們只問可觀察到的症狀，不要求使用者判斷根因，
-          也不會因為照片看不出異常就判定車輛正常。</p></div>
-    </div></div>`;
+    <div>${citizenSide()}</div></div>`;
 }
 
-function histOnly(){
-  const a=S.ana; if(!a) return '';
-  const wd=a.curves.weekday;
-  const hours=wd.hours.map(h=>String(h).padStart(2,'0'));
-  const s1=[{name:'無車可借',color:'#f5c451',data:wd.no_bike},{name:'無位可還',color:'#f2615b',data:wd.no_dock}];
-  const am=a.mrt_compare.am, pm=a.mrt_compare.pm;
-  return `<div class="grid g2">
-    <div class="card"><h3>平日全市失效曲線 <span class="tag hist">歷史</span></h3>
-      <p class="sub">日間 06–23 時，各小時的快照比例（2026-01~06）</p>${lineChart(hours,s1)}${legendDots(s1)}</div>
-    <div class="card"><h3>同一趟通勤，早晚各壞一次 <span class="tag hist">歷史</span></h3>
-      <p class="sub">起點與終點是兩種不同的失敗模式</p>
-      <table><tbody>
-        <tr><td>早峰 非捷運站 無車可借</td><td class="mono" style="color:var(--bad)">${am.non_mrt.no_bike}%</td></tr>
-        <tr><td>早峰 捷運站 無位可還</td><td class="mono" style="color:var(--bad)">${am.mrt.no_dock}%</td></tr>
-        <tr><td>晚峰 捷運站 無車可借</td><td class="mono" style="color:var(--bad)">${pm.mrt.no_bike}%</td></tr>
-      </tbody></table></div></div>`;
+function citizenSide(){
+  return `${stationPanel()}
+  <div class="card" style="margin-top:14px"><h3>為什麼分流值得做</h3>
+    <p class="sub">零車發生的當下，<b>97.6%</b> 的情況在 500 公尺內還有一站有車；
+      零位時也有 <b>96.8%</b> 找得到可還的站。痛點不是「沒有替代站」，
+      而是<b>使用者出發前不知道、到現場才發現</b>。分流的物理條件幾乎總是成立，缺的是資訊與誘因。</p></div>
+  <div class="card" style="margin-top:14px"><h3>誠實說明</h3>
+    <p class="sub"><b>個人化</b>：常用地點與查過的路線只存在你自己的瀏覽器，每次查詢才帶上來，
+      伺服器不保存也不認得你是誰。我們沒有你的實際借還紀錄——那是悠遊卡資料，我們拿不到。<br>
+      <b>路線</b>：來自 Amazon Location Service（Scooter 模式近似單車），不含等紅燈與找車位。<br>
+      <b>推播</b>：頁內提示不是手機背景推播，關掉分頁不會收到任何東西。<br>
+      <b>獎勵</b>：點數、優惠券、合作商家、排行榜對手都是示範，兌付尚未取得。<br>
+      <b>回報</b>：不會修改官方數字。單一回報只是一個人的觀察，多人回報同一件事才比較可信。</p></div>`;
+}
+
+/* ---------------- 規劃 */
+function planBody(){
+  if(!S.csetup) return setupBody();
+  const sg=S.csug;
+  const suggest=(sg&&sg.suggestions.length)?`
+    <div class="card" style="background:linear-gradient(135deg,rgba(90,169,247,.14),transparent);
+      border-color:rgba(90,169,247,.35);margin-bottom:11px">
+      <div style="display:flex;align-items:center;gap:7px">
+        <span style="font-size:15px">🔔</span>
+        <div class="sm" style="font-weight:600">${esc(sg.now.dow_label)} ${esc(sg.now.time)}　你這個時間通常會這樣騎</div></div>
+      <div style="margin-top:9px">${sg.suggestions.map(r=>`
+        <div class="qcard" style="margin-bottom:7px;cursor:pointer" data-sug="${r.from_sid}:${r.to_sid}">
+          <div class="top"><div style="min-width:0">
+            <b style="font-size:12.5px">${esc(r.from)}</b>
+            <span class="dim"> → </span><b style="font-size:12.5px">${esc(r.to)}</b>
+            <div class="xs dim" style="margin-top:3px">${esc(r.why)}</div></div>
+            <div style="text-align:right;flex-shrink:0">
+              <div class="mono" style="font-size:12px">借 <b style="color:${r.from_bikes===0?'var(--bad)':'var(--ok)'}">${r.from_bikes}</b></div>
+              <div class="mono xs dim">還 ${r.to_docks}</div></div></div>
+          ${r.alert?`<div class="xs" style="color:var(--warn);margin-top:6px">⚠ ${esc(r.alert)}</div>`:''}
+        </div>`).join('')}</div>
+      <div class="xs dim" style="margin-top:4px">${esc(sg.privacy)}</div>
+    </div>`
+    :`<div class="card" style="margin-bottom:11px"><div class="sm" style="font-weight:600">還沒有推薦</div>
+      <div class="xs dim" style="margin-top:5px;line-height:1.7">
+        查過幾次路線之後，這裡會依星期幾與時段推薦你常走的路。
+        也可以<button class="chip" id="csetupbtn" style="padding:3px 9px">設定常用地點</button>讓它立刻有東西。</div></div>`;
+
+  const box=(which,label,ph)=>{
+    const cur=which==='from'?S.cfrom:S.cto;
+    const q=which==='from'?S.cfq:S.ctq;
+    const res=which==='from'?S.cfres:S.ctres;
+    const open=S.cfocus===which&&res;
+    return `<div style="margin-bottom:9px">
+      <div class="xs dim" style="margin-bottom:4px">${label}</div>
+      <div style="position:relative">
+        <input class="cin" data-in="${which}" placeholder="${ph}" value="${esc(q)}"
+          style="width:100%;background:var(--bg);border:1px solid ${cur?'var(--ok)':'var(--line2)'};
+          color:var(--fg);border-radius:9px;padding:10px 11px;font-size:12.5px">
+        ${cur?`<div class="xs" style="color:var(--ok);margin-top:4px">✓ ${esc(cur.name)}
+          ${cur.bikes!=null?`（借 ${cur.bikes}／還 ${cur.docks}）`:''}</div>`:''}
+        ${open?`<div class="acbox">
+          ${res.stations.map(x=>`<div class="acrow" data-pick="${which}" data-sid="${x.sid}">
+            <div><b>${esc(x.name)}</b><div class="xs dim">${esc(x.district)}・${esc(x.address||'')}</div></div>
+            <div class="mono xs" style="text-align:right;flex-shrink:0">
+              <span style="color:${x.bikes===0?'var(--bad)':'var(--ok)'}">${x.bikes}</span>／${x.docks}</div></div>`).join('')}
+          ${res.places.map((p,i)=>`<div class="acrow" data-pickplace="${which}" data-pi="${i}">
+            <div><b>📍 ${esc(p.title)}</b>
+              <div class="xs dim">${p.near.length?`最近的站：${esc(p.near[0].name)}　走 ${p.near[0].walk_min} 分`:'附近 800 公尺內沒有站'}</div></div>
+            </div>`).join('')}
+          ${(!res.stations.length&&!res.places.length)?`<div class="acrow dim">找不到「${esc(q)}」</div>`:''}
+        </div>`:''}
+      </div></div>`;
+  };
+
+  const t=S.trip;
+  return `${suggest}
+    <div class="card" style="margin-bottom:11px">
+      <div class="sm" style="font-weight:600;margin-bottom:9px">要去哪裡</div>
+      ${box('from','從哪裡出發','打站名、地址或地標，例如「四維公園」')}
+      ${box('to','要去哪裡','打站名、地址或地標，例如「江子翠捷運站」')}
+      <button class="btn" id="cgo" ${(S.cfrom&&S.cto)?'':'disabled'}>
+        ${S.tripBusy?'規劃中…':'看方案'}</button>
+    </div>
+    ${t?(t.error?`<p class="sm" style="color:var(--bad)">${esc(t.error)}</p>`:tripCards(t)):''}`;
+}
+
+function setupBody(){
+  const opts=[...S.stations].filter(x=>x.act)
+    .sort((a,b)=>a.district.localeCompare(b.district,'zh-Hant')||a.name.localeCompare(b.name,'zh-Hant'))
+    .map(x=>`<option value="${x.sid}">${esc(x.district)}｜${esc(x.name)}</option>`).join('');
+  const row=(lab)=>`<div style="margin-bottom:9px">
+    <div class="xs dim" style="margin-bottom:4px">${lab}附近的站（可留空）</div>
+    <select data-place="${lab}" style="width:100%;background:var(--bg);border:1px solid var(--line2);
+      color:var(--fg);border-radius:9px;padding:9px;font-size:12px">
+      <option value="">未設定</option>${opts}</select></div>`;
+  return `<div class="card">
+    <div class="sm" style="font-weight:600">先設定一次，之後就會自動推薦</div>
+    <div class="xs dim" style="margin:6px 0 11px;line-height:1.75">
+      我們沒有你的借還紀錄（那是悠遊卡資料，拿不到），所以第一次要你自己說常去哪。
+      之後你查過的路線會自動累積，推薦會越來越準。<br>
+      <b>這些只存在你自己的瀏覽器，不會上傳。</b></div>
+    ${row('家')}${row('公司')}${row('學校')}
+    <button class="btn" id="csave">存起來</button>
+    <button class="btn ghost" style="margin-top:7px" id="cskip">先跳過，我自己打地點</button>
+  </div>`;
+}
+
+function tripCards(t){
+  const card=(p,i)=>{
+    const tone=p.kind==='最快'?'var(--info)':p.kind==='較穩'?'var(--ok)':'var(--warn)';
+    return `<div class="qcard" style="border-color:${i===0?tone:'var(--line)'}">
+      <div class="top"><div style="min-width:0">
+        <span class="pill" style="color:${tone};border-color:${tone}">${esc(p.kind)}</span>
+        <div style="margin-top:6px"><b style="font-size:13px">${esc(p.station)}</b></div>
+        <div class="xs dim" style="margin-top:3px">騎 ${p.ride_min} 分${p.walk_min?`＋走 ${p.walk_min} 分`:''}
+          ${p.route_source?'・實際路線':''}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="mono" style="font-size:19px">${p.total_min}<span class="xs dim"> 分</span></div>
+        ${p.points?`<div class="mono" style="color:var(--warn);font-size:14px;font-weight:700">＋${p.points} 元</div>`:''}
+      </div></div>
+      <div style="display:flex;gap:10px;margin-top:9px;font-size:11px">
+        <div style="flex:1;background:var(--bg);border-radius:7px;padding:6px 8px">
+          <div class="dim">到站可還</div>
+          <div class="mono" style="font-size:14px;color:${p.docks_now===0?'var(--bad)':'var(--ok)'}">${p.docks_now}</div></div>
+        ${p.risk!=null?`<div style="flex:1;background:var(--bg);border-radius:7px;padding:6px 8px">
+          <div class="dim">無位機率</div>
+          <div class="mono" style="font-size:14px;color:${p.risk>=30?'var(--bad)':'var(--ok)'}">${p.risk}%</div></div>`:''}
+        ${p.deficit?`<div style="flex:1;background:var(--bg);border-radius:7px;padding:6px 8px">
+          <div class="dim">還差</div><div class="mono" style="font-size:14px;color:var(--warn)">${p.deficit} 台</div></div>`:''}
+      </div>
+      <div class="xs" style="margin-top:8px;color:var(--mute);line-height:1.6">${esc(p.note)}</div>
+      <button class="btn" data-navto="${p.station_sid}" style="margin-top:9px">選這個・開始導航</button>
+    </div>`;};
+  return `<div class="card" style="margin-bottom:9px;padding:11px">
+      <div class="sm"><b>${esc(t.from.name)}</b> 現在可借
+        <b style="color:${t.from.bikes===0?'var(--bad)':'var(--ok)'}">${t.from.bikes}</b> 台
+        ${t.from.electric?`<span class="dim">（電輔 ${t.from.electric}）</span>`:''}</div>
+      <div class="xs dim" style="margin-top:4px">${esc(t.nav_note)}
+        ${t.nav?`・實際路程 ${(t.nav.dist_m/1000).toFixed(1)} 公里`:''}</div></div>
+    ${t.plans.map(card).join('')}
+    <div class="card" style="margin-top:4px"><div class="xs dim" style="line-height:1.8">
+      比騎機車少排 <b style="color:var(--ok)">${t.compare.co2_saved_g_vs_scooter}</b> 公克 CO₂・
+      一般車前 ${t.compare.free_minutes} 分鐘免費（以官方公告為準）<br>${esc(t.caveat)}</div></div>`;
+}
+
+/* ---------------- 導航 */
+function navBody(){
+  const t=S.trip, sid=S.cnav;
+  const p=t?t.plans.find(x=>x.station_sid===sid):null;
+  const nav=t?t.nav:null;
+  const dest=S.stations.find(x=>x.sid===sid);
+  return `<div class="card" style="margin-bottom:11px;background:linear-gradient(135deg,rgba(56,211,159,.14),transparent);
+      border-color:rgba(56,211,159,.35)">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:9px">
+      <div><div class="xs dim">正在前往</div>
+        <b style="font-size:15px">${esc(dest?dest.name:(p?p.station:''))}</b>
+        <div class="xs dim" style="margin-top:4px">${p?`${p.total_min} 分鐘`:''}
+          ${dest?`・到站可還 ${dest.d} 位`:''}</div></div>
+      <button class="chip" id="cnavback">返回</button></div>
+    ${t&&t.maps_url?`<a class="btn" href="${t.maps_url}" target="_blank" rel="noopener"
+      style="margin-top:10px;text-decoration:none;display:block">用地圖 App 導航（語音・重新規劃）</a>`:''}
+  </div>
+  ${nav&&nav.steps.length?`<div class="card" style="margin-bottom:11px">
+    <div class="sm" style="font-weight:600;margin-bottom:8px">路線指示</div>
+    ${nav.steps.map((s,i)=>`<div style="display:flex;gap:9px;padding:7px 0;
+      border-bottom:1px solid rgba(34,44,61,.5)">
+      <div class="mono dim" style="width:18px;flex-shrink:0">${i+1}</div>
+      <div style="flex:1"><div style="font-size:12.5px">${esc(s.text)}</div>
+        ${s.dist_m?`<div class="xs dim" style="margin-top:2px">${s.dist_m} 公尺</div>`:''}</div></div>`).join('')}
+    <div class="xs dim" style="margin-top:8px">${esc(nav.source)}</div></div>`
+    :'<div class="card" style="margin-bottom:11px"><div class="xs dim">取不到逐段指示，請用上方的地圖 App。</div></div>'}
+  <div class="card">
+    <div class="sm" style="font-weight:600">到了之後</div>
+    <div class="xs dim" style="margin:5px 0 10px;line-height:1.7">
+      現場跟畫面上不一樣嗎？回報會讓下一個人少走冤枉路。<br>
+      官方顯示的是名目庫存，壞車也算在裡面——這一塊只有你看得到。</div>
+    ${Object.entries({fewer_than_official:'實際比官方少',broken_bike:'有壞車',
+      dock_problem:'車柱有問題',all_good:'現場正常'}).map(([k,v])=>
+      `<button class="act" data-crowd="${sid}" data-ck="${k}" style="margin:0 5px 6px 0">${v}</button>`).join('')}
+  </div>`;
+}
+
+/* ---------------- 站況 */
+function nearbyBody(){
+  const pins=S.cpins.map(sid=>S.stations.find(x=>x.sid===sid)).filter(Boolean);
+  const q=S.cq||'';
+  let list;
+  if(q.trim()) list=S.stations.filter(x=>x.name.includes(q.trim())||x.district.includes(q.trim()));
+  else list=pins.length?pins:[...S.stations].filter(x=>x.act).slice(0,12);
+  const card=x=>{
+    const pinned=S.cpins.includes(x.sid);
+    const off=x.b===0&&x.d===0;
+    return `<div class="qcard" data-sid="${x.sid}" style="cursor:pointer">
+      <div class="top"><div style="min-width:0">
+        <b style="font-size:13px">${esc(x.name)}</b>
+        <div class="xs dim" style="margin-top:2px">${esc(x.district)}${x.prof?'・'+esc(x.prof):''}</div></div>
+        <div style="text-align:right;flex-shrink:0">
+          <div class="mono" style="font-size:15px;color:${x.b===0?'var(--bad)':'var(--ok)'}">${x.b}</div>
+          <div class="xs dim">可借</div></div>
+        <div style="text-align:right;flex-shrink:0">
+          <div class="mono" style="font-size:15px;color:${x.d===0?'var(--bad)':'var(--ok)'}">${x.d}</div>
+          <div class="xs dim">可還</div></div>
+        <button class="chip" data-pin="${x.sid}" style="padding:4px 8px;flex-shrink:0"
+          title="釘選">${pinned?'★':'☆'}</button></div>
+      ${off?'<div class="xs" style="color:var(--purple);margin-top:6px">整站無服務：借還同時為 0，通常是設備離線</div>'
+        :x.b===0?'<div class="xs" style="color:var(--warn);margin-top:6px">此刻沒有車可借</div>'
+        :x.d===0?'<div class="xs" style="color:var(--bad);margin-top:6px">此刻沒有位可還</div>':''}
+    </div>`;};
+  return `<input id="cnq" placeholder="搜尋站名或行政區" value="${esc(q)}"
+      style="width:100%;background:var(--bg);border:1px solid var(--line2);color:var(--fg);
+      border-radius:9px;padding:10px;font-size:12.5px;margin-bottom:10px">
+    ${!q.trim()?`<div class="xs mute" style="margin-bottom:9px">
+      ${pins.length?`你釘選的 ${pins.length} 個站。按 ★ 可以取消。`
+        :'按站點右邊的 ☆ 把常去的站釘起來，之後一打開就看得到它們的即時車量。'}</div>`:''}
+    ${list.map(card).join('')||'<p class="sm dim">找不到符合的站</p>'}`;
+}
+
+/* ---------------- 接案 */
+function questBody(){
+  const d=S.cquests;
+  if(!d) return '<p class="sm mute">載入中…</p>';
+  const card=q=>{
+    const st=q.state;
+    return `<div class="qcard" style="border-color:${st==='taken'?'var(--warn)':'var(--line)'}">
+      <div class="top"><div style="min-width:0">
+        <b style="font-size:13px">${esc(q.name)}</b>
+        <div class="xs dim" style="margin-top:2px">${esc(q.district)}
+          ${q.dist_m!=null?`・${(q.dist_m/1000).toFixed(1)} 公里・騎 ${q.ride_min} 分`:''}</div>
+        <div class="xs" style="margin-top:5px;color:var(--info)">${esc(q.kind)}</div></div>
+        <div style="text-align:right;flex-shrink:0">
+          <div class="mult">${q.points}<span style="font-size:12px"> 元</span>
+            <small>×${q.multiplier} 加碼</small></div></div></div>
+      <div class="xs dim" style="margin-top:8px">還差 <b style="color:var(--warn)">${q.remaining_to_clear}</b> 台就解除
+        ${q.hist_risk_60!=null?`・歷史同時段一小時後風險 ${q.hist_risk_60}%`:''}</div>
+      ${st==='open'?`<button class="btn" data-qa="${q.sid}" data-qk="${esc(q.kind)}"
+          style="margin-top:9px">接下這個案子</button>`
+        :st==='taken'?`<div style="display:flex;gap:7px;margin-top:9px">
+          <button class="btn" style="flex:1" data-qc="${q.sid}" data-qk="${esc(q.kind)}">我做完了</button>
+          <span class="chip" style="flex:0 0 auto">保留 ${q.minutes_left} 分</span></div>`
+        :st==='done'?'<div class="xs" style="color:var(--ok);margin-top:9px">✓ 已完成</div>'
+        :'<div class="xs dim" style="margin-top:9px">保留時間已過，可以重新接</div>'}
+    </div>`;};
+  return `<div class="card" style="background:linear-gradient(135deg,rgba(245,196,81,.14),rgba(242,97,91,.08));
+      border-color:rgba(245,196,81,.3);margin-bottom:11px">
+      <div class="sm" style="color:var(--warn);font-weight:600">小幫手接案區</div>
+      <div class="xs dim" style="margin-top:5px;line-height:1.75">
+        政府與微笑單車現在缺人手的地方都在這裡。接下案子、騎過去、完成，就能拿加碼。
+        <b>1 點 = 1 元</b>，價格跟著缺口走，補滿就自動解除。<br>
+        目前 ${d.quests.length} 個案子，你手上有 ${d.taken_count} 個。</div></div>
+    ${d.quests.map(card).join('')||'<p class="sm dim">目前沒有缺口，所以沒有加碼案子。這是好事。</p>'}
+    <div class="card" style="margin-top:4px"><div class="xs dim" style="line-height:1.8">
+      ${esc(d.rules.formula)}<br>${d.rules.guards.join('・')}<br><br>${esc(d.caveat)}</div></div>`;
+}
+
+/* ---------------- 積分板 */
+function scoreBody(){
+  const rw=S.rw;
+  if(!rw) return '<p class="sm mute">載入中…</p>';
+  const w=rw.wallet, inCard=w.stamps_in_card||0;
+  const stamps=Array.from({length:10},(_,i)=>
+    `<div class="stamp ${i<inCard?'on':''}">${i<inCard?'🚲':''}</div>`).join('');
+  const days=['一','二','三','四','五','六','日'].map((d,i)=>
+    `<i class="${i<w.streak_days?'on':''}">${d}</i>`).join('');
+  const cat=w.catalog.map(c=>{
+    const got=w.points>=c.tier;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;
+      padding:8px 0;border-bottom:1px solid rgba(34,44,61,.5)">
+      <div><div class="sm" style="color:${got?'var(--ok)':'var(--mute)'}">${esc(c.title)}</div>
+        <div class="xs dim">${esc(c.note)}</div></div>
+      ${got?`<button class="chip" data-redeem="${c.tier}" style="color:var(--ok);border-color:var(--ok)">兌換</button>`
+        :`<div class="mono xs dim">${c.tier} 元</div>`}</div>`;}).join('');
+  return `<div class="card" style="background:linear-gradient(135deg,rgba(56,211,159,.16),rgba(90,169,247,.07));
+      border-color:rgba(56,211,159,.3)">
+      <div class="xs dim">我的積分</div>
+      <div style="font-size:36px;font-weight:700;line-height:1.1;margin:3px 0">${w.points}
+        <span style="font-size:15px;font-weight:400;color:var(--mute)">元</span></div>
+      <div class="sm" style="color:var(--ok)">${esc(w.level)}
+        <span class="dim">・再 ${Math.max(0,w.next_level_at-w.stamps)} 枚章升級</span></div>
+      ${w.next_reward?`<div class="xs" style="margin-top:9px;color:var(--warn)">
+        再 <b>${w.points_to_next}</b> 元就能換「${esc(w.next_reward.title)}」</div>`:''}
+      <div style="display:flex;gap:7px;margin-top:11px">
+        <button class="btn" style="flex:1" id="cshare">分享我的成績</button>
+        <button class="btn ghost" style="flex:0 0 100px" id="cinvite">邀朋友</button></div>
+    </div>
+    <div class="card" style="margin-top:11px">
+      <div class="sm" style="font-weight:600">接力章　${inCard}／10
+        ${w.cards_completed?`<span class="pill ok" style="margin-left:6px">已集滿 ${w.cards_completed} 張</span>`:''}</div>
+      <div class="xs dim" style="margin-top:3px">集滿 10 枚換 50 元券。
+        ${w.seeded?`註冊就先送你 ${w.seeded} 枚，不用從零開始。`:''}</div>
+      <div class="stampgrid">${stamps}</div></div>
+    <div class="card" style="margin-top:11px">
+      <div class="sm" style="font-weight:600">連續天數　${w.streak_days} 天</div>
+      <div class="xs dim" style="margin-top:3px">
+        ${w.streak_days_to_milestone!=null
+          ? `再 <b style="color:var(--warn)">${w.streak_days_to_milestone}</b> 天就到 ${w.streak_next_milestone} 天門檻，可拿一次加碼週。斷了就重來。`
+          : '已達最高門檻。'}</div>
+      <div class="streak">${days}</div></div>
+    <div class="card" style="margin-top:11px">
+      <div class="sm" style="font-weight:600">可以換什麼</div>
+      <div class="xs dim" style="margin:4px 0 6px">點數看得到能換什麼，才會想繼續賺</div>
+      ${cat}
+      <div class="xs dim" style="margin-top:9px">全部為示範品項，合作商家尚未洽談，不代表可實際兌換。</div></div>
+    <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">本週任務</div>
+      <div id="wk" class="xs dim" style="margin-top:6px">載入中…</div></div>
+    <div class="card" style="margin-top:11px"><div class="sm" style="font-weight:600">團體賽</div>
+      <div id="lb" class="xs dim" style="margin-top:6px">載入中…</div></div>
+    ${impactCard(rw.impact)}`;
 }
 
 /* ============================================================ 資料與方法 */
@@ -1791,11 +1933,81 @@ function render(){
     catch(e){ S.trip={error:'規劃失敗：'+e.message}; }
     S.tripBusy=false; render();
   };
+  // 民眾端
+  const csb=$('#csetupbtn'); if(csb) csb.onclick=()=>{S.csetup=false;render();};
+  const csk=$('#cskip'); if(csk) csk.onclick=()=>{S.csetup=true;LS.set('setup',true);render();};
+  const csv=$('#csave'); if(csv) csv.onclick=()=>{
+    const ps=[];
+    $$('[data-place]').forEach(el=>{ if(el.value) ps.push({label:el.dataset.place,sid:+el.value}); });
+    S.cplaces=ps; LS.set('places',ps); S.csetup=true; LS.set('setup',true);
+    render(); loadSuggest();
+  };
+  $$('[data-sug]').forEach(el=>el.onclick=()=>{
+    const [f,t]=el.dataset.sug.split(':').map(Number);
+    const fs=S.stations.find(x=>x.sid===f), ts=S.stations.find(x=>x.sid===t);
+    S.cfrom={sid:f,name:fs?fs.name:'',bikes:fs?fs.b:null,docks:fs?fs.d:null};
+    S.cto={sid:t,name:ts?ts.name:'',bikes:ts?ts.b:null,docks:ts?ts.d:null};
+    S.cfq=S.cfrom.name; S.ctq=S.cto.name; planTrip();
+  });
+  $$('.cin').forEach(el=>{
+    el.onfocus=()=>{S.cfocus=el.dataset.in;};
+    el.oninput=()=>{
+      const w=el.dataset.in, v=el.value;
+      if(w==='from'){S.cfq=v; S.cfrom=null;} else {S.ctq=v; S.cto=null;}
+      clearTimeout(S._act);
+      S._act=setTimeout(async()=>{
+        if(!v.trim()){ if(w==='from')S.cfres=null; else S.ctres=null; render(); return; }
+        try{
+          const r=await api('/api/v2/citizen/geosearch?q='+encodeURIComponent(v.trim()));
+          if(w==='from')S.cfres=r; else S.ctres=r;
+        }catch(e){}
+        S.cfocus=w; render();
+        const n=document.querySelector(`.cin[data-in="${w}"]`);
+        if(n){n.focus();n.setSelectionRange(n.value.length,n.value.length);}
+      },300);
+    };
+  });
+  $$('[data-pick]').forEach(el=>el.onclick=()=>{
+    const w=el.dataset.pick, sid=+el.dataset.sid;
+    const res=w==='from'?S.cfres:S.ctres;
+    const x=res.stations.find(z=>z.sid===sid);
+    const v={sid,name:x.name,bikes:x.bikes,docks:x.docks};
+    if(w==='from'){S.cfrom=v;S.cfq=x.name;S.cfres=null;} else {S.cto=v;S.ctq=x.name;S.ctres=null;}
+    S.cfocus=null; render();
+  });
+  $$('[data-pickplace]').forEach(el=>el.onclick=()=>{
+    const w=el.dataset.pickplace, res=w==='from'?S.cfres:S.ctres;
+    const p=res.places[+el.dataset.pi];
+    if(!p.near.length){ toast(`「${p.title}」800 公尺內沒有 YouBike 站，換一個地點試試。`); return; }
+    const n=p.near[0];
+    const v={sid:n.sid,name:n.name,bikes:n.bikes,docks:n.docks,via:p.title};
+    if(w==='from'){S.cfrom=v;S.cfq=p.title;S.cfres=null;} else {S.cto=v;S.ctq=p.title;S.ctres=null;}
+    S.cfocus=null; render();
+    toast(`「${p.title}」最近的站是 ${n.name}，走 ${n.walk_min} 分鐘。`);
+  });
+  const cg=$('#cgo'); if(cg) cg.onclick=()=>planTrip();
+  $$('[data-navto]').forEach(b=>b.onclick=()=>{S.cnav=+b.dataset.navto;render();});
+  const cb=$('#cnavback'); if(cb) cb.onclick=()=>{S.cnav=false;render();};
+  $$('[data-crowd]').forEach(b=>b.onclick=()=>crowdReport(+b.dataset.crowd,b.dataset.ck));
+  const cnq=$('#cnq'); if(cnq) cnq.oninput=()=>{S.cq=cnq.value;render();
+    const n=$('#cnq'); if(n){n.focus();n.setSelectionRange(n.value.length,n.value.length);}};
+  $$('[data-pin]').forEach(b=>b.onclick=e=>{
+    e.stopPropagation();
+    const sid=+b.dataset.pin;
+    S.cpins=S.cpins.includes(sid)?S.cpins.filter(x=>x!==sid):[...S.cpins,sid];
+    LS.set('pins',S.cpins); render();});
+  $$('[data-qa]').forEach(b=>b.onclick=()=>questAct(b,'accept'));
+  $$('[data-qc]').forEach(b=>b.onclick=()=>questAct(b,'complete'));
+  const sh=$('#cshare'); if(sh) sh.onclick=()=>shareScore();
+  const iv=$('#cinvite'); if(iv) iv.onclick=()=>toast('邀請連結已複製（示範）：https://ntpc-youbike.demo/invite/ABC123　朋友用你的連結註冊，兩邊各得 20 元。合作與兌付尚未取得，僅為示意。');
+  $$('[data-redeem]').forEach(b=>b.onclick=()=>toast(`兌換流程為示範，尚未與商家介接——不會真的扣除你的 ${b.dataset.redeem} 元，也不會產生優惠券。`));
+
   const cd=$('#cdist'); if(cd) cd.onchange=()=>{S.cdist=cd.value;S.cq='';render();};
   const cq=$('#cq'); if(cq){ cq.oninput=()=>{S.cq=cq.value;render();
       const n=$('#cq'); if(n){n.focus();n.setSelectionRange(n.value.length,n.value.length);} }; }
-  $$('[data-pt]').forEach(b=>b.onclick=()=>{S.ptab=b.dataset.pt;render();
-    if(S.ptab==='wallet')loadWallet();});
+  $$('[data-pt]').forEach(b=>b.onclick=()=>{S.ptab=b.dataset.pt;S.cnav=false;render();
+    if(S.ptab==='wallet')loadWallet();
+    if(S.ptab==='quest')loadQuests();});
   $$('[data-claim]').forEach(b=>b.onclick=()=>claim(b));
 
   // 微笑單車端分頁
@@ -1895,6 +2107,65 @@ function render(){
     }
   });
   if(S.view==='citizen'&&S.ptab==='wallet')loadWallet();
+}
+async function planTrip(){
+  if(!S.cfrom||!S.cto) return;
+  if(S.cfrom.sid===S.cto.sid){ S.trip={error:'起點與終點是同一站。借還同站不算分流，也不會有加碼。'}; render(); return; }
+  S.tripBusy=true; S.cnav=false; render();
+  try{
+    S.trip=await api(`/api/v2/trip?from_sid=${S.cfrom.sid}&to_sid=${S.cto.sid}`);
+    rememberTrip(S.cfrom.sid,S.cto.sid);
+    loadSuggest();
+  }catch(e){ S.trip={error:'規劃失敗：'+e.message}; }
+  S.tripBusy=false; render();
+}
+async function crowdReport(sid,kind){
+  let actual=null;
+  if(kind==='fewer_than_official'||kind==='more_than_official'){
+    const v=prompt('現場實際大約有幾台可以借？');
+    if(v===null) return;
+    actual=parseInt(v,10); if(isNaN(actual)) actual=null;
+  }
+  try{
+    const r=await api('/api/v2/citizen/report',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({sid,kind,actual_bikes:actual,
+        request_id:'cr'+sid+kind+Date.now()})});
+    toast(`已回報：官方顯示 ${r.report.official_bikes} 台`
+      +(r.report.actual_bikes!=null?`，你看到 ${r.report.actual_bikes} 台`:'')
+      +`。一小時內這一站有 ${r.reports_last_hour} 則回報。${r.caveat}`);
+  }catch(e){ toast('回報失敗：'+e.message); }
+}
+async function loadQuests(){
+  const near=S.cfrom?('?near_sid='+S.cfrom.sid):'';
+  try{ S.cquests=await api('/api/v2/citizen/quests'+near); }catch(e){ S.cquests=null; }
+  if(S.view==='citizen') render();
+}
+async function questAct(btn,what){
+  const sid=+(btn.dataset.qa||btn.dataset.qc), kind=btn.dataset.qk;
+  btn.disabled=true; const old=btn.textContent; btn.textContent='處理中…';
+  try{
+    const r=await api(`/api/v2/citizen/quests/${what}`,{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({sid,kind,request_id:'q'+what+sid+Date.now()})});
+    if(what==='accept') toast(`接下了。保留 ${r.hold_minutes} 分鐘。${r.caveat}`);
+    else { toast(`完成！＋${r.gained} 元（×${r.multiplier} 加碼）。${r.caveat}`);
+           S.rw=await api('/api/v2/rewards/board'); }
+    await loadQuests();
+  }catch(e){
+    btn.textContent=/409/.test(e.message)?'缺口已被補滿':'失敗';
+    setTimeout(()=>{btn.textContent=old;btn.disabled=false;},2600);
+  }
+}
+function shareScore(){
+  const w=S.rw?.wallet;
+  const txt=`我在新北 YouBike 智慧調度當小幫手，累積 ${w?w.points:0} 元、${w?w.level:''}，`
+    +`幫忙補了 ${S.rw?.impact?.bikes_redistributed||0} 台車。一起來接案 → https://ntpc-youbike.demo/join`;
+  try{
+    if(navigator.share){ navigator.share({title:'我的 YouBike 積分',text:txt}); return; }
+    navigator.clipboard?.writeText(txt);
+  }catch(e){}
+  toast('分享文字已複製（示範）：'+txt);
 }
 async function loadMonitor(){
   try{ S.mon=await api('/api/v2/ops/monitor'); }catch(e){ S.mon=null; }
@@ -2046,7 +2317,8 @@ $$('nav.views button').forEach(b=>b.onclick=()=>{
   $$('nav.views button').forEach(x=>x.classList.toggle('on',x===b));
   if(S.view==='ops'){ if(!S.ops) api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
     if(S.otab==='monitor'&&!S.mon) loadMonitor(); if(S.otab==='worker') loadWorker(); }
-  if(S.view==='citizen'&&!S.rw) api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
+  if(S.view==='citizen'){ if(!S.rw) api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
+    if(!S.csug) loadSuggest(); if(!S.cquests) loadQuests(); }
   if(S.view==='method'&&!S.mth) api('/api/v2/method').then(d=>{S.mth=d;render();}).catch(()=>{});
   render(); scrollTo({top:0,behavior:'smooth'});
 });

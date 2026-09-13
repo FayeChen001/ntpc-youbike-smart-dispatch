@@ -82,11 +82,35 @@ def route_multi(points, mode="drive"):
         STATUS["errors"] += 1; STATUS["last_error"] = f"route_multi: {type(e).__name__}: {str(e)[:160]}"
         return None
 
-def geocode(text):
+# 新北市中心附近，用來把地理編碼的結果拉回本地
+NTPC_BIAS = [121.4628, 25.0128]          # [lon, lat]，Amazon Location 的順序
+NTPC_BBOX = [121.20, 24.60, 122.06, 25.35]   # 涵蓋新北與台北
+
+
+def geocode(text, bias=True):
+    """地址／地標地理編碼。
+
+    一定要限制國別並給定位置偏好，否則「板橋車站」會回日本東京都板橋區——
+    Amazon Location 是全球資料，不加限制就會這樣。
+    """
     try:
-        r = client("geo-places").geocode(QueryText=text, MaxResults=3, Language="zh-TW")
+        kw = dict(QueryText=text, MaxResults=5, Language="zh-TW")
+        if bias:
+            kw["Filter"] = {"IncludeCountries": ["TWN"]}
+            kw["BiasPosition"] = NTPC_BIAS
+        r = client("geo-places").geocode(**kw)
         STATUS["places"] += 1
-        return [{"title": x.get("Title"), "lat": x["Position"][1], "lon": x["Position"][0]} for x in r.get("ResultItems", []) if x.get("Position")]
+        out = []
+        for x in r.get("ResultItems", []):
+            p = x.get("Position")
+            if not p:
+                continue
+            lon, lat = p[0], p[1]
+            if bias and not (NTPC_BBOX[0] <= lon <= NTPC_BBOX[2]
+                             and NTPC_BBOX[1] <= lat <= NTPC_BBOX[3]):
+                continue                  # 落在雙北範圍外的直接丟掉
+            out.append({"title": x.get("Title"), "lat": lat, "lon": lon})
+        return out[:3]
     except Exception as e:
         STATUS["errors"] += 1; STATUS["last_error"] = f"places: {type(e).__name__}: {str(e)[:160]}"; return []
 
