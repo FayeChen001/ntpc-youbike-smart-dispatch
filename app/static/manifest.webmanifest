@@ -1,20 +1,22 @@
 {
-  "name": "新北 YouBike 生活圈",
-  "short_name": "YouBike 生活圈",
-  "description": "出門前就知道去哪借、去哪還。預測空滿、順路集點、一鍵報修。",
-  "start_url": "/citizen?src=pwa",
+  "name": "新北 YouBike 智慧調度",
+  "short_name": "YouBike 調度",
+  "description": "官方即時站況、模型預警、調度決策與分流加碼，三端一站式。",
+  "start_url": "/?src=pwa",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#ffffff",
-  "theme_color": "#0f5fa8",
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
   "lang": "zh-Hant",
   "icons": [
     {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
     {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
   ],
   "shortcuts": [
-    {"name": "現在要出門", "url": "/citizen?src=pwa&go=now"},
-    {"name": "我的存摺", "url": "/citizen?src=pwa&tab=wallet"}
+    {"name": "我要出門", "url": "/?src=pwa&view=citizen&tab=plan"},
+    {"name": "接案賺加碼", "url": "/?src=pwa&view=citizen&tab=quest"},
+    {"name": "決策台", "url": "/?src=pwa&view=gov"},
+    {"name": "調度看板", "url": "/?src=pwa&view=ops"}
   ]
 }

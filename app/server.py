@@ -25,6 +25,10 @@ if not (os.environ.get("AWS_PROFILE") or "").strip():
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATIC = os.path.join(ROOT, "app", "static")
 app = FastAPI(title="新北 YouBike 雙端協同服務")
+# 回應沒有壓縮時，全站站點清單一次要送 303 KB；gzip 之後約剩六分之一。
+# 對現場網路與 CloudFront 都有感，而且 SSE 走 text/event-stream 不受影響。
+from fastapi.middleware.gzip import GZipMiddleware   # noqa: E402
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 print("loading predictor ...", flush=True)

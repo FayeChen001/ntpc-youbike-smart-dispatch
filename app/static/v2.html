@@ -243,6 +243,7 @@ tr.click.on td{background:var(--bg3);box-shadow:inset 2px 0 0 var(--info)}
     </nav>
     <div class="feed">
       <span id="feedstat"><span class="lamp"></span>連線中…</span>
+      <button class="replay" id="installbtn" style="display:none" title="加到桌面或主畫面">＋ 加到桌面</button>
       <a class="replay" href="/replay" title="既有的情境回放與模型預測介面">情境回放 ↗</a>
     </div>
   </div>
@@ -2322,6 +2323,41 @@ $$('nav.views button').forEach(b=>b.onclick=()=>{
   if(S.view==='method'&&!S.mth) api('/api/v2/method').then(d=>{S.mth=d;render();}).catch(()=>{});
   render(); scrollTo({top:0,behavior:'smooth'});
 });
+/* ---------------- 加到桌面／主畫面 ---------------- */
+let deferredInstall=null;
+addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault(); deferredInstall=e;
+  const b=$('#installbtn'); if(b){ b.style.display='inline-block'; b.onclick=doInstall; }
+});
+addEventListener('appinstalled',()=>{
+  deferredInstall=null;
+  const b=$('#installbtn'); if(b) b.style.display='none';
+  toast('已加到桌面。之後從圖示開啟會是獨立視窗，沒有網址列。');
+});
+async function doInstall(){
+  if(!deferredInstall) return;
+  deferredInstall.prompt();
+  const r=await deferredInstall.userChoice;
+  deferredInstall=null;
+  const b=$('#installbtn'); if(b) b.style.display='none';
+  if(r.outcome!=='accepted') toast('沒有安裝也沒關係，網址一樣可以用。');
+}
+function installHint(){
+  // iOS Safari 不支援 beforeinstallprompt，只能給步驟
+  const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
+  const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone;
+  if(standalone||deferredInstall||!ios) return;
+  const b=$('#installbtn');
+  if(b){ b.style.display='inline-block';
+    b.onclick=()=>toast('iPhone／iPad：按下方的「分享」按鈕 → 加入主畫面。之後從圖示開啟會是獨立視窗。'); }
+}
+if('serviceWorker' in navigator){
+  addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    setTimeout(installHint,1200);
+  });
+}
+
 boot();
 </script>
 </body>

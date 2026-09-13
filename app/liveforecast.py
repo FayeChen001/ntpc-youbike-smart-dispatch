@@ -137,6 +137,23 @@ class LiveForecaster:
                 "model_origin": f["model_origin"], "coverage": f["coverage"]}
 
     # ------------------------------------------------------------------
+    def prob_map(self, horizon=120):
+        """{sid: {"empty": 機率, "full": 機率}}，整批一次算好。
+
+        原本呼叫端是在逐站迴圈裡呼叫 risk_ranking()，每次都重新過濾並排序
+        整張表再建幾百個 dict——決策台因此要跑 4.6 秒。查表建一次就好。
+        """
+        f = self.forecast()
+        if not f or horizon not in f["horizons"]:
+            return {}
+        d = f["stations"]
+        # itertuples() 給的是 namedtuple，只能用 getattr，不能用字串索引
+        ec, fc_ = f"p_empty_{horizon}", f"p_full_{horizon}"
+        return {int(r.sid): {"empty": float(getattr(r, ec)),
+                             "full": float(getattr(r, fc_))}
+                for r in d.itertuples()}
+
+    # ------------------------------------------------------------------
     def risk_ranking(self, kind="full", horizon=120, limit=20, min_p=0.3,
                      exclude_offline=True):
         """未來最可能出事的站。kind: full（無位可還）/ empty（無車可借）。

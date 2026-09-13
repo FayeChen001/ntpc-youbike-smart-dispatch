@@ -4,8 +4,8 @@
 // 背景推播還需要「推播伺服器 + VAPID 金鑰 + 使用者訂閱」三者齊備。
 // 本專案未設定推播伺服器（見 /api/c/push/status），所以下面的 push 事件實際上不會被觸發。
 // 保留處理器是為了介接推播伺服器時不必改前端，不是為了讓介面宣稱已經有推播。
-const SHELL = "yb-shell-v2";
-const FILES = ["/static/common.css", "/static/common.js", "/static/icons/icon-192.png"];
+const SHELL = "yb-shell-v3";
+const FILES = ["/static/icons/icon-192.png", "/static/icons/icon-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(SHELL).then(c => Promise.allSettled(FILES.map(f => c.add(f)))).then(() => self.skipWaiting()));
@@ -16,7 +16,7 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   const u = new URL(e.request.url);
   if (u.pathname.startsWith("/api/")) return;                 // 即時資料一律走網路，不快取
-  e.respondWith(fetch(e.request).catch(() => caches.match(e.request).then(r => r || caches.match("/citizen"))));
+  e.respondWith(fetch(e.request).catch(() => caches.match(e.request).then(r => r || caches.match("/"))));
 });
 
 // 由推播伺服器送來的訊息。目前沒有推播伺服器，因此這段在本次 demo 不會執行。

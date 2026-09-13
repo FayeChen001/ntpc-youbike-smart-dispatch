@@ -1211,6 +1211,8 @@ def gov_decisions(limit: int = 25):
     fc = _CTX.get("fc")
     meta = _CTX.get("stations", {})
     fc_ok = fc is not None and fc.status().get("available")
+    # 整批查表建一次。原本在迴圈裡逐站呼叫 risk_ranking()，決策台要跑 4.6 秒。
+    pmap = fc.prob_map(120) if fc_ok else {}
     items = []
     for x in lv.snapshot().values():
         if not x["active"] or x["capacity"] <= 0:
@@ -1232,9 +1234,9 @@ def gov_decisions(limit: int = 25):
         hist60 = round(r60[key] * 100, 1) if r60 else None
         model = None
         if fc_ok and kind in ("no_dock", "no_bike"):
-            rr = fc.risk_ranking("full" if kind == "no_dock" else "empty", 120, 400, 0.0)
-            hit = next((z for z in rr if z["sid"] == x["sid"]), None)
-            model = hit["p"] if hit else None
+            pm = pmap.get(x["sid"])
+            if pm:
+                model = round(pm["full" if kind == "no_dock" else "empty"] * 100, 1)
 
         m = meta.get(x["sid"], {})
         it = {
