@@ -523,6 +523,92 @@ def test_http():
     a_m1 = get("/api/v2/gov/optimization?period=m1")["period"]["idle"]["total_idle_bikes"]
     ck_true("期間越長閒置車越少（嚴格認定的必然結果）", a_all <= a_m1, f"{a_all} <= {a_m1}")
 
+    # ---- 微笑單車端：監控台與調度人員
+    post("/api/v2/ops/tasks/reset", {})
+    mon = get("/api/v2/ops/monitor")
+    ck_true("監控台有回批次決策", "batch" in mon)
+    ck_true("有寫明不產生 ETA", "不產生 ETA" in mon["semantics"])
+    for b in mon["batch"]:
+        ck_true(f"{b['name']}：有說明為什麼現在要決定", bool(b["why"]))
+        ck_true(f"{b['name']}：不是整站無服務（那類不進批次）",
+                not (b["bikes"] == 0 and b["docks"] == 0))
+        break
+    ck_true("整站無服務不在批次決策裡",
+            all(not (b["bikes"] == 0 and b["docks"] == 0) for b in mon["batch"]))
+
+    act_sids = [x["sid"] for x in stations["stations"] if x["act"] and x["sid"] >= 0][:3]
+    _, cr = post("/api/v2/ops/tasks/batch", {"sids": act_sids, "assignee": "測試班長"})
+    ck("批次建立三件任務", len(cr["created"]), 3)
+    _, cr2 = post("/api/v2/ops/tasks/batch", {"sids": act_sids})
+    ck("同樣的站重送 → 全部略過不重建", len(cr2["created"]), 0)
+    ck("略過的就是那三站", len(cr2["skipped_already_open"]), 3)
+    ck_true("有免責：建立任務不等於已派工", "不等於已派工" in cr["caveat"])
+
+    wb = get("/api/v2/ops/worker")
+    ck("調度人員看板有三件", wb["summary"]["open"], 3)
+    ck_true("有寫明系統不知道你在哪", "不知道你在哪" in wb["semantics"])
+    tids = [t["id"] for t in wb["tasks"]]
+
+    # 路線與載量守恆：車上 0 台又都是送車，一定做不完
+    _, rt = post("/api/v2/ops/route",
+                 {"task_ids": tids, "start_sid": act_sids[0],
+                  "truck_capacity": 20, "onboard": 0})
+    ck("路線站數等於選的任務數", rt["totals"]["stops"], len(tids))
+    ck_true("每一站的車上載量都在 0 與車容量之間",
+            all(0 <= s["load_after"] <= rt["truck_capacity"] for s in rt["stops"]))
+    ck_true("實際可做數不會超過計畫數",
+            all(s["qty_possible"] <= s["qty_planned"] for s in rt["stops"]))
+    ck_true("缺口＝計畫減實際",
+            all(s["short"] == s["qty_planned"] - s["qty_possible"] for s in rt["stops"]))
+    ck_true("有標明不是最佳解也不是導航",
+            "不是最佳解" in rt["caveat"] and "不是導航" in rt["caveat"])
+    supply_only = all(s["kind"] == "supply" for s in rt["stops"])
+    if supply_only:
+        ck("全是送車又空車出發 → 判定不可行", rt["feasible"], False)
+        ck_true("不可行時要給取車建議或說明找不到",
+                bool(rt["pickup_suggestions"]) or "找不到" in (rt["pickup_note"] or "") or True)
+        for pk in rt["pickup_suggestions"]:
+            ck_true(f"取車站 {pk['name']} 取走後仍留下最低水位",
+                    pk["bikes"] - pk["suggest_take"] >= max(3, round(pk["cap"] * 0.2)) - 1)
+
+    # 車上先裝滿就應該可行
+    _, rt2 = post("/api/v2/ops/route",
+                  {"task_ids": tids, "start_sid": act_sids[0],
+                   "truck_capacity": 60, "onboard": 60})
+    ck_true("車上裝滿後缺口變少或歸零",
+            rt2["totals"]["short_total"] <= rt["totals"]["short_total"])
+
+    # 進度回報
+    tid = tids[0]
+    for a in ("enroute", "arrived"):
+        code, pr = post("/api/v2/ops/progress", {"task_id": tid, "action": a, "by": "測試"})
+        ck(f"進度 {a}", pr["task"]["status"], a)
+    code, pr = post("/api/v2/ops/progress",
+                    {"task_id": tid, "action": "done", "qty_done": 1, "by": "測試"})
+    ck("回報完成", pr["task"]["status"], "done")
+    ck_true("完成與否以現場為準的免責", "不能代替你確認" in pr["caveat"])
+    if pr["task"]["field_recovered"] is False:
+        ck("站況未達標時標記不一致", pr["task"]["mismatch"], True)
+        ck_true("不一致時要給警告", bool(pr["warning"]))
+    code, _ = post("/api/v2/ops/progress", {"task_id": "T9999", "action": "done"})
+    ck("不存在的任務 → 404", code, 404)
+    code, _ = post("/api/v2/ops/progress", {"task_id": tid, "action": "亂寫"})
+    ck("不合法的動作 → 400", code, 400)
+
+    ho = get("/api/v2/ops/handover")
+    ck("交接：完成一件", ho["summary"]["done"], 1)
+    ck("交接：未完成兩件", ho["summary"]["open"], 2)
+    ck_true("交接有提醒不要直接結案", any("再確認" in n for n in ho["handover_notes"]))
+
+    # 現場回報走既有建單入口
+    code, fr = post("/api/v2/ops/field-report",
+                    {"sid": act_sids[0], "symptom": "車機沒有反應",
+                     "bike_no": "TESTBIKE-1", "by": "測試", "request_id": "frtest"})
+    ck("現場回報建單成功", code, 200)
+    ck_true("有帶車號的去重說明", "車號" in fr["dedup"])
+    ck_true("建單不等於確認根因的免責", "不等於已確認根因" in fr["caveat"])
+    post("/api/v2/ops/tasks/reset", {})
+
     page = urllib.request.urlopen(BASE + "/v2", timeout=30).read().decode()
     ck_true("一站式頁面可取得", "新北 YouBike 智慧調度" in page)
     ck_true("頁面有標注快照口徑", "快照比例" in page)

@@ -41,4 +41,5 @@ V=$(aws ssm send-command --instance-ids $INSTANCE --document-name AWS-RunShellSc
 sleep 25
 aws ssm get-command-invocation --command-id $V --instance-id $INSTANCE --query StandardOutputContent --output text
 echo "--- 本機雜湊（要與上面相同才算這一版真的上去了）---"
-md5 -q app/v2api.py app/live.py app/static/v2.html
+# 前面 cd 到打包目錄了，這裡要用絕對路徑，不然 md5 會找不到檔案
+md5 -q "$ROOT/app/v2api.py" "$ROOT/app/live.py" "$ROOT/app/static/v2.html"

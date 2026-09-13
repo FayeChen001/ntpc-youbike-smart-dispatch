@@ -1918,7 +1918,7 @@ import v2api as V2                   # noqa: E402
 
 LIVE_STORE = LIVE.LiveStore(ST)
 LIVE_FC = LIVEFC.LiveForecaster(PRED, LIVE_STORE)
-V2.init(LIVE_STORE, ST, STATE, PL, LIVE_FC)
+V2.init(LIVE_STORE, ST, STATE, PL, LIVE_FC, submit_ticket=submit_ticket)
 app.include_router(V2.router)
 
 

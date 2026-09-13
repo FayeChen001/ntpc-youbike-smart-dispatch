@@ -93,9 +93,14 @@ class Risk:
                 "mean_docks": round(float(row[3]), 2)}
 
 
-def init(live_store, stations_df, state, planner=None, forecaster=None):
+def init(live_store, stations_df, state, planner=None, forecaster=None, submit_ticket=None):
+    # submit_ticket 一定要用傳的，不可以在請求裡 import server——
+    # uvicorn 載入的是 app.server，用裸名 import server 會產生第二份模組實例，
+    # 重跑整個模組、建立新的 Predictor 與 LiveStore，而且它的 V2.init() 會把這份 _CTX 蓋掉。
+    # 症狀是任務突然消失、即時層變成 ok=0 fetched_at=None。已踩過一次。
     _CTX["live"] = live_store
     _CTX["fc"] = forecaster
+    _CTX["submit_ticket"] = submit_ticket
     _CTX["st"] = stations_df
     _CTX["state"] = state
     _CTX["planner"] = planner
@@ -1422,3 +1427,476 @@ def gov_optimization(period: str = "m1"):
     return {"meta": o["meta"], "period_key": period, "period": p,
             "available_periods": [{"key": k, "label": v["label"], "days": v["days"]}
                                   for k, v in o["periods"].items()]}
+
+
+# ==================================================================== 微笑單車端
+# 兩個角色看的東西不一樣：
+#   監控台   全市視角，決定「要不要做、誰去做」，可以批次派工
+#   調度人員 只看自己今天負責的區，決定「先做哪一站、怎麼走、車上夠不夠」
+#
+# 誠實邊界（整段都要守）：
+#   * 沒有 GPS 與車隊位置。路線的起點由調度人員自己選，不是系統知道他在哪。
+#   * 路程是直線距離乘繞路係數估的，不是導航；沒有真實路網、號誌與單行道。
+#   * 進度由人工回報，系統只能用官方即時站況**驗證現場是否真的恢復**，
+#     兩者不一致時要標出來——「回報完成但站況未恢復」是最值得看的訊號。
+TASK_KINDS = {"supply": "送車", "clear": "清運", "repair": "設備查修"}
+TASK_FLOW = ["open", "assigned", "enroute", "arrived", "done"]
+
+
+def _tasks():
+    return _CTX["state"].setdefault("v2_tasks", [])
+
+
+def _task_view(t):
+    lv = _CTX.get("live")
+    cur = lv.station(t["sid"]) if lv else None
+    now = datetime.now(TZ)
+    created = datetime.fromisoformat(t["created_at"])
+    recovered = None
+    if cur and t["kind"] in ("supply", "clear"):
+        target = max(3, round(cur["capacity"] * 0.2))
+        recovered = (cur["bikes"] >= target) if t["kind"] == "supply" else (cur["docks"] >= target)
+    return {
+        **t,
+        "kind_label": TASK_KINDS.get(t["kind"], t["kind"]),
+        "open_min": round((now - created).total_seconds() / 60.0, 1),
+        "current": None if not cur else {"bikes": cur["bikes"], "docks": cur["docks"],
+                                         "cap": cur["capacity"], "gap": cur["capacity_gap"]},
+        "field_recovered": recovered,
+        "mismatch": bool(t["status"] == "done" and recovered is False),
+    }
+
+
+@router.get("/ops/monitor")
+def ops_monitor():
+    """監控台：這一批要決定什麼、候選有誰、模型在預警什麼、設備有什麼要查。"""
+    lv = _live()
+    board = ops_board()
+    fc = _CTX.get("fc")
+    risk = _CTX.get("risk")
+    fst = fc.status() if fc else {"available": False}
+    alerts = []
+    if fst.get("available"):
+        hz = 120 if 120 in (fst.get("horizons") or []) else (fst.get("horizons") or [None])[-1]
+        for kind, lab in (("empty", "無車可借"), ("full", "無位可還")):
+            for r in fc.risk_ranking(kind, hz, 8, 0.3):
+                alerts.append({**r, "kind": kind, "kind_label": lab, "horizon_min": hz})
+        alerts.sort(key=lambda z: -z["p"])
+
+    # 一批決策：候選裡真正需要現在決定的（結構性、或已經見底）
+    batch = []
+    for c in board["candidates"]:
+        r60 = c.get("hist_risk_60")
+        already = (c["need"] == "送車" and c["bikes"] == 0) or (c["need"] == "清運" and c["docks"] == 0)
+        structural = (r60 or 0) >= 25
+        if not (already or structural):
+            continue
+        kind = "supply" if c["need"] == "送車" else "clear"
+        batch.append({
+            "sid": c["sid"], "name": c["name"], "district": c["district"],
+            "kind": kind, "kind_label": TASK_KINDS[kind], "qty": c["qty"],
+            "bikes": c["bikes"], "docks": c["docks"], "cap": c["cap"],
+            "hist_risk_60": r60, "hist_risk_120": c.get("hist_risk_120"),
+            "profile": c.get("profile"), "priority": c["priority"],
+            "already": already, "structural": structural,
+            "why": ("此刻已見底" if already else "") + ("，" if already and structural else "")
+                   + (f"一小時後仍有 {r60}% 風險" if structural else ""),
+        })
+    batch.sort(key=lambda z: -z["priority"])
+
+    existing = {t["sid"] for t in _tasks() if t["status"] != "done"}
+    for b in batch:
+        b["already_assigned"] = b["sid"] in existing
+
+    districts = {}
+    for b in batch:
+        d = districts.setdefault(b["district"], {"district": b["district"], "supply": 0,
+                                                 "clear": 0, "qty": 0})
+        d[b["kind"]] += 1
+        d["qty"] += b["qty"]
+
+    return {
+        "generated_at": datetime.now(TZ).isoformat(),
+        "batch": batch[:40], "batch_total": len(batch),
+        "by_district": sorted(districts.values(), key=lambda d: -(d["supply"] + d["clear"])),
+        "candidates": board["candidates"][:25],
+        "offline": board["offline"], "repair": board["repair"],
+        "totals": board["totals"],
+        "alerts": alerts[:12], "forecast_status": fst,
+        "open_tasks": sum(1 for t in _tasks() if t["status"] != "done"),
+        "semantics": ("這一批是「已經見底」或「一小時後仍有 25% 以上風險」的站。"
+                      "其餘候選在下方清單，不強迫現在決定。本看板不產生 ETA。"),
+    }
+
+
+class BatchIn(BaseModel):
+    sids: list
+    district: str = None
+    assignee: str = None
+    request_id: str = None
+
+
+@router.post("/ops/tasks/batch")
+def ops_batch(body: BatchIn):
+    """一次把選好的站建成任務並指派。重複的站不會重建。"""
+    lv = _live()
+    mon = ops_monitor()
+    by_sid = {b["sid"]: b for b in mon["batch"]}
+    tasks = _tasks()
+    have = {t["sid"] for t in tasks if t["status"] != "done"}
+    now = datetime.now(TZ)
+    made, skipped = [], []
+    for sid in body.sids:
+        sid = int(sid)
+        if sid in have:
+            skipped.append(sid)
+            continue
+        b = by_sid.get(sid)
+        cur = lv.station(sid)
+        if not cur:
+            skipped.append(sid)
+            continue
+        if not b:
+            target = max(3, round(cur["capacity"] * 0.2))
+            kind = "clear" if cur["docks"] < target else "supply"
+            qty = max(1, target - (cur["docks"] if kind == "clear" else cur["bikes"]))
+            b = {"kind": kind, "qty": qty, "priority": 0, "why": "由監控台手動加入"}
+        t = {
+            "id": f"T{len(tasks) + len(made) + 1:04d}",
+            "sid": sid, "name": cur["name"], "district": cur["district"],
+            "lat": cur["lat"], "lon": cur["lon"],
+            "kind": b["kind"], "qty": b["qty"], "priority": b.get("priority", 0),
+            "why": b.get("why", ""),
+            "status": "assigned" if (body.district or body.assignee) else "open",
+            "assigned_district": body.district, "assignee": body.assignee,
+            "created_at": now.isoformat(), "version": 1,
+            "observed": {"bikes": cur["bikes"], "docks": cur["docks"], "cap": cur["capacity"]},
+            "log": [{"ts": now.isoformat(), "action": "created", "by": "監控台",
+                     "note": b.get("why", "")}],
+            "progress": [],
+        }
+        tasks.append(t)
+        made.append(t["id"])
+    return {"ok": True, "created": made, "skipped_already_open": skipped,
+            "total_open": sum(1 for t in tasks if t["status"] != "done"),
+            "caveat": "建立任務不等於已派工；沒有與微笑單車的實際派工系統介接。"}
+
+
+@router.get("/ops/districts")
+def ops_districts():
+    """調度人員上工時選今天負責哪幾區——附上每一區現在有多少事情。"""
+    lv = _live()
+    mon = ops_monitor()
+    tasks = [t for t in _tasks() if t["status"] != "done"]
+    rows = {}
+    for x in lv.snapshot().values():
+        d = rows.setdefault(x["district"], {"district": x["district"], "stations": 0,
+                                            "no_bike": 0, "no_dock": 0, "tasks": 0, "batch": 0})
+        d["stations"] += 1
+        if x["active"]:
+            d["no_bike"] += int(x["no_bike"])
+            d["no_dock"] += int(x["no_dock"])
+    for t in tasks:
+        if t["district"] in rows:
+            rows[t["district"]]["tasks"] += 1
+    for b in mon["batch"]:
+        if b["district"] in rows:
+            rows[b["district"]]["batch"] += 1
+    out = sorted(rows.values(), key=lambda d: -(d["tasks"] * 10 + d["batch"]))
+    return {"districts": out}
+
+
+@router.get("/ops/worker")
+def ops_worker(districts: str = "", assignee: str = None):
+    """調度人員看板：只顯示自己今天負責的區。"""
+    ds = [d for d in (districts or "").split(",") if d.strip()]
+    lv = _live()
+    risk = _CTX.get("risk")
+    tasks = [_task_view(t) for t in _tasks()
+             if (not ds or t["district"] in ds) and t["status"] != "done"]
+    tasks.sort(key=lambda t: (-t.get("priority", 0), t["open_min"] * -1))
+    done_today = [_task_view(t) for t in _tasks()
+                  if t["status"] == "done" and (not ds or t["district"] in ds)]
+
+    # 還沒建成任務、但這幾區現在就有狀況的站
+    mon_batch = [b for b in ops_monitor()["batch"] if not ds or b["district"] in ds]
+    have = {t["sid"] for t in tasks}
+    suggest = [b for b in mon_batch if b["sid"] not in have][:15]
+
+    return {
+        "districts": ds, "assignee": assignee,
+        "tasks": tasks, "suggested": suggest,
+        "done_today": done_today,
+        "summary": {
+            "open": len(tasks),
+            "supply": sum(1 for t in tasks if t["kind"] == "supply"),
+            "clear": sum(1 for t in tasks if t["kind"] == "clear"),
+            "repair": sum(1 for t in tasks if t["kind"] == "repair"),
+            "done": len(done_today),
+            "mismatch": sum(1 for t in done_today if t["mismatch"]),
+        },
+        "semantics": ("優先序＝監控台算的優先度，主要吃一小時後的風險與缺口大小。"
+                      "系統不知道你在哪裡，路線要自己選起點。"),
+    }
+
+
+class RouteIn(BaseModel):
+    task_ids: list
+    start_sid: int = None
+    truck_capacity: int = 20
+    onboard: int = 0
+
+
+@router.post("/ops/route")
+def ops_route(body: RouteIn):
+    """把選好的任務排成一條路線，並做取送守恆檢查。
+
+    路線：從你選的起點開始的最近鄰貪婪排序，**不是最佳解**，也不是導航。
+    守恆：模擬車上載量，送車會減少、清運會增加；任何一站超過車容量或車上不夠，
+          會直接標出來並試著把取車站往前挪。
+    """
+    import planner as PL
+    A = PL.ASSUMPTIONS
+    lv = _live()
+    tmap = {t["id"]: t for t in _tasks()}
+    picked = [tmap[i] for i in body.task_ids if i in tmap]
+    if not picked:
+        raise HTTPException(400, "沒有選到任何任務")
+    cap = max(1, int(body.truck_capacity))
+    start = lv.station(body.start_sid) if body.start_sid else None
+    if start is None:
+        la = sum(t["lat"] for t in picked) / len(picked)
+        lo = sum(t["lon"] for t in picked) / len(picked)
+        start_pt, start_name = (la, lo), "所選任務的重心（未指定起點）"
+    else:
+        start_pt, start_name = (start["lat"], start["lon"]), start["name"]
+
+    # 最近鄰貪婪
+    rest = list(picked)
+    order, cur = [], start_pt
+    while rest:
+        nxt = min(rest, key=lambda t: _hav(cur[0], cur[1], t["lat"], t["lon"]))
+        order.append(nxt)
+        rest.remove(nxt)
+        cur = (nxt["lat"], nxt["lon"])
+
+    def simulate(seq):
+        load, stops, ok = int(body.onboard), [], True
+        prev = start_pt
+        total_m = 0.0
+        for t in seq:
+            d = _hav(prev[0], prev[1], t["lat"], t["lon"]) * A["road_detour"]
+            total_m += d
+            drive = d / 1000.0 / A["truck_speed_kmh"] * 60.0
+            qty = int(t["qty"])
+            if t["kind"] == "supply":
+                take = min(qty, load)
+                short = qty - take
+                load -= take
+            elif t["kind"] == "clear":
+                room = cap - load
+                take = min(qty, room)
+                short = qty - take
+                load += take
+            else:
+                take, short = 0, 0
+            if short > 0:
+                ok = False
+            handle = A["handling_fixed_min"] + take * A["handling_per_bike_min"]
+            stops.append({"task_id": t["id"], "sid": t["sid"], "name": t["name"],
+                          "district": t["district"], "kind": t["kind"],
+                          "kind_label": TASK_KINDS[t["kind"]],
+                          "qty_planned": qty, "qty_possible": take, "short": short,
+                          "load_after": load,
+                          "drive_min": round(drive, 1), "handle_min": round(handle, 1),
+                          "leg_m": round(d)})
+            prev = (t["lat"], t["lon"])
+        return stops, ok, total_m, load
+
+    stops, feasible, total_m, end_load = simulate(order)
+    repaired = False
+    if not feasible:
+        # 把清運（會裝車）往前挪，讓後面的送車有車可放
+        clears = [t for t in order if t["kind"] == "clear"]
+        others = [t for t in order if t["kind"] != "clear"]
+        alt = clears + others
+        s2, ok2, m2, l2 = simulate(alt)
+        if ok2 or sum(x["short"] for x in s2) < sum(x["short"] for x in stops):
+            order, stops, feasible, total_m, end_load = alt, s2, ok2, m2, l2
+            repaired = True
+
+    # 只說「不可行」沒有用，現場人員需要知道該去哪裡取車。
+    # 找路線附近庫存明顯過剩的站當供給站，並算出取多少才夠。
+    pickups = []
+    if not feasible:
+        need = sum(s["short"] for s in stops if s["kind"] == "supply")
+        if need > 0:
+            picked_sids = {t["sid"] for t in picked}
+            cands = []
+            for x in lv.snapshot().values():
+                if not x["active"] or x["sid"] in picked_sids or x["capacity"] <= 0:
+                    continue
+                keep = max(3, round(x["capacity"] * 0.2))
+                surplus = x["bikes"] - keep          # 取走之後仍要留下最低水位
+                if surplus < 3:
+                    continue
+                d = min(_hav(x["lat"], x["lon"], t["lat"], t["lon"]) for t in picked)
+                cands.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
+                              "surplus": int(surplus), "bikes": x["bikes"], "cap": x["capacity"],
+                              "detour_m": round(d)})
+            cands.sort(key=lambda z: (z["detour_m"] / max(1, z["surplus"])))
+            got, total = [], 0
+            for c in cands:
+                if total >= min(need, cap - int(body.onboard)):
+                    break
+                take = min(c["surplus"], cap - int(body.onboard) - total)
+                if take <= 0:
+                    break
+                got.append({**c, "suggest_take": int(take)})
+                total += take
+            pickups = got[:3]
+
+    drive = sum(s["drive_min"] for s in stops)
+    handle = sum(s["handle_min"] for s in stops)
+    return {
+        "start": {"sid": body.start_sid, "name": start_name},
+        "pickup_suggestions": pickups,
+        "pickup_note": (None if feasible else
+                        f"車上 {int(body.onboard)} 台，但這條路線要送出 "
+                        f"{sum(s['qty_planned'] for s in stops if s['kind'] == 'supply')} 台。"
+                        "下面是附近庫存過剩、可以先去取車的站——取走之後仍會留下該站的最低水位。"),
+        "truck_capacity": cap, "onboard_start": int(body.onboard), "onboard_end": end_load,
+        "stops": stops, "feasible": feasible, "reordered_for_load": repaired,
+        "totals": {"stops": len(stops), "distance_km": round(total_m / 1000.0, 2),
+                   "drive_min": round(drive, 1), "handle_min": round(handle, 1),
+                   "total_min": round(drive + handle, 1),
+                   "short_total": sum(s["short"] for s in stops)},
+        "assumptions": {k: A[k] for k in ("truck_capacity", "truck_speed_kmh", "road_detour",
+                                          "handling_fixed_min", "handling_per_bike_min")},
+        "caveat": ("最近鄰貪婪排序，不是最佳解；距離是直線乘繞路係數，不是導航，"
+                   "沒有真實路網、號誌與單行道。時間不含等紅燈與找車位。"
+                   "系統不知道你的實際位置，起點是你自己選的。"),
+    }
+
+
+class ProgressIn(BaseModel):
+    task_id: str
+    action: str                 # enroute | arrived | done | failed | undo
+    qty_done: int = None
+    note: str = ""
+    by: str = None
+
+
+@router.post("/ops/progress")
+def ops_progress(body: ProgressIn):
+    """進度回報。系統不會自己認定完成，但會用官方站況驗證現場是否真的恢復。"""
+    t = next((z for z in _tasks() if z["id"] == body.task_id), None)
+    if t is None:
+        raise HTTPException(404, "查無此任務")
+    if body.action not in ("enroute", "arrived", "done", "failed", "undo"):
+        raise HTTPException(400, "action 必須是 enroute / arrived / done / failed / undo")
+    now = datetime.now(TZ)
+    if body.action == "undo":
+        t["status"] = "assigned"
+        t.pop("done_at", None)
+    elif body.action == "failed":
+        t["status"] = "failed"
+        t["failed_at"] = now.isoformat()
+    else:
+        t["status"] = {"enroute": "enroute", "arrived": "arrived", "done": "done"}[body.action]
+        if body.action == "done":
+            t["done_at"] = now.isoformat()
+            t["qty_done"] = body.qty_done if body.qty_done is not None else t["qty"]
+    t["version"] += 1
+    t["progress"].append({"ts": now.isoformat(), "action": body.action,
+                          "by": body.by or t.get("assignee") or "調度人員",
+                          "qty_done": body.qty_done, "note": body.note})
+    t["log"].append({"ts": now.isoformat(), "action": body.action,
+                     "by": body.by or "調度人員", "note": body.note})
+    v = _task_view(t)
+    msg = None
+    if v["mismatch"]:
+        msg = ("回報完成，但官方即時站況顯示這一站還沒回到目標水位。"
+               "可能是資料還沒更新（官方每 5 分鐘），也可能是實際沒補足——請再確認。")
+    return {"ok": True, "task": v, "warning": msg,
+            "caveat": "完成與否以現場為準；本系統只能用官方站況交叉驗證，不能代替你確認。"}
+
+
+class FieldReportIn(BaseModel):
+    sid: int
+    symptom: str
+    bike_no: str = None
+    dock_no: str = None
+    note: str = ""
+    by: str = None
+    request_id: str = None
+
+
+@router.post("/ops/field-report")
+def ops_field_report(body: FieldReportIn):
+    """現場回報：帶車號或柱號就能精準去重，走既有的建單入口。"""
+    submit = _CTX.get("submit_ticket")
+    if submit is None:
+        raise HTTPException(503, "建單服務未就緒")
+    lv = _live()
+    cur = lv.station(body.sid)
+    if not cur:
+        raise HTTPException(404, "查無此站的即時資料")
+    payload = {
+        "sid": body.sid, "station": cur["name"], "issue": body.symptom,
+        "bike_no": body.bike_no, "dock_id": body.dock_no,
+        "note": (body.note or "") + "（調度人員現場回報）",
+        "source": "ops_field", "request_id": body.request_id,
+        "reporter": body.by or "調度人員",
+    }
+    try:
+        res = submit(payload)
+    except Exception as e:                                    # noqa: BLE001
+        raise HTTPException(500, f"建單失敗：{type(e).__name__}: {e}")
+    return {"ok": True, "ticket": res,
+            "dedup": "去重優先序：車號 > 柱號 > 站點＋問題類別（最後一種限 2 小時）",
+            "caveat": ("建單不等於已確認根因，也不等於官方庫存已扣除或已遠端停租。")}
+
+
+@router.get("/ops/handover")
+def ops_handover(districts: str = ""):
+    """班次交接：這一班留下什麼，接班的人一眼看完。"""
+    ds = [d for d in (districts or "").split(",") if d.strip()]
+    tasks = [_task_view(t) for t in _tasks() if not ds or t["district"] in ds]
+    opent = [t for t in tasks if t["status"] not in ("done",)]
+    done = [t for t in tasks if t["status"] == "done"]
+    failed = [t for t in tasks if t["status"] == "failed"]
+    mism = [t for t in done if t["mismatch"]]
+    visited = sorted({t["name"] for t in tasks if t["progress"]})
+    return {
+        "districts": ds,
+        "open": opent, "done_count": len(done), "failed": failed, "mismatch": mism,
+        "visited_stations": visited,
+        "summary": {
+            "open": len(opent), "enroute": sum(1 for t in opent if t["status"] == "enroute"),
+            "arrived": sum(1 for t in opent if t["status"] == "arrived"),
+            "never_started": sum(1 for t in opent if not t["progress"]),
+            "done": len(done), "failed": len(failed), "mismatch": len(mism),
+            "longest_open_min": max([t["open_min"] for t in opent], default=0),
+        },
+        "handover_notes": [
+            "未開始的任務要先確認還需不需要做——站況可能已經自己恢復了。",
+            "「回報完成但站況未恢復」的要現場再確認，不要直接結案。",
+            "來不及的缺口可以切成民眾分流，不必硬排車。",
+        ],
+    }
+
+
+@router.get("/ops/tasks")
+def ops_tasks(districts: str = ""):
+    ds = [d for d in (districts or "").split(",") if d.strip()]
+    ts = [_task_view(t) for t in _tasks() if not ds or t["district"] in ds]
+    ts.sort(key=lambda t: (t["status"] == "done", -t.get("priority", 0)))
+    return {"count": len(ts), "tasks": ts}
+
+
+@router.post("/ops/tasks/reset")
+def ops_tasks_reset():
+    n = len(_tasks())
+    _CTX["state"]["v2_tasks"] = []
+    return {"ok": True, "cleared": n}

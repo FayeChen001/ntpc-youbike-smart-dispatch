@@ -160,6 +160,11 @@ tr.click{cursor:pointer} tr.click:hover td{background:var(--bg3)}
   border-radius:9px;padding:10px;font-size:12.5px;line-height:1.7;resize:vertical;
   font-family:inherit}
 tr.click.on td{background:var(--bg3);box-shadow:inset 2px 0 0 var(--info)}
+.cbx{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
+  border:1px solid var(--line2);border-radius:5px;font-size:11px;color:var(--bg);
+  flex-shrink:0;cursor:pointer;transition:.15s}
+.cbx.on{background:var(--ok);border-color:var(--ok)}
+.btn[disabled]{opacity:.45;pointer-events:none}
 
 /* ---------------- insight ---------------- */
 .ins{border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:var(--r2);
@@ -257,7 +262,8 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', mdist:null, mv:{k:1,tx:0,ty:0}, gtab:'desk', dec:null, gq:'', gres:null, gdist:null, gdd:null, opt:null, optPeriod:'m1', orderFor:null, orderAct:null, orderMsg:'', orderBusy:false, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
+           filter:'all', mdist:null, mv:{k:1,tx:0,ty:0}, gtab:'desk', otab:'monitor', mon:null, obatch:new Set(), odist:null, oassign:'張班長',
+           wdist:[], wstart:null, wcap:20, wload:0, wboard:null, wsel:new Set(), wroute:null, wbusy:false, hand:null, freport:null, dec:null, gq:'', gres:null, gdist:null, gdd:null, opt:null, optPeriod:'m1', orderFor:null, orderAct:null, orderMsg:'', orderBusy:false, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -307,7 +313,8 @@ async function refresh(){
   try{
     const [live,stations] = await Promise.all([api('/api/v2/live'),api('/api/v2/live/stations')]);
     S.live=live; S.stations=stations.stations; feed(live.status);
-    if(S.view==='ops') api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
+    if(S.view==='ops'){ api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
+      if(S.otab==='monitor') loadMonitor(); }
     else if(S.view==='citizen') api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
     else { api('/api/v2/insights').then(d=>{S.ins=d;render();});
            api('/api/v2/events').then(d=>{S.ev=d;render();}).catch(()=>{});
@@ -1134,78 +1141,248 @@ function analysisView(){
 }
 
 /* ============================================================ 微笑單車端 */
+function opsTabs(){
+  const t=(id,lab,n)=>`<button class="gt ${S.otab===id?'on':''}" data-ot="${id}">${lab}`+
+    (n!=null?`<span class="n">${n}</span>`:'')+`</button>`;
+  return `<div class="gtabs">
+    ${t('monitor','監控台',S.mon?S.mon.batch_total:null)}
+    ${t('worker','調度人員',S.wboard?S.wboard.summary.open:null)}
+  </div>`;
+}
 function opsView(){
-  const st=S.live.stats;
-  if(!S.ops) return `<div class="card"><h3>調度看板</h3><p class="sub">載入中…</p></div>`;
-  const t=S.ops.totals;
-  const rows=S.ops.candidates.map(c=>{
-    const need=c.need==='送車'?'warn':'bad';
-    const r60=c.hist_risk_60, structural=(r60||0)>=30;
-    return `<tr class="click" data-sid="${c.sid}">
-      <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}${c.profile?'・'+esc(c.profile):''}</div></td>
-      <td><span class="pill ${need}">${c.need}</span>${structural?'<div class="xs" style="color:var(--bad);margin-top:3px">結構性</div>':''}</td>
-      <td class="mono">${c.qty}</td>
-      <td class="mono dim">${c.bikes}／${c.docks}<div class="xs dim">借／還</div></td>
-      <td style="width:92px">${r60==null?'<span class="dim xs">無歷史</span>':
-        `<div class="bar"><i style="width:${Math.min(100,r60)}%;background:${r60>=30?'var(--bad)':'var(--warn)'}"></i></div>
-         <div class="xs mono dim">${r60}%</div>`}</td>
-      <td class="mono dim">${c.hist_risk_120==null?'—':c.hist_risk_120+'%'}</td>
-      <td class="mono">${c.priority}</td></tr>`;}).join('');
-  const off=S.ops.offline.map(c=>`<tr class="click" data-sid="${c.sid}">
-      <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}</div></td>
-      <td class="mono dim">容量 ${c.cap}</td>
-      <td class="xs" style="color:var(--purple)">${esc(c.note)}</td></tr>`).join('');
-  const rep=S.ops.repair.map(c=>`<tr class="click" data-sid="${c.sid}">
-      <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}</div></td>
-      <td class="mono">${c.gap}</td>
-      <td class="mono dim">${c.bikes}／${c.docks}／${c.cap}</td></tr>`).join('');
-  return `<div class="grid g4">
+  return opsTabs() + (S.otab==='monitor'?monitorView():workerView());
+}
+
+/* ---------------------------------------------- 監控台 */
+function monitorView(){
+  const st=S.live.stats, m=S.mon;
+  if(!m) return `<div class="card" style="margin-top:14px"><h3>監控台</h3><p class="sub">載入中…</p></div>`;
+  const t=m.totals;
+  const sel=S.obatch;
+  const rows=m.batch.map(b=>`<tr class="click ${sel.has(b.sid)?'on':''}" data-batch="${b.sid}">
+    <td style="width:26px"><span class="cbx ${sel.has(b.sid)?'on':''}">${sel.has(b.sid)?'✓':''}</span></td>
+    <td><b>${esc(b.name)}</b><div class="xs dim">${esc(b.district)}${b.profile?'・'+esc(b.profile):''}
+      ${b.already_assigned?'<span style="color:var(--info)">・已有任務</span>':''}</div></td>
+    <td><span class="pill ${b.kind==='supply'?'warn':'bad'}">${esc(b.kind_label)} ${b.qty}</span></td>
+    <td class="mono dim">${b.bikes}／${b.docks}</td>
+    <td class="xs" style="color:var(--mute)">${esc(b.why)}</td>
+    <td class="mono">${b.priority}</td></tr>`).join('');
+  const dist=m.by_district.map(d=>`<button class="chip ${S.odist===d.district?'on':''}"
+    data-odist="${esc(d.district)}">${esc(d.district)}<span class="n">${d.supply+d.clear}</span></button>`).join('');
+  const alerts=m.alerts.map(a=>`<tr class="click" data-sid="${a.sid}">
+    <td>${esc(a.name)}<div class="xs dim">${esc(a.district)}${a.retired_in_history?'・歷史上長期零車':''}</div></td>
+    <td><span class="pill ${a.kind==='full'?'bad':'warn'}">${esc(a.kind_label)}</span></td>
+    <td class="mono dim">現在 ${a.now.toFixed(0)}</td>
+    <td style="width:80px"><div class="bar"><i style="width:${a.p}%;background:${a.kind==='full'?'var(--bad)':'var(--warn)'}"></i></div></td>
+    <td class="mono">${a.p}%</td></tr>`).join('');
+  const off=m.offline.map(c=>`<tr class="click" data-sid="${c.sid}">
+    <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}</div></td>
+    <td class="mono dim">容量 ${c.cap}</td>
+    <td class="xs" style="color:var(--purple)">${esc(c.note)}</td></tr>`).join('');
+  const rep=m.repair.map(c=>`<tr class="click" data-sid="${c.sid}">
+    <td><b>${esc(c.name)}</b><div class="xs dim">${esc(c.district)}</div></td>
+    <td class="mono">${c.gap}</td><td class="mono dim">${c.bikes}／${c.docks}／${c.cap}</td></tr>`).join('');
+  return `<div class="grid g4" style="margin-top:14px">
     <div class="kpi warn"><div class="lab">需要送車</div><div class="val">${t['送車']}<em>站</em></div>
       <div class="note">可借低於容量 20%，且仍有可還柱位</div></div>
     <div class="kpi bad"><div class="lab">需要清運</div><div class="val">${t['清運']}<em>站</em></div>
-      <div class="note">可還低於容量 20%，其中 ${t['結構性']} 站屬結構性</div></div>
+      <div class="note">其中 ${t['結構性']} 站屬結構性</div></div>
     <div class="kpi info"><div class="lab">整站無服務</div><div class="val">${t['整站無服務']}<em>站</em></div>
-      <div class="note">借還同時為 0，派車無法解決，需先查修</div></div>
-    <div class="kpi"><div class="lab">全市在站車輛</div><div class="val">${fmt(st.bikes_total)}<em>台</em></div>
-      <div class="note">其中電輔車 ${fmt(st.bikes_electric)} 台</div></div>
+      <div class="note">借還同時為 0，派車無法解決</div></div>
+    <div class="kpi"><div class="lab">進行中任務</div><div class="val">${m.open_tasks}<em>件</em></div>
+      <div class="note">全市在站車輛 ${fmt(st.bikes_total)} 台</div></div>
   </div>
   <div class="split" style="margin-top:14px">
     <div>
-      <div class="card pad0">
-        <div class="maphead"><div><h3 style="margin:0">調度候選清單 <span class="tag live">即時</span><span class="tag hist">歷史風險</span></h3>
-          <div class="sm dim" style="margin-top:3px">依「一小時後的歷史同時段風險」排序，不是依現在有多空</div></div></div>
-        <div class="scroll"><table><thead><tr><th>站點</th><th>處置</th><th>數量</th><th>現況</th>
-          <th>1 小時後</th><th>2 小時後</th><th>優先度</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="dim">目前沒有候選</td></tr>'}</tbody></table></div>
-        <div class="legend"><span>${esc(S.ops.semantics)}</span></div>
+      <div class="card">
+        <h3>我現在要做的一批決策 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
+        <p class="sub">${esc(m.semantics)}　勾選後可以一次派給某一區。</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:11px 0">
+          <button class="chip" id="bsel">${sel.size?`已選 ${sel.size}`:'全選'}</button>
+          <button class="chip" id="bclr">清除</button>
+          <span class="xs dim">派給：</span>
+          <div class="chips">${dist||'<span class="xs dim">（沒有待決）</span>'}</div>
+          <button class="btn" style="width:auto;padding:8px 18px;margin:0"
+            id="bassign" ${sel.size?'':'disabled'}>建立任務並派工</button>
+        </div>
+        <div class="scroll" style="max-height:420px"><table><thead><tr><th></th><th>站點</th>
+          <th>處置</th><th>現況</th><th>為什麼現在要決定</th><th>優先度</th></tr></thead>
+          <tbody>${rows||'<tr><td colspan="6" class="dim">目前沒有需要現在決定的站</td></tr>'}</tbody></table></div>
       </div>
-      <div class="card" style="margin-top:14px"><h3>調度分析建議 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
+      <div class="card" style="margin-top:14px"><h3>AI 即時建議 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
         <p class="sub">把此刻的官方站況與六個月歷史交叉後自動產生，每條都附證據與口徑。</p>
         ${insightsFor(['ops'])}</div>
       ${mapSVG()}
     </div>
     <div>
       ${stationPanel()}
-      <div style="margin-top:14px">${forecastCard()}</div>
+      <div class="card" style="margin-top:14px"><h3>模型即時預警 <span class="tag live">即時推論</span></h3>
+        <p class="sub">${S.mon.forecast_status.available
+          ?'模型跑在官方即時站況上，120 分鐘尺度，已排除整站無服務的站。'
+          :'落後特徵仍在累積，暫不顯示數字。'}</p>
+        ${alerts?`<table><tbody>${alerts}</tbody></table>`:'<p class="sub">目前沒有機率 30% 以上的站。</p>'}</div>
       <div class="card" style="margin-top:14px"><h3>整站無服務 <span class="tag live">即時</span></h3>
-        <p class="sub">可借與可還<b>同時為 0</b>。這不是缺車——派車過去也沒有柱位可用。
-          必須先確認是設備離線、整站未投車，還是已經退場。<b>不列入調度優先序。</b></p>
-        <div class="scroll" style="max-height:260px"><table><tbody>${off||'<tr><td class="dim">目前沒有</td></tr>'}</tbody></table></div></div>
+        <p class="sub">可借與可還同時為 0。派車過去也沒有柱位可用，必須先查修。<b>不列入調度優先序。</b></p>
+        <div class="scroll" style="max-height:210px"><table><tbody>${off||'<tr><td class="dim">目前沒有</td></tr>'}</tbody></table></div></div>
       <div class="card" style="margin-top:14px"><h3>設備查修 <span class="tag live">即時</span></h3>
-        <p class="sub">仍有服務，但容量落差超過 3 個車柱（總格數 ≠ 可借＋可還）</p>
-        <div class="scroll" style="max-height:220px"><table><thead><tr><th>站點</th><th>落差</th><th>借／還／容量</th></tr></thead>
-          <tbody>${rep||'<tr><td colspan="3" class="dim">目前沒有</td></tr>'}</tbody></table></div></div>
-      <div class="card" style="margin-top:14px"><h3>為什麼是 120 分鐘不是 30 分鐘</h3>
-        <p class="sub">訪談指出人車從決策到抵達通常至少 60 分鐘，而空站的恢復目標是 30 分鐘——
-          等空了才派車，本質上來不及。所以清單排序用的是<b>一小時後</b>的風險，不是現在的狀態。
-          前置時間已拆成新動員 15 分與在勤改道 3 分，兩者分開估。</p>
-        <p class="sub" style="border-top:1px dashed var(--line);padding-top:9px">
-          <b>本看板不產生 ETA。</b>沒有真實車隊位置、班表與載量，算出來的到達時間都是虛構的。
-          候選清單也不是派車任務，建立任務仍須由調度人員決定。</p></div>
-      <div class="card" style="margin-top:14px"><h3>來不及的缺口怎麼補</h3>
-        <p class="sub">派一趟貨車補 20 輛約 600 元（2 人 × 1.27 小時 × 200 元/時＋油耗折舊，人事費率為情境假設）；
-          同樣 20 輛用民眾分流動態加碼平均 300 元。官方友愛接力北北桃試辦期日均發券 17,323 張，
-          見車率 +4.62%、見位率 +1.52%（官方公布數字）。</p>
-        <p class="sub">→ 切到<b>民眾端</b>看此刻的加碼任務板。</p></div>
+        <p class="sub">仍有服務，但容量落差超過 3 個車柱</p>
+        <div class="scroll" style="max-height:210px"><table><thead><tr><th>站點</th><th>落差</th>
+          <th>借／還／容量</th></tr></thead><tbody>${rep||'<tr><td colspan="3" class="dim">目前沒有</td></tr>'}</tbody></table></div></div>
+    </div>
+  </div>`;
+}
+
+/* ---------------------------------------------- 調度人員 */
+function workerView(){
+  const dl=S.ana?S.ana.districts.map(d=>d.district):[];
+  const dsel=(S.wdistOptions||dl).map(d=>`<button class="chip ${S.wdist.includes(d)?'on':''}"
+    data-wd="${esc(d)}">${esc(d)}</button>`).join('');
+  const stationOpts=[...S.stations].filter(x=>x.act&&(!S.wdist.length||S.wdist.includes(x.district)))
+    .sort((a,b)=>a.district.localeCompare(b.district,'zh-Hant')||a.name.localeCompare(b.name,'zh-Hant'))
+    .map(x=>`<option value="${x.sid}" ${x.sid==S.wstart?'selected':''}>${esc(x.district)}｜${esc(x.name)}</option>`).join('');
+  const setup=`<div class="card">
+    <h3>上工設定</h3>
+    <p class="sub">系統不知道你在哪裡，也沒有你的班表——今天負責哪幾區、現在在哪一站，都要你自己選。</p>
+    <div class="xs dim" style="margin:10px 0 5px">今天負責的區（可複選）</div>
+    <div class="chips">${dsel}</div>
+    <div class="grid g3" style="margin-top:12px;gap:10px">
+      <div><div class="xs dim" style="margin-bottom:4px">目前位置（當作路線起點）</div>
+        <select id="wstart" style="width:100%;background:var(--bg);border:1px solid var(--line2);
+          color:var(--fg);border-radius:9px;padding:9px;font-size:12px">
+          <option value="">未指定（用所選任務的重心）</option>${stationOpts}</select></div>
+      <div><div class="xs dim" style="margin-bottom:4px">車容量（台）</div>
+        <input id="wcap" type="number" min="1" max="60" value="${S.wcap}"
+          style="width:100%;background:var(--bg);border:1px solid var(--line2);color:var(--fg);
+          border-radius:9px;padding:9px;font-size:12px"></div>
+      <div><div class="xs dim" style="margin-bottom:4px">車上現在有幾台</div>
+        <input id="wload" type="number" min="0" max="60" value="${S.wload}"
+          style="width:100%;background:var(--bg);border:1px solid var(--line2);color:var(--fg);
+          border-radius:9px;padding:9px;font-size:12px"></div>
+    </div>
+  </div>`;
+
+  const w=S.wboard;
+  if(!w) return `<div style="margin-top:14px">${setup}</div>
+    <div class="card" style="margin-top:14px"><p class="sub">選好區域後會載入你的任務。</p></div>`;
+
+  const sm=w.summary;
+  const tasks=w.tasks.map(t=>{
+    const on=S.wsel.has(t.id);
+    const stcol={open:'var(--mute)',assigned:'var(--info)',enroute:'var(--warn)',
+                 arrived:'var(--purple)',failed:'var(--bad)'}[t.status]||'var(--mute)';
+    return `<div class="deck" style="border-left-color:${t.kind==='supply'?'var(--warn)':'var(--bad)'}">
+      <div class="dhead">
+        <div style="min-width:0;display:flex;gap:9px;align-items:flex-start">
+          <span class="cbx ${on?'on':''}" data-wsel="${t.id}">${on?'✓':''}</span>
+          <div><b style="font-size:13.5px">${esc(t.name)}</b>
+            <span class="pill" style="margin-left:6px;color:${stcol};border-color:${stcol}">${esc(t.status)}</span>
+            <div class="xs dim" style="margin-top:4px">${esc(t.district)}・${esc(t.kind_label)} ${t.qty} 台
+              ・已開 ${t.open_min} 分${t.why?'・'+esc(t.why):''}</div></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          ${t.current?`<div class="mono" style="font-size:12.5px">借 ${t.current.bikes}／還 ${t.current.docks}</div>
+          <div class="xs dim">容量 ${t.current.cap}</div>`:''}
+          ${t.field_recovered===true?'<div class="xs" style="color:var(--ok);margin-top:3px">站況已達標</div>':''}
+        </div>
+      </div>
+      <div class="dacts">
+        ${['enroute','arrived','done','failed'].map(a=>`<button class="act ${t.status===a?'sel':''}"
+          data-prog="${t.id}" data-pa="${a}">${({enroute:'出發',arrived:'抵達',done:'完成',failed:'來不及'})[a]}</button>`).join('')}
+        <button class="act" data-fr="${t.sid}">現場回報</button>
+        ${t.status==='failed'?`<button class="act" style="border-color:var(--warn);color:var(--warn)"
+          data-incent="${t.sid}">改用民眾分流</button>`:''}
+      </div>
+      ${t.mismatch?`<div class="xs" style="margin-top:8px;color:var(--bad)">
+        已回報完成，但官方站況顯示還沒回到目標水位——請再確認。</div>`:''}
+    </div>`;}).join('');
+
+  const r=S.wroute;
+  const routeCard=!r?`<div class="card"><h3>路線</h3>
+      <p class="sub">勾選左邊要做的站，按「排路線」。系統會用你選的起點做最近鄰排序，
+        並模擬車上載量：送車會減少、清運會增加，任何一站不夠或爆滿都會標出來。</p>
+      <button class="btn" id="wroutebtn" ${S.wsel.size?'':'disabled'}>
+        ${S.wbusy?'計算中…':`排路線（已選 ${S.wsel.size} 站）`}</button></div>`
+    :`<div class="card">
+      <h3>路線 <span class="tag sim">估算</span></h3>
+      <p class="sub">起點：${esc(r.start.name)}　車容量 ${r.truck_capacity} 台，出發載 ${r.onboard_start} 台。
+        ${r.reordered_for_load?'<b>已為了載量把清運站往前挪。</b>':''}</p>
+      <div class="grid g3" style="gap:9px;margin:11px 0">
+        <div class="kpi" style="padding:10px 11px"><div class="lab">站數</div>
+          <div class="val" style="font-size:20px">${r.totals.stops}</div></div>
+        <div class="kpi" style="padding:10px 11px"><div class="lab">里程</div>
+          <div class="val" style="font-size:20px">${r.totals.distance_km}<em>km</em></div></div>
+        <div class="kpi ${r.feasible?'ok':'bad'}" style="padding:10px 11px"><div class="lab">總時間</div>
+          <div class="val" style="font-size:20px">${r.totals.total_min}<em>分</em></div>
+          <div class="note">行車 ${r.totals.drive_min}＋作業 ${r.totals.handle_min}</div></div>
+      </div>
+      ${!r.feasible?`<div class="ins high" style="margin:0 0 11px">
+        <h4>載量不夠，這條路線做不完</h4><p>${esc(r.pickup_note||'')}</p>
+        ${r.pickup_suggestions.length?`<table><tbody>${r.pickup_suggestions.map(p=>`<tr>
+          <td><b>${esc(p.name)}</b><div class="xs dim">${esc(p.district)}・繞路 ${p.detour_m} 公尺</div></td>
+          <td class="mono" style="color:var(--ok)">可取 ${p.suggest_take} 台</td>
+          <td class="xs dim">現有 ${p.bikes}／容量 ${p.cap}</td></tr>`).join('')}</tbody></table>`
+          :'<p class="xs dim">附近找不到庫存明顯過剩的站，需要從調度中心補車。</p>'}
+      </div>`:''}
+      <table><thead><tr><th>#</th><th>站點</th><th>處置</th><th>可做</th><th>車上剩</th><th>行車</th></tr></thead>
+      <tbody>${r.stops.map((s,i)=>`<tr class="click" data-sid="${s.sid}">
+        <td class="mono dim">${i+1}</td>
+        <td>${esc(s.name)}<div class="xs dim">${esc(s.district)}</div></td>
+        <td><span class="pill ${s.kind==='supply'?'warn':'bad'}">${esc(s.kind_label)} ${s.qty_planned}</span></td>
+        <td class="mono" style="color:${s.short?'var(--bad)':'var(--ok)'}">${s.qty_possible}${s.short?`（缺 ${s.short}）`:''}</td>
+        <td class="mono dim">${s.load_after}</td>
+        <td class="mono dim">${s.drive_min} 分</td></tr>`).join('')}</tbody></table>
+      <p class="sub" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+        ${esc(r.caveat)}</p>
+      <button class="btn ghost" style="margin-top:9px" id="wroutebtn">重排路線</button></div>`;
+
+  const h=S.hand;
+  return `<div style="margin-top:14px">${setup}</div>
+  <div class="grid g4" style="margin-top:14px">
+    <div class="kpi warn"><div class="lab">待處理</div><div class="val">${sm.open}<em>件</em></div>
+      <div class="note">送車 ${sm.supply}・清運 ${sm.clear}</div></div>
+    <div class="kpi ok"><div class="lab">今日完成</div><div class="val">${sm.done}<em>件</em></div>
+      <div class="note">${sm.mismatch?`其中 ${sm.mismatch} 件站況未達標`:'站況都已達標'}</div></div>
+    <div class="kpi info"><div class="lab">負責區域</div>
+      <div class="val" style="font-size:19px">${S.wdist.length?esc(S.wdist.join('、')):'未選'}</div></div>
+    <div class="kpi"><div class="lab">車上載量</div><div class="val">${S.wload}<em>/${S.wcap}</em></div>
+      <div class="note">出發前請確認實際台數</div></div>
+  </div>
+  <div class="split" style="margin-top:14px">
+    <div>
+      <div class="card"><h3>我今天要解決的 <span class="tag live">即時</span></h3>
+        <p class="sub">${esc(w.semantics)}</p>
+        <div style="margin-top:11px">${tasks||'<p class="sub">這幾區目前沒有待處理任務。</p>'}</div>
+        ${w.suggested.length?`<h3 style="margin-top:15px">還沒建成任務、但現在就有狀況的站</h3>
+          <table><tbody>${w.suggested.map(b=>`<tr class="click" data-sid="${b.sid}">
+            <td><b>${esc(b.name)}</b><div class="xs dim">${esc(b.district)}・${esc(b.why)}</div></td>
+            <td><span class="pill ${b.kind==='supply'?'warn':'bad'}">${esc(b.kind_label)} ${b.qty}</span></td>
+            <td><button class="act" data-addtask="${b.sid}">加進我的任務</button></td></tr>`).join('')}
+          </tbody></table>`:''}
+      </div>
+    </div>
+    <div>
+      ${routeCard}
+      <div class="card" style="margin-top:14px"><h3>班次交接</h3>
+        ${h?`<div class="grid g3" style="gap:9px;margin-bottom:10px">
+          <div class="kpi" style="padding:10px 11px"><div class="lab">未完成</div>
+            <div class="val" style="font-size:20px">${h.summary.open}</div>
+            <div class="note">其中 ${h.summary.never_started} 件沒開始</div></div>
+          <div class="kpi ${h.summary.mismatch?'bad':'ok'}" style="padding:10px 11px">
+            <div class="lab">回報完成但站況未達標</div>
+            <div class="val" style="font-size:20px">${h.summary.mismatch}</div></div>
+          <div class="kpi" style="padding:10px 11px"><div class="lab">最久未結</div>
+            <div class="val" style="font-size:20px">${Math.round(h.summary.longest_open_min)}<em>分</em></div></div>
+        </div>
+        <ul class="xs mute" style="margin:0;padding-left:16px;line-height:1.95">
+          ${h.handover_notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`
+        :'<p class="sub">載入中…</p>'}
+        <button class="btn ghost" style="margin-top:10px" id="whand">重新整理交接摘要</button></div>
+      <div class="card" style="margin-top:14px"><h3>誠實說明</h3>
+        <p class="sub">路線是最近鄰貪婪排序，<b>不是最佳解</b>；距離用直線乘繞路係數，不是導航，
+          沒有真實路網、號誌與單行道。系統不知道你的實際位置。<br>
+          完成與否以現場為準，本系統只能用官方站況（每 5 分鐘）交叉驗證，不能代替你確認。<br>
+          <b>沒有離線功能</b>：現有的 Service Worker 只有快取，沒有送出佇列。
+          地下停車場等收訊差的地方請等有訊號再回報，不要以為按了就送出去了。</p></div>
     </div>
   </div>`;
 }
@@ -1621,6 +1798,41 @@ function render(){
     if(S.ptab==='wallet')loadWallet();});
   $$('[data-claim]').forEach(b=>b.onclick=()=>claim(b));
 
+  // 微笑單車端分頁
+  $$('[data-ot]').forEach(b=>b.onclick=()=>{
+    S.otab=b.dataset.ot; S.sel=null; render(); scrollTo({top:0,behavior:'smooth'});
+    if(S.otab==='monitor'&&!S.mon) loadMonitor();
+    if(S.otab==='worker') loadWorker();
+  });
+  $$('[data-batch]').forEach(el=>el.onclick=()=>{
+    const id=+el.dataset.batch;
+    S.obatch.has(id)?S.obatch.delete(id):S.obatch.add(id); render();});
+  const bs=$('#bsel'); if(bs) bs.onclick=()=>{
+    (S.mon?.batch||[]).forEach(b=>S.obatch.add(b.sid)); render();};
+  const bc=$('#bclr'); if(bc) bc.onclick=()=>{S.obatch.clear(); render();};
+  $$('[data-odist]').forEach(b=>b.onclick=()=>{
+    S.odist=(S.odist===b.dataset.odist)?null:b.dataset.odist; render();});
+  const ba=$('#bassign'); if(ba) ba.onclick=()=>assignBatch();
+
+  // 調度人員
+  $$('[data-wd]').forEach(b=>b.onclick=()=>{
+    const d=b.dataset.wd;
+    S.wdist=S.wdist.includes(d)?S.wdist.filter(x=>x!==d):[...S.wdist,d];
+    S.wsel.clear(); S.wroute=null; loadWorker();});
+  const ws=$('#wstart'); if(ws) ws.onchange=()=>{S.wstart=ws.value?+ws.value:null;};
+  const wc=$('#wcap'); if(wc) wc.onchange=()=>{S.wcap=Math.max(1,+wc.value||20);};
+  const wl=$('#wload'); if(wl) wl.onchange=()=>{S.wload=Math.max(0,+wl.value||0);};
+  $$('[data-wsel]').forEach(el=>el.onclick=e=>{
+    e.stopPropagation();
+    const id=el.dataset.wsel;
+    S.wsel.has(id)?S.wsel.delete(id):S.wsel.add(id); render();});
+  const wr=$('#wroutebtn'); if(wr) wr.onclick=()=>planRoute();
+  const wh=$('#whand'); if(wh) wh.onclick=()=>loadHandover();
+  $$('[data-prog]').forEach(b=>b.onclick=()=>progress(b.dataset.prog,b.dataset.pa));
+  $$('[data-addtask]').forEach(b=>b.onclick=()=>addTask(+b.dataset.addtask));
+  $$('[data-fr]').forEach(b=>b.onclick=()=>fieldReport(+b.dataset.fr));
+  $$('[data-incent]').forEach(b=>b.onclick=()=>toIncentive(+b.dataset.incent));
+
   // 政府端分頁
   $$('[data-gt]').forEach(b=>b.onclick=()=>{
     S.gtab=b.dataset.gt; S.sel=null; render(); scrollTo({top:0,behavior:'smooth'});
@@ -1683,6 +1895,81 @@ function render(){
     }
   });
   if(S.view==='citizen'&&S.ptab==='wallet')loadWallet();
+}
+async function loadMonitor(){
+  try{ S.mon=await api('/api/v2/ops/monitor'); }catch(e){ S.mon=null; }
+  if(S.view==='ops') render();
+}
+async function loadWorker(){
+  const q=S.wdist.length?'?districts='+encodeURIComponent(S.wdist.join(',')):'';
+  try{ S.wboard=await api('/api/v2/ops/worker'+q); }catch(e){ S.wboard=null; }
+  render(); loadHandover();
+}
+async function loadHandover(){
+  const q=S.wdist.length?'?districts='+encodeURIComponent(S.wdist.join(',')):'';
+  try{ S.hand=await api('/api/v2/ops/handover'+q); }catch(e){ S.hand=null; }
+  if(S.view==='ops'&&S.otab==='worker') render();
+}
+async function assignBatch(){
+  if(!S.obatch.size) return;
+  try{
+    const r=await api('/api/v2/ops/tasks/batch',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({sids:[...S.obatch],district:S.odist,assignee:S.oassign})});
+    S.obatch.clear();
+    await loadMonitor();
+    toast(`已建立 ${r.created.length} 件任務`+(r.skipped_already_open.length?`，${r.skipped_already_open.length} 站已有任務略過`:'')
+      +`。${r.caveat}`);
+  }catch(e){ toast('派工失敗：'+e.message); }
+}
+async function addTask(sid){
+  try{
+    await api('/api/v2/ops/tasks/batch',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({sids:[sid],district:S.wdist[0]||null,assignee:'調度人員'})});
+    loadWorker();
+  }catch(e){ toast('加入失敗：'+e.message); }
+}
+async function planRoute(){
+  if(!S.wsel.size) return;
+  S.wbusy=true; render();
+  try{
+    S.wroute=await api('/api/v2/ops/route',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({task_ids:[...S.wsel],start_sid:S.wstart,
+        truck_capacity:S.wcap,onboard:S.wload})});
+  }catch(e){ toast('排路線失敗：'+e.message); }
+  S.wbusy=false; render();
+}
+async function progress(id,action){
+  try{
+    const r=await api('/api/v2/ops/progress',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({task_id:id,action,by:'調度人員'})});
+    if(r.warning) toast(r.warning);
+    await loadWorker();
+  }catch(e){ toast('回報失敗：'+e.message); }
+}
+async function fieldReport(sid){
+  const sym=prompt('現場看到什麼？（例如：車機沒有反應、顯示錯誤、車柱鎖不住）');
+  if(!sym) return;
+  const bike=prompt('車號（沒有可留空）')||null;
+  const dock=bike?null:(prompt('柱號（沒有可留空）')||null);
+  try{
+    const r=await api('/api/v2/ops/field-report',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({sid,symptom:sym,bike_no:bike,dock_no:dock,by:'調度人員',
+        request_id:'fr'+sid+'-'+Date.now()})});
+    toast(`已建單。${r.dedup}。${r.caveat}`);
+  }catch(e){ toast('建單失敗：'+e.message); }
+}
+async function toIncentive(sid){
+  try{
+    const b=await api('/api/v2/rewards/board');
+    const q=b.quests.find(x=>x.sid===sid);
+    toast(q?`這一站的加碼已經在任務板上：${q.kind}，×${q.multiplier} 加碼 ${q.points} 元，還差 ${q.remaining_to_clear} 台解除。切到民眾端可以看到。`
+           :'這一站目前沒有缺口，加碼不會啟動——加碼只在真的有缺口時才給。');
+  }catch(e){ toast('查詢失敗：'+e.message); }
 }
 async function loadDecisions(){
   try{ S.dec=await api('/api/v2/gov/decisions'); }catch(e){ S.dec={count:0,decisions:[],summary:{}}; }
@@ -1757,7 +2044,8 @@ async function claim(btn){
 $$('nav.views button').forEach(b=>b.onclick=()=>{
   S.view=b.dataset.v; S.sel=null;
   $$('nav.views button').forEach(x=>x.classList.toggle('on',x===b));
-  if(S.view==='ops'&&!S.ops) api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
+  if(S.view==='ops'){ if(!S.ops) api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
+    if(S.otab==='monitor'&&!S.mon) loadMonitor(); if(S.otab==='worker') loadWorker(); }
   if(S.view==='citizen'&&!S.rw) api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
   if(S.view==='method'&&!S.mth) api('/api/v2/method').then(d=>{S.mth=d;render();}).catch(()=>{});
   render(); scrollTo({top:0,behavior:'smooth'});
