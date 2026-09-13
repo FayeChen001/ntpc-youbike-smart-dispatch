@@ -10,7 +10,7 @@
 | 直連位址 | http://35.93.221.246 |
 | HTTPS 位址 | https://d2gvisqxis9sbc.cloudfront.net |
 | CloudFront 發佈 | `E2YHJ9G5P1S29W` |
-| WAF Web ACL | `ntpc-youbike-acl`，預設 Block，允許 IPSet `ntpc-youbike-venue`（IPv4）與 `ntpc-youbike-venue-v6`（IPv6） |
+| WAF Web ACL | `ntpc-youbike-acl`（CLOUDFRONT scope，us-east-1），**預設動作是 Allow**。規則：優先序 0/1 允許 IPSet `ntpc-youbike-venue`／`-v6`；優先序 11 `BlockPublicWrites` 擋掉非白名單的 POST/PUT/PATCH/DELETE |
 | 安全群組 | `sg-08f4c61e785f6517b` 四個現場 IP 的 80/443/8787；`-` CloudFront 回源 |
 | 執行個體角色 | `NTPCYouBikeAppRole`，程式用執行個體角色取得 AWS 權限，機器上沒有任何金鑰 |
 | 服務 | systemd `youbike.service`，uvicorn 監聽 80 |
@@ -27,9 +27,14 @@
 
 部署後根網址 `/` 是一站式；情境回放在 `/replay`。
 
-## 公開的唯讀 demo 網址
+## 公開讀取、白名單寫入
 
-現況只有四個現場 IP 打得開。要讓評審與主辦也能看：
+**2026-09-13 實測更正**：先前本文寫「WAF 預設 Block、只有四個現場 IP 打得開」，那是錯的。
+Web ACL 的 DefaultAction 一直都是 **Allow**，那兩條 AllowVenueIPs 規則在預設允許之下形同虛設——
+CloudFront 網址從一開始就對全世界開放，**連 POST 也是**。
+已用不在白名單的網路實測，正常回傳完整頁面。
+
+所以要做的不是「開放唯讀」，而是**擋掉非白名單的寫入**：
 
 ```bash
 ./scripts/setup_public_demo.sh            # dry-run，先看會怎麼改
@@ -37,10 +42,11 @@
 ./scripts/setup_public_demo.sh --remove   # 收回
 ```
 
-它在既有 Web ACL 上**只新增一條**規則：`GET`／`HEAD` 到 `/`、`/v2`、`/api/v2/*`、`/static/*`
-一律放行；其餘維持原本的預設 Block。也就是**任何人都能讀，但寫不了**——
-建單、指派、結案、領取獎勵這些 POST，以及 `/gov`、`/ops`、`/citizen`、`/replay`，
-仍然只有白名單四個現場 IP 進得來。
+它在既有 Web ACL 上**只新增一條** `BlockPublicWrites`：擋掉 POST/PUT/PATCH/DELETE。
+不必再判斷來源 IP——前面的白名單規則動作是 Allow，命中就終止評估，
+現場 IP 根本不會走到這一條。結果是**任何人都能讀，只有現場白名單能寫**。
+
+驗收（2026-09-13 套用後）：白名單這側讀寫皆 200；非白名單的讀取正常、寫入回 403。
 
 WAF 規則傳播到全部邊緣節點要幾分鐘。驗證要用**不在白名單的網路**（例如手機 4G）。
 

@@ -1,40 +1,40 @@
 #!/bin/zsh
-# 在既有的 WAF Web ACL 上加一條「公開唯讀」規則：
-#   任何來源的 GET / HEAD 到 一站式頁面與 /api/v2/* 讀取端點 → 允許
-#   其他一律維持原本的預設 Block（只有白名單四個現場 IP 進得來）
+# 讓公開網址維持「任何人可讀、只有現場白名單可寫」。
 #
-# 也就是說：評審與主辦可以打開網站看，但建單、指派、結案、領取獎勵這些寫入動作
-# 仍然只有現場白名單能做。
+# 重要背景（2026-09-13 實測後改寫）：
+#   docs/DEPLOY.md 原本寫「WAF 預設 Block」，那是錯的。
+#   實際上 Web ACL 的 DefaultAction 是 **Allow**，那兩條 AllowVenueIPs 規則
+#   在預設允許的情況下形同虛設——網站早就對全世界開放，連 POST 也是。
+#   已用不在白名單的網路實測 CloudFront，正常回傳完整頁面。
+#
+#   所以要做的不是「開放唯讀」（已經是公開的），而是**擋掉非白名單的寫入**。
+#
+# 規則邏輯：
+#   優先序 0/1  現場白名單 IP → Allow（命中就終止評估，所以現場不受影響）
+#   優先序 11   非白名單 + 寫入方法（POST/PUT/PATCH/DELETE）→ Block
+#   其餘        走預設 Allow，也就是任何人都能讀
 #
 # 用法：
-#   ./scripts/setup_public_demo.sh            # dry-run，只印出會怎麼改，不動任何東西
+#   ./scripts/setup_public_demo.sh            # dry-run，只印出會怎麼改
 #   ./scripts/setup_public_demo.sh --apply    # 真的套用
-#   ./scripts/setup_public_demo.sh --remove   # 移除這條規則，回到全白名單
-#
-# 這個腳本只新增／移除自己這一條規則（名稱 PublicReadOnlyV2），不碰既有規則。
+#   ./scripts/setup_public_demo.sh --remove   # 移除這條規則（回到寫入也公開）
 set -e
 export PATH=$HOME/Library/Python/3.9/bin:$PATH
 export AWS_PROFILE=hackathon
-REGION=us-west-2
 ACL_NAME=ntpc-youbike-acl
-RULE_NAME=PublicReadOnlyV2
+RULE_NAME=BlockPublicWrites
 MODE=${1:-dry}
 
 command -v aws >/dev/null || { echo "找不到 aws cli"; exit 1; }
 aws sts get-caller-identity >/dev/null 2>&1 || {
-  echo "AWS 憑證無效或已過期。請先重貼 hackathon profile 的憑證："
-  echo "  aws configure set --profile hackathon aws_access_key_id ..."
-  echo "  aws configure set --profile hackathon aws_secret_access_key ..."
-  echo "  aws configure set --profile hackathon aws_session_token ..."
-  exit 2; }
+  echo "AWS 憑證無效或已過期，請先跑 ./scripts/paste_aws_creds.sh"; exit 2; }
 
-# CloudFront 用的 WAF 一律在 us-east-1 的 CLOUDFRONT scope
 SCOPE=CLOUDFRONT
 CF_REGION=us-east-1
 ID=$(aws wafv2 list-web-acls --scope $SCOPE --region $CF_REGION \
       --query "WebACLs[?Name=='$ACL_NAME'].Id | [0]" --output text 2>/dev/null || echo "None")
 if [[ "$ID" == "None" || -z "$ID" ]]; then
-  SCOPE=REGIONAL; CF_REGION=$REGION
+  SCOPE=REGIONAL; CF_REGION=us-west-2
   ID=$(aws wafv2 list-web-acls --scope $SCOPE --region $CF_REGION \
         --query "WebACLs[?Name=='$ACL_NAME'].Id | [0]" --output text)
 fi
@@ -49,72 +49,71 @@ mode = sys.argv[1]
 d = json.load(open('/tmp/acl.json'))
 acl, lock = d['WebACL'], d['LockToken']
 rules = acl.get('Rules', [])
-RULE = 'PublicReadOnlyV2'
-existing = [r for r in rules if r['Name'] == RULE]
+RULE = 'BlockPublicWrites'
 others = [r for r in rules if r['Name'] != RULE]
+default = next(iter(acl.get('DefaultAction', {})), '—')
 
 print(f"\n現有規則（{len(rules)} 條）：")
 for r in rules:
     act = next(iter(r.get('Action', {})), '—')
-    print(f"  優先序 {r['Priority']:>3}  {r['Name']}  動作={act}")
-print(f"預設動作：{next(iter(acl.get('DefaultAction', {})), '—')}")
+    ipset = ''
+    stmt = r.get('Statement', {})
+    if 'IPSetReferenceStatement' in stmt:
+        ipset = '  ← 比對 IPSet'
+    print(f"  優先序 {r['Priority']:>3}  {r['Name']}  動作={act}{ipset}")
+print(f"預設動作：{default}")
+if default != 'Allow':
+    print("\n⚠ 預設動作不是 Allow，這個腳本的前提不成立，請先確認 ACL 設定。")
+    sys.exit(1)
+
+# 找出現有的 IPSet 參照，直接沿用，不另建
+ipsets = []
+for r in others:
+    s = r.get('Statement', {})
+    ref = s.get('IPSetReferenceStatement')
+    if ref:
+        ipsets.append(ref['ARN'])
+if not ipsets:
+    print("\n⚠ 找不到現場 IP 的 IPSet 參照，無法判斷誰是白名單，中止。")
+    sys.exit(1)
 
 if mode == '--remove':
     new_rules = others
-    print(f"\n[移除] 會拿掉 {RULE}，剩 {len(new_rules)} 條，回到全白名單。")
+    print(f"\n[移除] 拿掉 {RULE}。之後**任何人都能寫入**（建案件、派工、領獎勵）。")
 else:
     prio = max([r['Priority'] for r in others], default=0) + 10
-    # 只放行讀取：GET/HEAD，且路徑限定在 v2 的頁面與讀取端點
-    starts = ['/v2', '/api/v2/', '/static/', '/manifest.webmanifest']
+    methods = ['POST', 'PUT', 'PATCH', 'DELETE']
     rule = {
         'Name': RULE, 'Priority': prio,
-        'Action': {'Allow': {}},
+        'Action': {'Block': {}},
         'VisibilityConfig': {'SampledRequestsEnabled': True,
                              'CloudWatchMetricsEnabled': True,
                              'MetricName': RULE},
-        'Statement': {'AndStatement': {'Statements': [
-            {'OrStatement': {'Statements': [
-                {'ByteMatchStatement': {
-                    'FieldToMatch': {'Method': {}},
-                    'PositionalConstraint': 'EXACTLY',
-                    'SearchString': m,
-                    'TextTransformations': [{'Priority': 0, 'Type': 'UPPERCASE'}]}}
-                for m in ('GET', 'HEAD')]}},
-            {'OrStatement': {'Statements': [
-                {'ByteMatchStatement': {
-                    'FieldToMatch': {'UriPath': {}},
-                    'PositionalConstraint': 'STARTS_WITH',
-                    'SearchString': p,
-                    'TextTransformations': [{'Priority': 0, 'Type': 'NONE'}]}}
-                for p in starts] + [
-                {'ByteMatchStatement': {
-                    'FieldToMatch': {'UriPath': {}},
-                    'PositionalConstraint': 'EXACTLY',
-                    'SearchString': '/',
-                    'TextTransformations': [{'Priority': 0, 'Type': 'NONE'}]}}]}},
-        ]}},
+        'Statement': {'OrStatement': {'Statements': [
+            {'ByteMatchStatement': {
+                'FieldToMatch': {'Method': {}},
+                'PositionalConstraint': 'EXACTLY',
+                'SearchString': m,
+                'TextTransformations': [{'Priority': 0, 'Type': 'UPPERCASE'}]}}
+            for m in methods]}},
     }
     new_rules = others + [rule]
-    print(f"\n[新增] {RULE}（優先序 {prio}，動作 Allow）")
-    print("  條件：Method ∈ {GET, HEAD}　且　路徑為 / 或以下列開頭：")
-    for p in starts:
-        print(f"          {p}")
-    print("  效果：任何人可以讀 v2 一站式與 /api/v2/* 的 GET 端點；")
-    print("        POST（建單、指派、結案、領獎勵）與 /gov /ops /citizen /replay 仍只有白名單進得來。")
+    print(f"\n[新增] {RULE}（優先序 {prio}，動作 Block）")
+    print(f"  條件：Method ∈ {{{', '.join(methods)}}}")
+    print("  為什麼這樣就夠：前面的白名單規則動作是 Allow，命中就終止評估，")
+    print("  所以現場 IP 根本不會走到這一條；只有非白名單的寫入會被擋。")
+    print("\n  效果：")
+    print("    任何人都可以讀（維持現狀，本來就是公開的）")
+    print("    只有現場白名單可以建案件、派工、發命令、領獎勵、回報")
 
-out = dict(acl)
-out['Rules'] = new_rules
-for k in ('ARN', 'Id', 'Name', 'Capacity', 'LabelNamespace', 'ManagedByFirewallManager'):
-    out.pop(k, None)
 json.dump({'rules': new_rules, 'lock': lock,
            'default': acl.get('DefaultAction'),
-           'visibility': acl.get('VisibilityConfig'),
-           'description': acl.get('Description', '')},
+           'visibility': acl.get('VisibilityConfig')},
           open('/tmp/acl_new.json', 'w'), ensure_ascii=False)
 PY
 
 if [[ "$MODE" != "--apply" && "$MODE" != "--remove" ]]; then
-  echo "\n這是 dry-run，什麼都沒有改。確認上面的內容沒問題後，再跑："
+  echo "\n這是 dry-run，什麼都沒有改。要套用："
   echo "  ./scripts/setup_public_demo.sh --apply"
   exit 0
 fi
@@ -125,9 +124,8 @@ DEF=$(python3 -c "import json;print(json.dumps(json.load(open('/tmp/acl_new.json
 VIS=$(python3 -c "import json;print(json.dumps(json.load(open('/tmp/acl_new.json'))['visibility']))")
 
 aws wafv2 update-web-acl --name $ACL_NAME --scope $SCOPE --id $ID --region $CF_REGION \
-  --lock-token "$LOCK" --default-action "$DEF" --visibility-config "$VIS" --rules "$RULES"
-echo "\n已套用。WAF 規則傳播到全部邊緣節點通常要幾分鐘。"
-echo "公開網址：https://d2gvisqxis9sbc.cloudfront.net/"
-echo "驗證（用不在白名單的網路，例如手機 4G）："
+  --lock-token "$LOCK" --default-action "$DEF" --visibility-config "$VIS" --rules "$RULES" >/dev/null
+echo "\n已套用。WAF 傳播到全部邊緣節點要幾分鐘。"
+echo "驗證（要用不在白名單的網路，例如手機 4G）："
 echo "  開 https://d2gvisqxis9sbc.cloudfront.net/            → 應該看得到一站式"
-echo "  curl -X POST https://d2gvisqxis9sbc.cloudfront.net/api/v2/events  → 應該被擋（403）"
+echo "  curl -X POST https://d2gvisqxis9sbc.cloudfront.net/api/v2/events/reset  → 應該回 403"
