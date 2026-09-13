@@ -107,6 +107,11 @@ svg.map text.dlab:hover{fill:#e8edf6;opacity:1}
 svg.map text.dlab.on{fill:#5aa9f7;font-size:20px;opacity:1}
 .legend{display:flex;gap:14px;flex-wrap:wrap;padding:10px 15px;border-top:1px solid var(--line);font-size:11px;color:var(--mute)}
 .legend i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:-1px}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(14px);
+  background:#0d1420f2;border:1px solid var(--line2);border-radius:11px;padding:12px 18px;
+  font-size:12.5px;line-height:1.65;max-width:min(560px,92vw);color:var(--fg);z-index:120;
+  box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.25s}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 #tip{position:fixed;pointer-events:none;z-index:99;background:#050810ee;border:1px solid var(--line2);
   border-radius:9px;padding:9px 11px;font-size:11.5px;line-height:1.6;box-shadow:var(--shadow);display:none;max-width:250px}
 #tip b{font-size:12.5px}
@@ -128,6 +133,33 @@ tr.click{cursor:pointer} tr.click:hover td{background:var(--bg3)}
 .pill.warn{color:var(--warn);border-color:rgba(245,196,81,.45);background:rgba(245,196,81,.1)}
 .pill.ok{color:var(--ok);border-color:rgba(56,211,159,.45);background:rgba(56,211,159,.1)}
 .pill.info{color:var(--info);border-color:rgba(90,169,247,.45);background:rgba(90,169,247,.1)}
+
+/* ---------------- 政府端分頁與決策卡 ---------------- */
+.gtabs{display:flex;gap:4px;background:var(--bg2);border:1px solid var(--line);
+  border-radius:12px;padding:4px;margin-bottom:2px;overflow-x:auto}
+.gtabs .gt{padding:8px 16px;border-radius:9px;font-size:13px;color:var(--mute);
+  white-space:nowrap;transition:.15s}
+.gtabs .gt:hover{color:var(--fg)}
+.gtabs .gt.on{background:var(--bg3);color:var(--fg)}
+.gtabs .gt .n{font-family:var(--mono);font-size:10.5px;opacity:.7;margin-left:6px}
+.deck{border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:var(--r2);
+  padding:13px 15px;margin-bottom:11px;background:var(--bg2)}
+.dhead{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.dev{margin:9px 0 0;padding-left:17px;font-size:11.5px;color:var(--mute);line-height:1.8}
+.drec{margin-top:9px;font-size:12px;color:var(--ok);line-height:1.6;
+  background:rgba(56,211,159,.07);border-radius:8px;padding:8px 10px}
+.dacts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.act{padding:7px 12px;border-radius:9px;border:1px solid var(--line2);font-size:12px;
+  color:var(--mute);transition:.15s}
+.act:hover{color:var(--fg);border-color:var(--dim)}
+.act.rec{border-color:var(--ok);color:var(--ok);background:rgba(56,211,159,.08)}
+.act.sel{background:var(--bg3);color:var(--fg);border-color:var(--info)}
+.act .to{font-size:10px;opacity:.65;margin-left:5px}
+.dorder{margin-top:11px;border-top:1px dashed var(--line);padding-top:10px}
+.dorder textarea{width:100%;background:var(--bg);border:1px solid var(--line2);color:var(--fg);
+  border-radius:9px;padding:10px;font-size:12.5px;line-height:1.7;resize:vertical;
+  font-family:inherit}
+tr.click.on td{background:var(--bg3);box-shadow:inset 2px 0 0 var(--info)}
 
 /* ---------------- insight ---------------- */
 .ins{border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:var(--r2);
@@ -225,7 +257,7 @@ const fmt = n => n==null?'—':(typeof n==='number'?n.toLocaleString('zh-TW'):n)
 const pct = n => n==null?'—':n.toFixed(1)+'%';
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const S = {view:'gov', stations:[], live:null, ana:null, ins:null, ops:null, rw:null,
-           filter:'all', mdist:null, mv:{k:1,tx:0,ty:0}, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
+           filter:'all', mdist:null, mv:{k:1,tx:0,ty:0}, gtab:'desk', dec:null, gq:'', gres:null, gdist:null, gdd:null, opt:null, optPeriod:'m1', orderFor:null, orderAct:null, orderMsg:'', orderBusy:false, sel:null, ptab:'plan', cdist:'板橋區', cq:'', fc:null, riskF:null, riskE:null, mth:null, tFrom:null, tTo:null, trip:null, tripBusy:false, ev:null};
 
 async function api(p,opt){
   const r = await fetch(p,opt);
@@ -248,6 +280,7 @@ async function boot(){
     render();
     api('/api/v2/insights').then(d=>{S.ins=d; if(S.view==='gov')render();}).catch(()=>{});
     api('/api/v2/events').then(d=>{S.ev=d; if(S.view==='gov')render();}).catch(()=>{});
+    loadDecisions();
     loadForecast();
     api('/api/v2/ops/board').then(d=>{S.ops=d; if(S.view==='ops')render();}).catch(()=>{});
     api('/api/v2/rewards/board').then(d=>{S.rw=d; if(S.view==='citizen')render();}).catch(()=>{});
@@ -277,7 +310,9 @@ async function refresh(){
     if(S.view==='ops') api('/api/v2/ops/board').then(d=>{S.ops=d;render();});
     else if(S.view==='citizen') api('/api/v2/rewards/board').then(d=>{S.rw=d;render();});
     else { api('/api/v2/insights').then(d=>{S.ins=d;render();});
-           api('/api/v2/events').then(d=>{S.ev=d;render();}).catch(()=>{}); render(); }
+           api('/api/v2/events').then(d=>{S.ev=d;render();}).catch(()=>{});
+           if(S.gtab==='desk') loadDecisions();
+           render(); }
     loadForecast();
   }catch(e){ /* 保留上一份快照，狀態列會顯示過期 */ }
 }
@@ -515,7 +550,9 @@ function bindMap(){
     render();});
   $$('text.dlab').forEach(t=>t.addEventListener('click',e=>{
     if(moved>4) return;
-    S.mdist = (S.mdist===t.dataset.dist)?null:t.dataset.dist; render();}));
+    const d=t.dataset.dist;
+    S.mdist = (S.mdist===d)?null:d;
+    if(S.view==='gov'&&S.gtab==='area'&&S.mdist) openDistrict(d); else render();}));
 }
 async function openStation(sid){
   S.sel={sid,loading:true}; render();
@@ -730,47 +767,313 @@ function insightsFor(aud){
 }
 
 /* ============================================================ 政府端 */
+function govTabs(){
+  const t=(id,lab,n)=>`<button class="gt ${S.gtab===id?'on':''}" data-gt="${id}">${lab}`+
+    (n!=null?`<span class="n">${n}</span>`:'')+`</button>`;
+  return `<div class="gtabs">
+    ${t('desk','決策台',S.dec?S.dec.count:null)}
+    ${t('area','區域',null)}
+    ${t('opt','成效與優化',null)}
+    ${t('analysis','歷史分析',null)}
+  </div>`;
+}
+
 function govView(){
-  const st=S.live.stats, sta=S.live.status, a=S.ana;
+  const body = S.gtab==='desk'?deskView()
+             : S.gtab==='area'?areaView()
+             : S.gtab==='opt'?optView()
+             : analysisView();
+  return govTabs()+body;
+}
+
+function govKpis(){
+  const st=S.live.stats;
+  const offline=S.stations.filter(x=>x.act&&x.b===0&&x.d===0).length;
   const k=(cls,lab,val,unit,note)=>`<div class="kpi ${cls}">
     <div class="lab">${lab}</div><div class="val">${val}<em>${unit||''}</em></div>
     <div class="note">${note||''}</div></div>`;
-  const offline=S.stations.filter(s=>s.act&&s.b===0&&s.d===0).length;
-  const kpis=`<div class="grid g4">
-    ${k('bad','此刻無位可還',st.no_dock,'站',
-        `營運中站點的 ${pct(st.no_dock_pct)}　其中 ${offline} 站是整站無服務`)}
-    ${k('warn','此刻無車可借',st.no_bike,'站',
-        `營運中站點的 ${pct(st.no_bike_pct)}　其中 ${offline} 站是整站無服務`)}
+  return `<div class="grid g4">
+    ${k('bad','此刻無位可還',st.no_dock,'站',`營運中站點的 ${pct(st.no_dock_pct)}　其中 ${offline} 站是整站無服務`)}
+    ${k('warn','此刻無車可借',st.no_bike,'站',`營運中站點的 ${pct(st.no_bike_pct)}　其中 ${offline} 站是整站無服務`)}
     ${k('info','容量落差',st.capacity_gap_stations,'站',
         `${fmt(st.capacity_gap_units)} 個車柱名目存在但借不到也還不了（${pct(st.capacity_gap_pct)}）`)}
     ${k(st.stale_stations>40?'warn':'ok','資料新鮮度',st.data_age_min_median,'分',
         `中位數；超過 30 分未更新 ${st.stale_stations} 站`)}
   </div>`;
+}
 
+/* ---------------------------------------------- 決策台 */
+function decisionCard(z){
+  const tone=z.kind==='offline'?'var(--purple)':z.kind==='no_dock'?'var(--bad)'
+    :z.kind==='no_bike'?'var(--warn)':'var(--info)';
+  const open=S.orderFor===z.id;
+  const acts=z.actions.map(a=>{
+    const rec=a.key===z.recommended;
+    return `<button class="act ${rec?'rec':''} ${open&&S.orderAct===a.key?'sel':''}"
+      data-order="${z.id}" data-act="${a.key}">${rec?'★ ':''}${esc(a.label)}
+      <span class="to">→ ${esc(a.to)}</span></button>`;}).join('');
+  return `<div class="deck" style="border-left-color:${tone}">
+    <div class="dhead">
+      <div style="min-width:0">
+        <b style="font-size:13.5px">${esc(z.name)}</b>
+        <span class="pill" style="margin-left:7px;color:${tone};border-color:${tone}">${esc(z.kind_label)}</span>
+        ${z.already_open?'<span class="pill info" style="margin-left:5px">已立案</span>':''}
+        <div class="xs dim" style="margin-top:4px">${esc(z.district)}
+          ${z.profile?'・'+esc(z.profile):''}${z.mrt?'・捷運站':''}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="mono" style="font-size:13px">借 <b>${z.bikes}</b>／還 <b>${z.docks}</b></div>
+        <div class="xs dim">容量 ${z.cap}　嚴重度 ${z.severity}</div></div>
+    </div>
+    <ul class="dev">${z.evidence.map(e=>`<li>${esc(e)}</li>`).join('')}</ul>
+    <div class="drec">建議：${esc(z.recommend_reason)}</div>
+    <div class="dacts">${acts}</div>
+    ${open?`<div class="dorder">
+      <div class="xs dim" style="margin-bottom:5px">命令內容（可以改，送出後會原文留在事件台帳）</div>
+      <textarea id="omsg" rows="3">${esc(S.orderMsg)}</textarea>
+      <div style="display:flex;gap:7px;margin-top:8px">
+        <button class="btn" style="flex:1" id="osend">${S.orderBusy?'發佈中…':'發佈命令'}</button>
+        <button class="btn ghost" style="flex:0 0 90px" id="ocancel">取消</button>
+      </div></div>`:''}
+  </div>`;
+}
+
+function deskView(){
+  const d=S.dec;
+  const res=S.gres;
+  const searchBox=`<div class="card" style="padding:12px 14px">
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="gq" placeholder="搜尋站名、行政區或地址…　例如：江子翠、板橋區" value="${esc(S.gq)}"
+        style="flex:1;background:var(--bg);border:1px solid var(--line2);color:var(--fg);
+        border-radius:9px;padding:10px 12px;font-size:13px">
+      ${S.gq?`<button class="chip" id="gqclear">清除 ✕</button>`:''}
+    </div>
+    ${res?(res.count?`<div class="scroll" style="max-height:240px;margin-top:10px">
+      <table><thead><tr><th>站點</th><th>可借</th><th>可還</th><th>容量落差</th><th>早峰無位</th></tr></thead>
+      <tbody>${res.stations.map(x=>`<tr class="click" data-sid="${x.sid}">
+        <td><b>${esc(x.name)}</b><div class="xs dim">${esc(x.district)}${x.profile?'・'+esc(x.profile):''}</div></td>
+        <td class="mono" style="color:${x.bikes===0?'var(--bad)':'var(--ok)'}">${x.bikes}</td>
+        <td class="mono" style="color:${x.docks===0?'var(--bad)':'var(--ok)'}">${x.docks}</td>
+        <td class="mono dim">${x.gap||'—'}</td>
+        <td class="mono dim">${x.am_no_dock!=null?(x.am_no_dock*100).toFixed(1)+'%':'—'}</td></tr>`).join('')}
+      </tbody></table></div>`
+      :`<p class="sub" style="margin:10px 0 0">找不到符合「${esc(S.gq)}」的站。</p>`):''}
+  </div>`;
+
+  if(!d) return govKpis()+`<div style="margin-top:14px">${searchBox}</div>
+    <div class="card" style="margin-top:14px"><h3>待決事項</h3><p class="sub">整理中…</p></div>`;
+
+  const sm=d.summary;
+  const chips=`<div class="chips" style="margin:12px 0 0">
+    <span class="chip">建議動用資源 <span class="n">${sm.recommend_dispatch}</span></span>
+    <span class="chip">無位可還 <span class="n">${sm.no_dock}</span></span>
+    <span class="chip">無車可借 <span class="n">${sm.no_bike}</span></span>
+    <span class="chip">整站無服務 <span class="n">${sm.offline}</span></span>
+    <span class="chip">容量落差 <span class="n">${sm.capacity_gap}</span></span>
+  </div>`;
+
+  return govKpis()+`
+  <div class="split" style="margin-top:14px">
+    <div>
+      ${searchBox}
+      <div class="card" style="margin-top:14px">
+        <h3>我現在要做哪些決策 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
+        <p class="sub">此刻有狀況的站，依嚴重度排序。★ 是建議處置，理由都附上支撐的數字；
+          按下去會帶出可以修改的命令稿。${esc(d.semantics)}</p>
+        ${chips}
+        <div style="margin-top:12px">${d.decisions.map(decisionCard).join('')||'<p class="sub">目前沒有需要決策的站。</p>'}</div>
+      </div>
+    </div>
+    <div>
+      ${eventCard()}
+      <div style="margin-top:14px">${forecastCard()}</div>
+      <div class="card" style="margin-top:14px"><h3>大數據分析建議 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
+        <p class="sub">把此刻的官方站況與六個月歷史交叉後自動產生。</p>${insightsFor(['gov','citizen'])}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------------------------------------------- 區域 */
+function areaView(){
+  const a=S.ana;
+  const dd=S.gdd;
+  const list=(a?a.districts:[]).map(x=>`<tr class="click ${S.gdist===x.district?'on':''}" data-area="${esc(x.district)}">
+    <td><b>${esc(x.district)}</b><span class="xs dim"> ${x.stations} 站</span></td>
+    <td style="width:90px"><div class="bar"><i style="width:${Math.min(100,x.no_bike*7)}%;background:var(--warn)"></i></div></td>
+    <td class="mono">${x.no_bike}%</td>
+    <td style="width:90px"><div class="bar"><i style="width:${Math.min(100,x.no_dock*7)}%;background:var(--bad)"></i></div></td>
+    <td class="mono">${x.no_dock}%</td></tr>`).join('');
+  let detail=`<div class="card"><h3>區域彙整</h3>
+    <p class="sub">點左邊的行政區，或直接點地圖上的區名標籤，這裡會顯示那一區的即時狀況、
+      歷史表現、站點組成，以及要優先處理誰。</p></div>`;
+  if(dd){
+    const L=dd.live, H=dd.history;
+    const prof=Object.entries(dd.profiles).sort((x,y)=>y[1]-x[1])
+      .map(([k,v])=>`<tr><td>${esc(k)}</td><td class="mono">${v} 站</td></tr>`).join('');
+    detail=`<div class="card">
+      <h3>${esc(dd.district)} <span class="tag live">即時</span></h3>
+      <div class="grid g3" style="margin:11px 0">
+        <div class="kpi ${L.no_dock?'bad':'ok'}" style="padding:11px 12px">
+          <div class="lab">無位可還</div><div class="val">${L.no_dock}<em>站</em></div>
+          <div class="note">共 ${L.stations} 站・停用 ${L.inactive}</div></div>
+        <div class="kpi ${L.no_bike?'warn':'ok'}" style="padding:11px 12px">
+          <div class="lab">無車可借</div><div class="val">${L.no_bike}<em>站</em></div>
+          <div class="note">整站無服務 ${L.both_zero}</div></div>
+        <div class="kpi info" style="padding:11px 12px">
+          <div class="lab">容量落差</div><div class="val">${L.gap_units}<em>柱</em></div>
+          <div class="note">分布在 ${L.gap_stations} 站</div></div>
+      </div>
+      <table><tbody>
+        <tr><td>在站車輛</td><td class="mono">${fmt(L.bikes)} 台（電輔 ${fmt(L.bikes_electric)}）</td></tr>
+        <tr><td>總容量</td><td class="mono">${fmt(L.capacity)} 柱・滿載率 ${L.fill_pct}%</td></tr>
+        ${H?`<tr><td>歷史早峰無車可借</td><td class="mono" style="color:var(--warn)">${H.no_bike}%</td></tr>
+        <tr><td>歷史早峰無位可還</td><td class="mono" style="color:var(--bad)">${H.no_dock}%</td></tr>`:''}
+        ${dd.burden_median!=null?`<tr><td>調度負擔中位數</td><td class="mono">${dd.burden_median}</td></tr>`:''}
+      </tbody></table>
+      <h3 style="margin-top:15px">站點組成 <span class="tag hist">歷史</span></h3>
+      <p class="sub">用平日每小時淨流量分群</p>
+      <table><tbody>${prof||'<tr><td class="dim">無資料</td></tr>'}</tbody></table>
+      <h3 style="margin-top:15px">此刻最該看的站</h3>
+      <table><thead><tr><th>站點</th><th>可借</th><th>可還</th><th>容量</th></tr></thead><tbody>
+        ${dd.worst_now.map(x=>`<tr class="click" data-sid="${x.sid}">
+          <td>${esc(x.name)}<div class="xs dim">${x.profile?esc(x.profile):''}</div></td>
+          <td class="mono" style="color:${x.bikes===0?'var(--bad)':''}">${x.bikes}</td>
+          <td class="mono" style="color:${x.docks===0?'var(--bad)':''}">${x.docks}</td>
+          <td class="mono dim">${x.cap}</td></tr>`).join('')}</tbody></table>
+      ${dd.capacity_gaps.length?`<h3 style="margin-top:15px">容量落差最大的站</h3>
+        <p class="sub">官方暫停營運的站整站容量都會算進落差，那不是設備問題，已另外標示。</p>
+        <table><tbody>${dd.capacity_gaps.map(x=>`<tr class="click" data-sid="${x.sid}">
+          <td>${esc(x.name)}${!x.act?'<span class="pill" style="margin-left:6px;color:var(--dim)">官方暫停營運</span>'
+            :x.both_zero?'<span class="pill" style="margin-left:6px;color:var(--purple)">整站無服務</span>':''}</td>
+          <td class="mono" style="color:${x.act?'var(--info)':'var(--dim)'}">${x.gap}</td>
+          <td class="mono dim">／${x.cap}</td></tr>`).join('')}</tbody></table>`:''}
+      ${(dd.idle_bikes.length||dd.idle_docks.length)?`<h3 style="margin-top:15px">這一區的閒置資源 <span class="tag hist">近一個月</span></h3>
+        <table><tbody>
+          ${dd.idle_bikes.map(x=>`<tr><td>${esc(x.name)}</td><td class="mono">閒置車 ${x.idle} 台</td>
+            <td class="xs dim">期間最低庫存 ${x.min_bikes}／容量 ${x.cap}</td></tr>`).join('')}
+          ${dd.idle_docks.map(x=>`<tr><td>${esc(x.name)}</td><td class="mono">閒置柱 ${x.idle} 柱</td>
+            <td class="xs dim">期間最高車數 ${x.max_bikes}／容量 ${x.cap}</td></tr>`).join('')}
+        </tbody></table>`:''}
+      <p class="sub" style="margin-top:12px;border-top:1px dashed var(--line);padding-top:8px">
+        ${esc(dd.semantics)}</p></div>`;
+  }
+  return `<div class="split" style="margin-top:14px">
+    <div>
+      ${mapSVG()}
+      <div class="card" style="margin-top:14px"><h3>行政區排名 <span class="tag hist">歷史</span></h3>
+        <p class="sub">平日早峰 07–09 的快照比例。點任一列看該區詳細彙整。</p>
+        <div class="scroll"><table><thead><tr><th>行政區</th><th colspan="2">無車可借</th>
+          <th colspan="2">無位可還</th></tr></thead><tbody>${list}</tbody></table></div></div>
+    </div>
+    <div>${detail}<div style="margin-top:14px">${stationPanel()}</div></div>
+  </div>`;
+}
+
+/* ---------------------------------------------- 成效與優化 */
+function optView(){
+  const o=S.opt;
+  if(!o) return `<div class="card" style="margin-top:14px"><h3>成效與優化</h3><p class="sub">載入中…</p></div>`;
+  const p=o.period, I=p.idle, D=p.dispatch, C=p.capacity_shortage;
+  const sel=o.available_periods.map(x=>`<button class="chip ${o.period_key===x.key?'on':''}"
+    data-period="${x.key}">${esc(x.label)}<span class="n">${x.days} 天</span></button>`).join('');
+  const tb=I.top_bikes.map(x=>`<tr class="click" data-sid="${x.sid}">
+    <td>${esc(x.name)}<div class="xs dim">${esc(x.district)}</div></td>
+    <td class="mono" style="color:var(--warn)">${x.idle} 台</td>
+    <td class="xs dim">期間最低庫存 ${x.min_bikes}／容量 ${x.cap}</td></tr>`).join('');
+  const td=I.top_docks.map(x=>`<tr class="click" data-sid="${x.sid}">
+    <td>${esc(x.name)}<div class="xs dim">${esc(x.district)}</div></td>
+    <td class="mono" style="color:var(--info)">${x.idle} 柱</td>
+    <td class="xs dim">期間最高車數 ${x.max_bikes}／容量 ${x.cap}</td></tr>`).join('');
+  const ce=C.top_empty.slice(0,8).map(x=>`<tr class="click" data-sid="${x.sid}">
+    <td>${esc(x.name)}<div class="xs dim">${esc(x.district)}・站群 ${x.cluster_n} 站</div></td>
+    <td style="width:90px"><div class="bar"><i style="width:${Math.min(100,x.all_empty_pct*20)}%;
+      background:var(--warn)"></i></div></td>
+    <td class="mono">${x.all_empty_pct}%</td>
+    <td class="xs dim">群容量 ${x.cluster_capacity}</td></tr>`).join('');
+  const cf=C.top_full.slice(0,6).map(x=>`<tr class="click" data-sid="${x.sid}">
+    <td>${esc(x.name)}<div class="xs dim">${esc(x.district)}・站群 ${x.cluster_n} 站</div></td>
+    <td class="mono">${x.all_full_pct}%</td>
+    <td class="xs dim">群容量 ${x.cluster_capacity}</td></tr>`).join('');
+  return `<div class="card" style="margin-top:14px;border-color:rgba(245,196,81,.35);
+      background:linear-gradient(135deg,rgba(245,196,81,.09),transparent)">
+    <h3>這裡是「可優化空間」，不是已經發生的成效</h3>
+    <p class="sub" style="margin:0">${esc(o.meta.not_an_outcome)}
+      臺北公布的每日少調度 1,192 輛同樣是預估值，不是實測。</p></div>
+  <div class="card" style="margin-top:14px;padding:12px 14px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="sm" style="font-weight:600">統計期間</span>
+      <div class="chips">${sel}</div>
+      <span class="xs dim" style="margin-left:auto">${esc(p.from)} ～ ${esc(p.to)}・共 ${p.days} 天</span>
+    </div></div>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="kpi warn"><div class="lab">閒置車</div><div class="val">${I.total_idle_bikes}<em>台</em></div>
+      <div class="note">分布在 ${I.stations_with_idle_bikes} 站・這些車整個期間一次都沒被借走過</div></div>
+    <div class="kpi info"><div class="lab">閒置柱</div><div class="val">${fmt(I.total_idle_docks)}<em>柱</em></div>
+      <div class="note">分布在 ${I.stations_with_idle_docks} 站・這些柱整個期間一次都沒被停過</div></div>
+    <div class="kpi"><div class="lab">大額庫存跳變</div><div class="val">${fmt(D.daily_bikes_moved)}<em>輛/日</em></div>
+      <div class="note">每日 ${D.daily_events} 次・<b>不是調度量</b>，見下方說明</div></div>
+  </div>
+  <div class="split" style="margin-top:14px">
+    <div>
+      <div class="card"><h3>閒置車：可以移到別站的 <span class="tag hist">${esc(p.label)}</span></h3>
+        <p class="sub">${esc(I.definition)}</p>
+        <table><tbody>${tb||'<tr><td class="dim">這個期間沒有站點符合</td></tr>'}</tbody></table>
+        <p class="sub" style="margin-top:9px">較寬鬆的認定（扣掉最低保留量後的 5 百分位）會算出
+          ${I.loose_total_idle_bikes} 台。${esc(I.loose_note)}</p></div>
+      <div class="card" style="margin-top:14px"><h3>閒置柱：配置遠超過實際使用的站 <span class="tag hist">${esc(p.label)}</span></h3>
+        <p class="sub">這些站的柱位配得比實際需要多很多，多半在觀光區或郊區。
+          柱位移到站群常空掉的地方，比新設站便宜。</p>
+        <table><tbody>${td||'<tr><td class="dim">這個期間沒有站點符合</td></tr>'}</tbody></table></div>
+    </div>
+    <div>
+      <div class="card"><h3>下一步優化建議</h3>
+        <div class="ins high"><h4>供給不足的是「車」，不是「柱」</h4>
+          <p>評估了 ${fmt(C.clusters_evaluated)} 個 500 公尺站群：尖峰時「整群同時沒有空位」的只有
+            ${C.clusters_ever_all_full} 群，最高也只佔 ${C.top_full[0]?C.top_full[0].all_full_pct:0}% 的時間——
+            <b>還車容量在站群層級大致足夠</b>。但「整群同時沒有車」明顯更常見，
+            最高到 ${C.top_empty[0]?C.top_empty[0].all_empty_pct:0}%。</p>
+          <div class="act">→ 這些區域要的是更多車或更高頻的補車，不是加柱。加柱解決不了沒車。</div>
+          <div class="cav">站群以 500 公尺直線距離認定，不是使用者實際願意走的路線。</div></div>
+        <div class="ins mid"><h4>把閒置柱移到站群常空的地方</h4>
+          <p>${I.total_idle_docks} 個柱位在整個期間一次都沒被停過，集中在觀光區大站；
+            而下表那些站群卻常常整群沒車。柱位與車輛的重新配置，比新設站便宜得多。</p>
+          <div class="act">→ 先盤點閒置柱最多的站，評估移撥到常空站群的可行性。</div>
+          <div class="cav">實務上柱位移設涉及場地、電力與施工，本工具只提供證據不評估可行性。</div></div>
+        <div class="ins mid"><h4>關於未設站區域的需求預測</h4>
+          <p>臺北能預測未設站網格的需求，是因為他們有悠遊卡交易、遠傳信令人口與 POI 資料。
+            <b>那些資料我們拿不到，所以我們不做那個預測</b>——沒有人口與活動資料硬推出來的數字不可信。
+            我們改為提供「既有站容量不足」的直接證據，那是用我們真的有的資料算得出來的。</p>
+          <div class="act">→ 若後續能取得信令人口與 POI，這一塊可以補上；現階段不假造。</div></div>
+      </div>
+      <div class="card" style="margin-top:14px"><h3>站群整群沒車 <span class="tag hist">${esc(p.label)}</span></h3>
+        <p class="sub">平日尖峰時，500 公尺內的整個站群同時都沒有車的時間比例。
+          這種情況調度補不到——走去隔壁也一樣沒有。</p>
+        <table><tbody>${ce||'<tr><td class="dim">無</td></tr>'}</tbody></table></div>
+      <div class="card" style="margin-top:14px"><h3>站群整群沒位 <span class="tag hist">${esc(p.label)}</span></h3>
+        <p class="sub">同口徑的還車版本。比例明顯低很多，這是「柱位大致夠用」的證據。</p>
+        <table><tbody>${cf||'<tr><td class="dim">無</td></tr>'}</tbody></table></div>
+      <div class="card" style="margin-top:14px"><h3>口徑與限制</h3>
+        <p class="sub">${esc(o.meta.reserve_rule)}</p>
+        <ul class="xs dim" style="margin:8px 0 0;padding-left:16px;line-height:1.9">
+          ${o.meta.caveats.map(c=>`<li>${esc(c)}</li>`).join('')}
+          <li>${esc(D.what_it_is)}</li></ul></div>
+    </div>
+  </div>`;
+}
+
+/* ---------------------------------------------- 歷史分析 */
+function analysisView(){
+  const a=S.ana;
   const wd=a.curves.weekday, we=a.curves.weekend;
   const hours=wd.hours.map(h=>String(h).padStart(2,'0'));
   const s1=[{name:'無車可借',color:'#f5c451',data:wd.no_bike},{name:'無位可還',color:'#f2615b',data:wd.no_dock}];
   const s2=[{name:'無車可借',color:'#f5c451',data:we.no_bike},{name:'無位可還',color:'#f2615b',data:we.no_dock}];
-
-  const dil=a.dilution.slice(0,6).map(d=>`<tr class="click" data-sid="${d.sid}">
+  const dil=a.dilution.slice(0,8).map(d=>`<tr class="click" data-sid="${d.sid}">
     <td>${esc(d.name)}<div class="xs dim">${esc(d.district)}</div></td>
     <td><span class="pill ${d.band==='高'?'ok':d.band==='中'?'warn':'bad'}">見位率 ${d.park_rate}%・${d.band}</span></td>
     <td style="width:110px"><div class="bar"><i style="width:${d.am_no_dock}%;background:var(--bad)"></i></div></td>
     <td class="mono" style="color:var(--bad)">${d.am_no_dock}%</td></tr>`).join('');
-
   const am=a.mrt_compare.am, pm=a.mrt_compare.pm;
-  const cmp=`<table><thead><tr><th>平日時段</th><th>非捷運站（住家端）</th><th>捷運站（目的地端）</th></tr></thead><tbody>
-    <tr><td>早峰 07–09<div class="xs dim">無車可借</div></td>
-      <td class="mono" style="color:var(--bad);font-size:15px">${am.non_mrt.no_bike}%</td>
-      <td class="mono dim">${am.mrt.no_bike}%</td></tr>
-    <tr><td>早峰 07–09<div class="xs dim">無位可還</div></td>
-      <td class="mono dim">${am.non_mrt.no_dock}%</td>
-      <td class="mono" style="color:var(--bad);font-size:15px">${am.mrt.no_dock}%</td></tr>
-    <tr><td>晚峰 17–19<div class="xs dim">無車可借</div></td>
-      <td class="mono dim">${pm.non_mrt.no_bike}%</td>
-      <td class="mono" style="color:var(--bad);font-size:15px">${pm.mrt.no_bike}%</td></tr>
-    </tbody></table>`;
-
   const bands=(o,ref,lab)=>{
     const row=(n,v,tot,c)=>`<tr><td>${n}</td><td style="width:120px"><div class="bar">
       <i style="width:${(v/tot*100).toFixed(1)}%;background:${c}"></i></div></td>
@@ -780,28 +1083,18 @@ function govView(){
       ${row('低 <60%',o.low,o.n,'var(--bad)')}</tbody></table>
       <p class="sub" style="margin-top:9px">臺北同定義同月份：高 ${ref.high}／中 ${ref.mid}／低 ${ref.low}（共 ${ref.n} 站）</p>`;
   };
-
-  const dist=a.districts.slice(0,10).map(d=>`<tr class="click" data-dist-row="${esc(d.district)}"><td>${esc(d.district)}<span class="xs dim"> ${d.stations} 站</span></td>
-    <td style="width:100px"><div class="bar"><i style="width:${Math.min(100,d.no_bike*7)}%;background:var(--warn)"></i></div></td>
-    <td class="mono">${d.no_bike}%</td>
-    <td style="width:100px"><div class="bar"><i style="width:${Math.min(100,d.no_dock*7)}%;background:var(--bad)"></i></div></td>
-    <td class="mono">${d.no_dock}%</td></tr>`).join('');
-
-  const insHTML = insightsFor(['gov','citizen']);
-
-  return `${kpis}
+  return `<div class="grid g2" style="margin-top:14px">
+    <div class="card"><h3>平日全市失效曲線 <span class="tag hist">歷史</span></h3>
+      <p class="sub">日間 06–23 時，各小時的快照比例</p>${lineChart(hours,s1)}${legendDots(s1)}</div>
+    <div class="card"><h3>假日全市失效曲線 <span class="tag hist">歷史</span></h3>
+      <p class="sub">同口徑，週末與假日</p>${lineChart(hours,s2)}${legendDots(s2)}</div>
+  </div>
   <div class="split" style="margin-top:14px">
     <div>
-      ${mapSVG()}
-      <div style="margin-top:14px">${eventCard()}</div>
-      <div class="card" style="margin-top:14px"><h3>大數據分析建議 <span class="tag live">即時</span><span class="tag hist">歷史</span></h3>
-        <p class="sub">把此刻的官方站況與六個月歷史交叉後自動產生，每條都附證據與口徑。</p>${insHTML}</div>
-      <div class="grid g2" style="margin-top:14px">
-        <div class="card"><h3>平日全市失效曲線 <span class="tag hist">歷史</span></h3>
-          <p class="sub">日間 06–23 時，各小時的快照比例</p>${lineChart(hours,s1)}${legendDots(s1)}</div>
-        <div class="card"><h3>假日全市失效曲線 <span class="tag hist">歷史</span></h3>
-          <p class="sub">同口徑，週末與假日</p>${lineChart(hours,s2)}${legendDots(s2)}</div>
-      </div>
+      <div class="card"><h3>月平均把尖峰稀釋掉了 <span class="tag hist">歷史</span></h3>
+        <p class="sub">這些站的六月見位率落在官方分級的「高」或「中」，
+          但平日早峰有三成上下的時間還不了車。18 小時平均會洗掉通勤者真正遇到的那兩小時。</p>
+        <table><tbody>${dil}</tbody></table></div>
       <div class="grid g2" style="margin-top:14px">
         <div class="card"><h3>見車率分級 <span class="tag hist">歷史</span></h3>
           <p class="sub">2026 年 6 月、06:00–23:59，站上至少 1 台車的快照比例</p>
@@ -812,18 +1105,19 @@ function govView(){
       </div>
     </div>
     <div>
-      ${stationPanel()}
-      <div style="margin-top:14px">${forecastCard()}</div>
-      <div class="card" style="margin-top:14px"><h3>月平均把尖峰稀釋掉了 <span class="tag hist">歷史</span></h3>
-        <p class="sub">這些站的六月見位率落在官方分級的「高」或「中」，
-          但平日早峰有三成上下的時間還不了車。18 小時平均會洗掉通勤者真正遇到的那兩小時。</p>
-        <table><tbody>${dil}</tbody></table></div>
-      <div class="card" style="margin-top:14px"><h3>同一趟通勤，早晚各壞一次 <span class="tag hist">歷史</span></h3>
-        <p class="sub">起點與終點是兩種不同的失敗模式</p>${cmp}</div>
-      <div class="card" style="margin-top:14px"><h3>行政區排名 <span class="tag hist">歷史</span></h3>
-        <p class="sub">平日早峰 07–09 的快照比例</p>
-        <table><thead><tr><th>行政區</th><th colspan="2">無車可借</th><th colspan="2">無位可還</th></tr></thead>
-          <tbody>${dist}</tbody></table></div>
+      <div class="card"><h3>同一趟通勤，早晚各壞一次 <span class="tag hist">歷史</span></h3>
+        <p class="sub">起點與終點是兩種不同的失敗模式</p>
+        <table><thead><tr><th>平日時段</th><th>非捷運站（住家端）</th><th>捷運站（目的地端）</th></tr></thead><tbody>
+        <tr><td>早峰 07–09<div class="xs dim">無車可借</div></td>
+          <td class="mono" style="color:var(--bad);font-size:15px">${am.non_mrt.no_bike}%</td>
+          <td class="mono dim">${am.mrt.no_bike}%</td></tr>
+        <tr><td>早峰 07–09<div class="xs dim">無位可還</div></td>
+          <td class="mono dim">${am.non_mrt.no_dock}%</td>
+          <td class="mono" style="color:var(--bad);font-size:15px">${am.mrt.no_dock}%</td></tr>
+        <tr><td>晚峰 17–19<div class="xs dim">無車可借</div></td>
+          <td class="mono dim">${pm.non_mrt.no_bike}%</td>
+          <td class="mono" style="color:var(--bad);font-size:15px">${pm.mrt.no_bike}%</td></tr>
+        </tbody></table></div>
       <div class="card" style="margin-top:14px"><h3>資料品質 <span class="tag hist">歷史</span></h3>
         <p class="sub">已從所有分析中排除，避免汙染排名</p>
         <table><tbody>
@@ -834,6 +1128,7 @@ function govView(){
           <tr><td>納入分析</td><td class="mono">${a.meta.stations_analyzed} 站</td>
             <td class="dim xs">全市 ${a.meta.stations_total} 站</td></tr>
         </tbody></table></div>
+      <div style="margin-top:14px">${stationPanel()}</div>
     </div>
   </div>`;
 }
@@ -1325,6 +1620,44 @@ function render(){
   $$('[data-pt]').forEach(b=>b.onclick=()=>{S.ptab=b.dataset.pt;render();
     if(S.ptab==='wallet')loadWallet();});
   $$('[data-claim]').forEach(b=>b.onclick=()=>claim(b));
+
+  // 政府端分頁
+  $$('[data-gt]').forEach(b=>b.onclick=()=>{
+    S.gtab=b.dataset.gt; S.sel=null; render(); scrollTo({top:0,behavior:'smooth'});
+    if(S.gtab==='desk'&&!S.dec) loadDecisions();
+    if(S.gtab==='opt'&&!S.opt) loadOpt(S.optPeriod);
+  });
+  // 搜尋
+  const gq=$('#gq');
+  if(gq) gq.oninput=()=>{
+    S.gq=gq.value; clearTimeout(S._gqt);
+    S._gqt=setTimeout(async()=>{
+      const q=S.gq.trim();
+      if(!q){ S.gres=null; render(); return; }
+      try{ S.gres=await api('/api/v2/gov/search?q='+encodeURIComponent(q)); }
+      catch(e){ S.gres={count:0,stations:[]}; }
+      render();
+      const n=$('#gq'); if(n){n.focus();n.setSelectionRange(n.value.length,n.value.length);}
+    },260);
+  };
+  const gqc=$('#gqclear'); if(gqc) gqc.onclick=()=>{S.gq='';S.gres=null;render();};
+
+  // 決策卡：選建議處置 → 帶出可編輯的命令稿
+  $$('[data-order]').forEach(b=>b.onclick=()=>{
+    const z=(S.dec?.decisions||[]).find(x=>x.id===b.dataset.order);
+    if(!z) return;
+    const a=z.actions.find(x=>x.key===b.dataset.act);
+    S.orderFor=z.id; S.orderAct=a.key; S.orderMsg=a.message; render();
+    const t=$('#omsg'); if(t){t.focus();t.setSelectionRange(t.value.length,t.value.length);}
+  });
+  const oc=$('#ocancel'); if(oc) oc.onclick=()=>{S.orderFor=null;S.orderAct=null;S.orderMsg='';render();};
+  const om=$('#omsg'); if(om) om.oninput=()=>{S.orderMsg=om.value;};
+  const os=$('#osend'); if(os) os.onclick=()=>sendOrder();
+
+  // 區域
+  $$('[data-area]').forEach(el=>el.onclick=()=>openDistrict(el.dataset.area));
+  // 期間
+  $$('[data-period]').forEach(b=>b.onclick=()=>{S.optPeriod=b.dataset.period;loadOpt(b.dataset.period);});
   $$('[data-new-ev]').forEach(b=>b.onclick=async()=>{
     b.disabled=true; b.textContent='立案中…';
     try{
@@ -1350,6 +1683,45 @@ function render(){
     }
   });
   if(S.view==='citizen'&&S.ptab==='wallet')loadWallet();
+}
+async function loadDecisions(){
+  try{ S.dec=await api('/api/v2/gov/decisions'); }catch(e){ S.dec={count:0,decisions:[],summary:{}}; }
+  if(S.view==='gov') render();
+}
+async function loadOpt(period){
+  try{ S.opt=await api('/api/v2/gov/optimization?period='+encodeURIComponent(period)); }
+  catch(e){ S.opt=null; }
+  if(S.view==='gov') render();
+}
+async function openDistrict(name){
+  S.gdist=name; S.gtab='area'; S.gdd=null; render();
+  try{ S.gdd=await api('/api/v2/gov/district/'+encodeURIComponent(name)); }
+  catch(e){ S.gdd=null; }
+  render();
+}
+async function sendOrder(){
+  const z=(S.dec?.decisions||[]).find(x=>x.id===S.orderFor);
+  if(!z||!S.orderMsg.trim()) return;
+  S.orderBusy=true; render();
+  try{
+    const r=await api('/api/v2/gov/order',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({sid:z.sid,kind:z.kind,action:S.orderAct,
+        message:S.orderMsg,owner:'值班調度',
+        request_id:'o'+z.id+'-'+Date.now()})});
+    S.orderFor=null;S.orderAct=null;S.orderMsg='';S.orderBusy=false;
+    S.ev=await api('/api/v2/events');
+    await loadDecisions();
+    toast(`已發佈給${r.sent_to}　${r.caveat}`);
+  }catch(e){
+    S.orderBusy=false; render(); toast('發佈失敗：'+e.message);
+  }
+}
+function toast(msg){
+  let t=$('#toast');
+  if(!t){ t=document.createElement('div'); t.id='toast'; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add('on');
+  clearTimeout(window._tt); window._tt=setTimeout(()=>t.classList.remove('on'),6000);
 }
 async function loadWallet(){
   try{

@@ -11,18 +11,45 @@
 import json
 import math
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
+from fastapi.routing import APIRoute
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 TZ = timezone(timedelta(hours=8))
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ANA = os.path.join(ROOT, "data", "analytics")
 
-router = APIRouter(prefix="/api/v2", tags=["v2"])
+class _StripMarkdownRoute(APIRoute):
+    """把回應裡殘留的 markdown 粗體標記剝掉。
+
+    前端用 esc() 把字串直接塞進 HTML，字串裡的 ** 只會原樣顯示成星號。
+    只有在 body 真的含有 ** 時才重新編碼，所以一般請求不用付代價。
+    """
+
+    def get_route_handler(self):
+        original = super().get_route_handler()
+
+        async def handler(request):
+            response = await original(request)
+            body = getattr(response, "body", None)
+            if body and b"**" in body:
+                try:
+                    return JSONResponse(content=_sanitize(json.loads(body)),
+                                        status_code=response.status_code)
+                except (ValueError, TypeError):
+                    return response
+            return response
+
+        return handler
+
+
+router = APIRouter(prefix="/api/v2", tags=["v2"], route_class=_StripMarkdownRoute)
 
 _CTX = {}
 
@@ -92,8 +119,18 @@ def _near(sid, max_m):
     return [(n, d) for n, d in _CTX.get("neighbors", {}).get(int(sid), []) if d <= max_m]
 
 
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.S)
+
+
 def _sanitize(o):
-    """NaN/Inf 進到回應會讓 FastAPI 直接 500，載入時就換成 None。"""
+    """NaN/Inf 進到回應會讓 FastAPI 直接 500；順便剝掉 markdown 粗體標記。
+
+    前端是用 esc() 把字串直接塞進 HTML 的，字串裡寫 ** 只會原樣顯示成星號。
+    這個錯已經逐條修過三次還是再犯（insights、ops semantics、order caveat），
+    所以改成在邊界統一處理，而不是靠每次記得不要寫。
+    """
+    if isinstance(o, str):
+        return _MD_BOLD.sub(r"\1", o)
     if isinstance(o, float):
         return None if (math.isnan(o) or math.isinf(o)) else o
     if isinstance(o, dict):
@@ -1060,3 +1097,328 @@ def leaderboard():
             "week_task": {"title": "本週完成 3 次尖峰分流", "progress": min(3, len(rw.get("stamps", []))),
                           "target": 3, "bonus": "50 元券"},
             "caveat": "排行榜為示範資料，非真實用戶。"}
+
+
+# ==================================================================== 政府端專用
+# 目標是讓值班的人打開就知道「我現在要做哪些決策」，而不是自己從地圖上找問題。
+OPT = None
+
+
+def _opt():
+    global OPT
+    if OPT is None:
+        OPT = _load(os.path.join(ANA, "optimization.json"), {})
+    return OPT
+
+
+# 每一種問題對應的建議處置。default_message 是預填的命令稿，畫面上可以改。
+ACTIONS = {
+    "no_dock": [
+        {"key": "ops_clear", "label": "請微笑單車清運", "to": "微笑單車",
+         "why": "可還柱位見底，且一到兩小時後仍高風險",
+         "msg": "【清運】{name}（{district}）目前可還 {docks} 位、容量 {cap}。"
+                "請安排清運，目標把可還柱位回到 {target} 位以上。"},
+        {"key": "incentive", "label": "啟動民眾加碼分流", "to": "民眾端",
+         "why": "派車來不及或不划算時，用誘因請民眾把車騎走",
+         "msg": "【分流】對 {name} 啟動「從這站借走」加碼，缺口 {gap_docks} 位，"
+                "補滿後自動解除。"},
+        {"key": "watch", "label": "持續觀察，先不動用資源", "to": "值班",
+         "why": "歷史同時段風險不高，可能是偶發",
+         "msg": "【觀察】{name} 暫不派車。理由："},
+    ],
+    "no_bike": [
+        {"key": "ops_supply", "label": "請微笑單車送車", "to": "微笑單車",
+         "why": "可借車輛見底，且一到兩小時後仍高風險",
+         "msg": "【送車】{name}（{district}）目前可借 {bikes} 台、容量 {cap}。"
+                "請安排送車，目標把可借回到 {target} 台以上。"},
+        {"key": "incentive", "label": "啟動民眾加碼分流", "to": "民眾端",
+         "why": "派車前置至少 60 分鐘，來不及的缺口用誘因補",
+         "msg": "【分流】對 {name} 啟動「還車到這站」加碼，缺口 {gap_bikes} 台，"
+                "補滿後自動解除。"},
+        {"key": "watch", "label": "持續觀察，先不動用資源", "to": "值班",
+         "why": "歷史同時段風險不高，可能是偶發",
+         "msg": "【觀察】{name} 暫不派車。理由："},
+    ],
+    "offline": [
+        {"key": "equipment", "label": "開設備查修單", "to": "微笑單車",
+         "why": "可借與可還同時為 0，派車也沒有柱位可用，要先查修",
+         "msg": "【查修】{name}（{district}）可借與可還同時為 0，容量 {cap}。"
+                "請確認是設備離線、站端斷線還是整站未投車。此站不列入調度優先序。"},
+        {"key": "watch", "label": "先確認是否為官方暫停營運", "to": "值班",
+         "why": "官方可能已標示暫停，與故障是兩件事",
+         "msg": "【查證】{name} 借還皆 0，先確認官方營運狀態再決定是否派工。"},
+    ],
+    "capacity_gap": [
+        {"key": "equipment", "label": "排入巡檢確認落差原因", "to": "微笑單車",
+         "why": "總格數不等於可借加可還，差額既借不到也還不了",
+         "msg": "【巡檢】{name}（{district}）容量落差 {gap} 個車柱"
+                "（總 {cap}／可借 {bikes}／可還 {docks}）。"
+                "請確認是設備故障、保留柱位還是資料延遲。本工具不判定根因。"},
+        {"key": "watch", "label": "記錄後持續觀察", "to": "值班",
+         "why": "落差小或為已知的保留柱位",
+         "msg": "【觀察】{name} 容量落差 {gap}，暫不派工。理由："},
+    ],
+}
+
+
+def _severity(item):
+    s = 0
+    s += {"offline": 40, "no_dock": 30, "no_bike": 28, "capacity_gap": 12}.get(item["kind"], 0)
+    s += min(30, (item.get("risk_60") or 0) * 0.4)
+    s += min(20, (item.get("gap") or 0) * 1.2)
+    if item.get("mrt"):
+        s += 8
+    return round(s, 1)
+
+
+@router.get("/gov/decisions")
+def gov_decisions(limit: int = 25):
+    """我現在要做哪些決策——把此刻有問題的站整理成待決事項，每一項都附建議處置。"""
+    lv = _live()
+    risk = _CTX.get("risk")
+    fc = _CTX.get("fc")
+    meta = _CTX.get("stations", {})
+    fc_ok = fc is not None and fc.status().get("available")
+    items = []
+    for x in lv.snapshot().values():
+        if not x["active"] or x["capacity"] <= 0:
+            continue
+        target = max(3, round(x["capacity"] * 0.2))
+        if x["bikes"] == 0 and x["docks"] == 0:
+            kind = "offline"
+        elif x["docks"] == 0 or x["docks"] < target * 0.5:
+            kind = "no_dock"
+        elif x["bikes"] == 0 or x["bikes"] < target * 0.5:
+            kind = "no_bike"
+        elif x["capacity_gap"] > 5:
+            kind = "capacity_gap"
+        else:
+            continue
+
+        r60 = risk.at(x["sid"], ahead_min=60) if (risk and risk.ok) else None
+        key = "p_no_dock" if kind == "no_dock" else "p_no_bike"
+        hist60 = round(r60[key] * 100, 1) if r60 else None
+        model = None
+        if fc_ok and kind in ("no_dock", "no_bike"):
+            rr = fc.risk_ranking("full" if kind == "no_dock" else "empty", 120, 400, 0.0)
+            hit = next((z for z in rr if z["sid"] == x["sid"]), None)
+            model = hit["p"] if hit else None
+
+        m = meta.get(x["sid"], {})
+        it = {
+            "id": f"D{x['sid']}-{kind}",
+            "sid": x["sid"], "name": x["name"], "district": x["district"],
+            "kind": kind, "kind_label": EVENT_KINDS.get(kind, kind),
+            "bikes": x["bikes"], "docks": x["docks"], "cap": x["capacity"],
+            "gap": x["capacity_gap"], "target": target,
+            "gap_bikes": max(0, target - x["bikes"]), "gap_docks": max(0, target - x["docks"]),
+            "risk_60": hist60, "model_120": model,
+            "profile": m.get("profile"), "retired_in_history": bool(m.get("retired")),
+            "mrt": "捷運" in x["name"],
+            "age_min": x["age_min"],
+        }
+        it["severity"] = _severity({**it, "risk_60": hist60})
+        ev = [f"官方即時：可借 {x['bikes']}／可還 {x['docks']}／容量 {x['capacity']}"
+              f"（{x['age_min']} 分鐘前）"]
+        if x["capacity_gap"]:
+            ev.append(f"容量落差 {x['capacity_gap']} 個車柱，既借不到也還不了")
+        if hist60 is not None:
+            ev.append(f"歷史同時段一小時後{'無位' if kind == 'no_dock' else '無車'}機率 {hist60}%")
+        if model is not None:
+            ev.append(f"模型即時推論 120 分鐘後機率 {model}%")
+        if m.get("profile"):
+            ev.append(f"站點分型：{m['profile']}")
+        if m.get("retired"):
+            ev.append("歷史上六月整月零車，可能已退場——處置前先確認營運狀態")
+        it["evidence"] = ev
+        acts = []
+        for a in ACTIONS.get(kind, []):
+            acts.append({**{k: a[k] for k in ("key", "label", "to", "why")},
+                         "message": a["msg"].format(
+                             name=x["name"], district=x["district"], bikes=x["bikes"],
+                             docks=x["docks"], cap=x["capacity"], gap=x["capacity_gap"],
+                             target=target, gap_bikes=it["gap_bikes"],
+                             gap_docks=it["gap_docks"])})
+        # 推薦哪一個。第一版只看未來風險，結果「此刻可還位已經是 0」的站被建議「持續觀察」——
+        # 問題已經在發生，預測講的是未來，兩件事不能混為一談。
+        already = (kind == "no_dock" and x["docks"] == 0) or (kind == "no_bike" and x["bikes"] == 0)
+        # 說明是哪一個數字支撐判斷，不要只說「高風險」讓人無從查核
+        src = []
+        if (hist60 or 0) >= 20:
+            src.append(f"歷史同時段一小時後 {hist60}%")
+        if (model or 0) >= 20:
+            src.append(f"模型 120 分鐘後 {model}%")
+        persists = bool(src)
+        basis = "、".join(src)
+        if kind in ("offline", "capacity_gap"):
+            rec, why = acts[0]["key"], "設備類問題調度補不到，要先查修"
+        elif already and persists:
+            rec, why = acts[0]["key"], f"此刻已經見底，且{basis}——屬結構性，值得派資源"
+        elif already:
+            rec, why = "incentive", (f"此刻已經見底，但一到兩小時後的風險不高"
+                                     f"（歷史同時段 {hist60 if hist60 is not None else '—'}%"
+                                     f"、模型 {model if model is not None else '—'}%），"
+                                     "通常會自己緩解；先用誘因分流，比派車便宜")
+        elif persists:
+            rec, why = acts[0]["key"], f"現在還沒見底，但{basis}——趁前置時間還夠先排"
+        else:
+            rec, why = "watch", (f"尚未見底，一到兩小時後的風險也不高"
+                                 f"（歷史同時段 {hist60 if hist60 is not None else '—'}%"
+                                 f"、模型 {model if model is not None else '—'}%），先觀察不動用資源")
+        it["recommended"] = rec
+        it["recommend_reason"] = why
+        it["actions"] = acts
+        items.append(it)
+
+    items.sort(key=lambda z: -z["severity"])
+    done = {e["sid"] for e in _events() if e["status"] != "closed"}
+    for z in items:
+        z["already_open"] = z["sid"] in done
+    return {
+        "generated_at": datetime.now(TZ).isoformat(),
+        "count": len(items), "decisions": items[:limit],
+        "summary": {
+            "offline": sum(1 for z in items if z["kind"] == "offline"),
+            "no_dock": sum(1 for z in items if z["kind"] == "no_dock"),
+            "no_bike": sum(1 for z in items if z["kind"] == "no_bike"),
+            "capacity_gap": sum(1 for z in items if z["kind"] == "capacity_gap"),
+            "recommend_dispatch": sum(1 for z in items if z["recommended"] != "watch"),
+        },
+        "semantics": ("嚴重度是本工具的排序分數，不是官方分級。建議處置只是預填，"
+                      "實際要不要動用資源由值班決定。本系統不產生 ETA。"),
+    }
+
+
+class OrderIn(BaseModel):
+    sid: int
+    kind: str
+    action: str
+    message: str
+    owner: str = None
+    request_id: str = None
+
+
+@router.post("/gov/order")
+def gov_order(body: OrderIn):
+    """在畫面上直接發佈命令：建立事件、寫下命令原文與收件對象、留痕。"""
+    lv = _live()
+    x = lv.station(body.sid)
+    if not x:
+        raise HTTPException(404, "查無此站的即時資料")
+    if not (body.message or "").strip():
+        raise HTTPException(400, "命令內容不可為空")
+    kind = body.kind if body.kind in EVENT_KINDS else "capacity_gap"
+    res = event_create(EventIn(sid=body.sid, kind=kind,
+                               note=body.message.strip(),
+                               request_id=body.request_id))
+    eid = res["event"]["id"]
+    e = next(z for z in _events() if z["id"] == eid)
+    to = next((a["to"] for a in ACTIONS.get(kind, []) if a["key"] == body.action), "值班")
+    now = datetime.now(TZ)
+    e.setdefault("orders", []).append({
+        "ts": now.isoformat(), "action": body.action, "to": to,
+        "message": body.message.strip(), "by": body.owner or "監看",
+    })
+    if body.action != "watch":
+        e["owner"] = body.owner or to
+        e["status"] = "assigned"
+    e["version"] += 1
+    e["log"].append({"ts": now.isoformat(), "action": f"order:{body.action}",
+                     "by": body.owner or "監看", "note": body.message.strip()[:120]})
+    return {"ok": True, "event": _event_view(e), "sent_to": to,
+            "caveat": ("命令已記錄在事件台帳並標示收件對象。"
+                       "**這是示範：沒有與微笑單車的實際派工系統介接**，不代表對方已收到。")}
+
+
+@router.get("/gov/search")
+def gov_search(q: str, limit: int = 20):
+    """搜尋站點：站名、行政區、地址都找。"""
+    q = (q or "").strip()
+    if len(q) < 1:
+        return {"count": 0, "stations": []}
+    lv = _live()
+    meta = _CTX.get("stations", {})
+    out = []
+    for x in lv.snapshot().values():
+        if q in x["name"] or q in x["district"] or q in (x["address"] or ""):
+            m = meta.get(x["sid"], {})
+            out.append({"sid": x["sid"], "name": x["name"], "district": x["district"],
+                        "address": x["address"], "bikes": x["bikes"], "docks": x["docks"],
+                        "cap": x["capacity"], "gap": x["capacity_gap"], "act": x["active"],
+                        "profile": m.get("profile"),
+                        "am_no_dock": m.get("am_no_dock"), "park_june": m.get("park_june")})
+        if len(out) >= limit * 3:
+            break
+    # 有狀況的排前面
+    out.sort(key=lambda z: (z["bikes"] > 0 and z["docks"] > 0, z["name"]))
+    return {"count": len(out), "stations": out[:limit]}
+
+
+@router.get("/gov/district/{name}")
+def gov_district(name: str):
+    """點一個行政區進來：這一區此刻怎麼樣、歷史上怎麼樣、要優先處理誰。"""
+    lv = _live()
+    s = _CTX.get("summary", {})
+    meta = _CTX.get("stations", {})
+    rows = [x for x in lv.snapshot().values() if x["district"] == name]
+    if not rows:
+        raise HTTPException(404, "查無此行政區的即時資料")
+    act = [x for x in rows if x["active"]]
+    n = len(rows) or 1
+    hist = next((d for d in s.get("districts", []) if d["district"] == name), None)
+    profiles = {}
+    burden = []
+    for x in rows:
+        m = meta.get(x["sid"], {})
+        if m.get("profile"):
+            profiles[m["profile"]] = profiles.get(m["profile"], 0) + 1
+        if m.get("burden") is not None:
+            burden.append(m["burden"])
+    worst = sorted(act, key=lambda x: (x["docks"], x["bikes"]))[:8]
+    gaps = sorted([x for x in rows if x["capacity_gap"] > 0],
+                  key=lambda x: -x["capacity_gap"])[:8]
+    opt = _opt().get("periods", {}).get("m1", {})
+    idle_b = [z for z in opt.get("idle", {}).get("top_bikes", []) if z["district"] == name]
+    idle_d = [z for z in opt.get("idle", {}).get("top_docks", []) if z["district"] == name]
+    return {
+        "district": name,
+        "live": {
+            "stations": len(rows), "inactive": sum(1 for x in rows if not x["active"]),
+            "no_bike": sum(1 for x in act if x["no_bike"]),
+            "no_dock": sum(1 for x in act if x["no_dock"]),
+            "both_zero": sum(1 for x in act if x["both_zero"]),
+            "bikes": sum(x["bikes"] for x in rows),
+            "bikes_electric": sum(x["bikes_electric"] for x in rows),
+            "capacity": sum(x["capacity"] for x in rows),
+            "gap_stations": sum(1 for x in rows if x["capacity_gap"] > 0),
+            "gap_units": sum(max(0, x["capacity_gap"]) for x in rows),
+            "fill_pct": round(sum(x["bikes"] for x in rows) / max(1, sum(x["capacity"] for x in rows)) * 100, 1),
+        },
+        "history": hist,
+        "profiles": profiles,
+        "burden_median": round(float(np.median(burden)), 3) if burden else None,
+        "worst_now": [{"sid": x["sid"], "name": x["name"], "bikes": x["bikes"],
+                       "docks": x["docks"], "cap": x["capacity"],
+                       "profile": meta.get(x["sid"], {}).get("profile")} for x in worst],
+        # 官方暫停營運的站，整站容量都會算進落差——那不是設備落差，要標出來不然會誤導
+        "capacity_gaps": [{"sid": x["sid"], "name": x["name"], "gap": x["capacity_gap"],
+                           "cap": x["capacity"], "act": x["active"],
+                           "both_zero": x["both_zero"]} for x in gaps],
+        "idle_bikes": idle_b[:6], "idle_docks": idle_d[:6],
+        "semantics": ("此刻數字為官方即時資料；歷史為 2026-01~06 平日早峰的半小時快照比例。"
+                      "兩者口徑不同，不可相減。"),
+    }
+
+
+@router.get("/gov/optimization")
+def gov_optimization(period: str = "m1"):
+    """可優化空間。**不是已經發生的成效**——我們沒有優化前後的對照組。"""
+    o = _opt()
+    if not o:
+        raise HTTPException(503, "尚未產生，請先跑 analytics/build_optimization.py")
+    p = o.get("periods", {}).get(period)
+    if not p:
+        raise HTTPException(400, f"period 必須是 {list(o.get('periods', {}))} 其中之一")
+    return {"meta": o["meta"], "period_key": period, "period": p,
+            "available_periods": [{"key": k, "label": v["label"], "days": v["days"]}
+                                  for k, v in o["periods"].items()]}

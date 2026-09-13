@@ -452,6 +452,77 @@ def test_http():
     ana = get("/api/v2/analytics")
     ck_true("分析端點可取得", "rates" in ana)
 
+    # ---- 政府端：決策台
+    dec = get("/api/v2/gov/decisions")
+    ck_true("決策清單有內容", dec["count"] >= 0)
+    for z in dec["decisions"]:
+        ck_true(f"{z['name']}：有建議處置", bool(z["recommended"]))
+        ck_true(f"{z['name']}：建議理由有引用數字",
+                any(ch.isdigit() for ch in z["recommend_reason"]))
+        ck_true(f"{z['name']}：每個處置都有收件對象", all(a.get("to") for a in z["actions"]))
+        ck_true(f"{z['name']}：命令稿已預填", all(a.get("message") for a in z["actions"]))
+        ck_true(f"{z['name']}：推薦的處置在可選清單裡",
+                z["recommended"] in [a["key"] for a in z["actions"]])
+        ck_true(f"{z['name']}：證據至少一條", len(z["evidence"]) >= 1)
+        break
+    ck_true("有寫明嚴重度不是官方分級", "不是官方分級" in dec["semantics"])
+    ck_true("決策依嚴重度遞減",
+            all(dec["decisions"][i]["severity"] >= dec["decisions"][i + 1]["severity"]
+                for i in range(len(dec["decisions"]) - 1)))
+    ck_true("暫停營運的站不進決策清單",
+            all(x["sid"] not in {s["sid"] for s in stations["stations"] if not s["act"]}
+                for x in dec["decisions"]))
+
+    # ---- 政府端：發佈命令
+    if dec["decisions"]:
+        z = dec["decisions"][0]
+        rid = "ordertest-" + str(os.getpid())
+        code, r = post("/api/v2/gov/order",
+                       {"sid": z["sid"], "kind": z["kind"], "action": z["recommended"],
+                        "message": "測試命令內容", "owner": "測試值班", "request_id": rid})
+        ck("發佈命令成功", code, 200)
+        ck_true("有回報收件對象", bool(r["sent_to"]))
+        ck_true("免責寫明沒有與實際派工系統介接", "沒有與微笑單車的實際派工系統介接" in r["caveat"])
+        ck_true("命令原文留在事件裡",
+                any(o["message"] == "測試命令內容" for o in r["event"].get("orders", [])))
+        code2, _ = post("/api/v2/gov/order",
+                        {"sid": z["sid"], "kind": z["kind"], "action": z["recommended"],
+                         "message": "", "owner": "測試值班"})
+        ck("空白命令 → 400", code2, 400)
+        post("/api/v2/events/reset", {})
+
+    # ---- 政府端：搜尋
+    import urllib.parse
+    sr = get("/api/v2/gov/search?q=" + urllib.parse.quote("江子翠"))
+    ck_true("搜尋找得到江子翠", sr["count"] > 0)
+    ck_true("搜尋結果都含關鍵字或在該區",
+            all("江子翠" in x["name"] or "江子翠" in (x["address"] or "") for x in sr["stations"]))
+    ck("空字串搜尋回 0 筆", get("/api/v2/gov/search?q=")["count"], 0)
+
+    # ---- 政府端：區域
+    dd = get("/api/v2/gov/district/" + urllib.parse.quote("板橋區"))
+    ck("區域名稱正確", dd["district"], "板橋區")
+    ck_true("區域有即時彙總", dd["live"]["stations"] > 0)
+    ck_true("容量落差清單有標示是否營運中",
+            all("act" in x for x in dd["capacity_gaps"]))
+    ck_true("有寫明歷史與即時口徑不同不可相減", "不可相減" in dd["semantics"])
+    code3, _ = post("/api/v2/events/reset", {})
+
+    # ---- 政府端：優化
+    for per in ("all", "m3", "m1"):
+        op = get("/api/v2/gov/optimization?period=" + per)
+        I = op["period"]["idle"]
+        ck_true(f"{per}：閒置車不為負", I["total_idle_bikes"] >= 0)
+        ck_true(f"{per}：閒置柱不為負", I["total_idle_docks"] >= 0)
+        ck_true(f"{per}：有排除資料停滯的站的說明", "資料停滯" in I["flat_note"])
+        ck_true(f"{per}：大額跳變有標明不是調度量", "不是調度量" in op["period"]["dispatch"]["what_it_is"]
+                or "無法區分" in op["period"]["dispatch"]["what_it_is"])
+    ck_true("有寫明這不是已發生的成效", "不是已經執行過的成效" in op["meta"]["not_an_outcome"])
+    # 期間越長，嚴格認定下的閒置應該越少（門檻越嚴）
+    a_all = get("/api/v2/gov/optimization?period=all")["period"]["idle"]["total_idle_bikes"]
+    a_m1 = get("/api/v2/gov/optimization?period=m1")["period"]["idle"]["total_idle_bikes"]
+    ck_true("期間越長閒置車越少（嚴格認定的必然結果）", a_all <= a_m1, f"{a_all} <= {a_m1}")
+
     page = urllib.request.urlopen(BASE + "/v2", timeout=30).read().decode()
     ck_true("一站式頁面可取得", "新北 YouBike 智慧調度" in page)
     ck_true("頁面有標注快照口徑", "快照比例" in page)

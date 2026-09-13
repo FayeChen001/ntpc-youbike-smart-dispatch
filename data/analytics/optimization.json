@@ -1,0 +1,2289 @@
+{
+ "meta": {
+  "generated_from": "2026-01-01 ~ 2026-06-30 半小時快照",
+  "stations_analyzed": 1558,
+  "reserve_rule": "最低保留量＝容量 × 0.15，至少 2（與調度端同一組假設）",
+  "not_an_outcome": "這是「若照建議做可以回收多少」的可優化空間，不是已經執行過的成效——我們沒有優化前後的對照組。",
+  "caveats": [
+   "閒置判定取整個期間的最低／最高點，是最嚴格的認定：只要出現過一次就不算閒置。另附較寬鬆的百分位版本供比較。",
+   "大額庫存跳變不是調度量：快照無法區分人工搬運與短時間大量借還。臺北能算調度量是因為有微笑單車的分時調度資料，我們沒有。",
+   "站群同時滿載代表該區柱位總量在尖峰不足，屬於加柱或增站的問題，調度補不到。"
+  ]
+ },
+ "periods": {
+  "all": {
+   "label": "全期（1–6 月）",
+   "from": "2026-01-01",
+   "to": "2026-06-30",
+   "days": 181,
+   "idle": {
+    "definition": "閒置車＝期間內庫存最低點（那些車從沒被借走）；閒置柱＝容量減去車數最高點（那些柱從沒被停過）。兩者都取最嚴格的認定。",
+    "stations_with_idle_bikes": 10,
+    "total_idle_bikes": 17,
+    "loose_total_idle_bikes": 52,
+    "flat_stations_excluded": 0,
+    "flat_note": "期間內車數完全沒變過的站已排除——那是資料停滯（站端沒回報），不是閒置庫存。不排除的話它們會同時衝上閒置車與閒置柱兩張榜。",
+    "loose_note": "較寬鬆版：庫存 5 百分位扣掉最低保留量，給要更積極回收的情境參考。",
+    "stations_with_idle_docks": 379,
+    "total_idle_docks": 1706,
+    "top_bikes": [
+     {
+      "sid": 234,
+      "name": "中和慈惠堂",
+      "district": "中和區",
+      "idle": 4,
+      "cap": 15,
+      "min_bikes": 4,
+      "reserve": 2
+     },
+     {
+      "sid": 1259,
+      "name": "忠山市民活動中心",
+      "district": "汐止區",
+      "idle": 3,
+      "cap": 38,
+      "min_bikes": 3,
+      "reserve": 6
+     },
+     {
+      "sid": 3,
+      "name": "三峽原住民族生活文化園區",
+      "district": "三峽區",
+      "idle": 2,
+      "cap": 31,
+      "min_bikes": 2,
+      "reserve": 5
+     },
+     {
+      "sid": 445,
+      "name": "承天路4巷(MRT社區)",
+      "district": "土城區",
+      "idle": 2,
+      "cap": 40,
+      "min_bikes": 2,
+      "reserve": 6
+     },
+     {
+      "sid": 367,
+      "name": "永安橋下停車場",
+      "district": "五股區",
+      "idle": 1,
+      "cap": 14,
+      "min_bikes": 1,
+      "reserve": 2
+     },
+     {
+      "sid": 380,
+      "name": "八里文昌五街",
+      "district": "八里區",
+      "idle": 1,
+      "cap": 16,
+      "min_bikes": 1,
+      "reserve": 2
+     },
+     {
+      "sid": 632,
+      "name": "陽光Park社區",
+      "district": "新店區",
+      "idle": 1,
+      "cap": 21,
+      "min_bikes": 1,
+      "reserve": 3
+     },
+     {
+      "sid": 1237,
+      "name": "保長公園",
+      "district": "汐止區",
+      "idle": 1,
+      "cap": 66,
+      "min_bikes": 1,
+      "reserve": 10
+     },
+     {
+      "sid": 1440,
+      "name": "淡蘭吊橋",
+      "district": "石碇區",
+      "idle": 1,
+      "cap": 14,
+      "min_bikes": 1,
+      "reserve": 2
+     },
+     {
+      "sid": 1523,
+      "name": "雙溪車站",
+      "district": "雙溪區",
+      "idle": 1,
+      "cap": 55,
+      "min_bikes": 1,
+      "reserve": 8
+     }
+    ],
+    "top_docks": [
+     {
+      "sid": 1454,
+      "name": "野柳地質公園",
+      "district": "萬里區",
+      "idle": 42,
+      "cap": 60,
+      "max_bikes": 18,
+      "reserve": 9
+     },
+     {
+      "sid": 511,
+      "name": "平溪國中",
+      "district": "平溪區",
+      "idle": 37,
+      "cap": 55,
+      "max_bikes": 18,
+      "reserve": 8
+     },
+     {
+      "sid": 1452,
+      "name": "翡翠灣停車場",
+      "district": "萬里區",
+      "idle": 28,
+      "cap": 54,
+      "max_bikes": 26,
+      "reserve": 8
+     },
+     {
+      "sid": 554,
+      "name": "央北三中央路口(全陽大璽)",
+      "district": "新店區",
+      "idle": 27,
+      "cap": 73,
+      "max_bikes": 46,
+      "reserve": 11
+     },
+     {
+      "sid": 509,
+      "name": "十分遊客中心",
+      "district": "平溪區",
+      "idle": 27,
+      "cap": 42,
+      "max_bikes": 15,
+      "reserve": 6
+     },
+     {
+      "sid": 901,
+      "name": "板橋戶政事務所海山辦事處",
+      "district": "板橋區",
+      "idle": 25,
+      "cap": 50,
+      "max_bikes": 25,
+      "reserve": 8
+     },
+     {
+      "sid": 837,
+      "name": "忠孝國中",
+      "district": "板橋區",
+      "idle": 25,
+      "cap": 66,
+      "max_bikes": 41,
+      "reserve": 10
+     },
+     {
+      "sid": 99,
+      "name": "三重商工地下停車場",
+      "district": "三重區",
+      "idle": 23,
+      "cap": 64,
+      "max_bikes": 41,
+      "reserve": 10
+     },
+     {
+      "sid": 488,
+      "name": "金城裕民路口(中正國中)",
+      "district": "土城區",
+      "idle": 23,
+      "cap": 54,
+      "max_bikes": 31,
+      "reserve": 8
+     },
+     {
+      "sid": 1363,
+      "name": "新市五義山路口",
+      "district": "淡水區",
+      "idle": 22,
+      "cap": 60,
+      "max_bikes": 38,
+      "reserve": 9
+     },
+     {
+      "sid": 770,
+      "name": "頭前運動公園",
+      "district": "新莊區",
+      "idle": 21,
+      "cap": 60,
+      "max_bikes": 39,
+      "reserve": 9
+     },
+     {
+      "sid": 1451,
+      "name": "翡翠灣",
+      "district": "萬里區",
+      "idle": 18,
+      "cap": 38,
+      "max_bikes": 20,
+      "reserve": 6
+     },
+     {
+      "sid": 357,
+      "name": "成州派出所",
+      "district": "五股區",
+      "idle": 17,
+      "cap": 49,
+      "max_bikes": 32,
+      "reserve": 7
+     },
+     {
+      "sid": 510,
+      "name": "嶺腳車站",
+      "district": "平溪區",
+      "idle": 17,
+      "cap": 30,
+      "max_bikes": 13,
+      "reserve": 4
+     },
+     {
+      "sid": 1167,
+      "name": "臺鐵樹林車站(後站停車場)",
+      "district": "樹林區",
+      "idle": 16,
+      "cap": 64,
+      "max_bikes": 48,
+      "reserve": 10
+     },
+     {
+      "sid": 1445,
+      "name": "白沙灣",
+      "district": "石門區",
+      "idle": 16,
+      "cap": 56,
+      "max_bikes": 40,
+      "reserve": 8
+     },
+     {
+      "sid": 1499,
+      "name": "蘆洲國民運動中心",
+      "district": "蘆洲區",
+      "idle": 15,
+      "cap": 55,
+      "max_bikes": 40,
+      "reserve": 8
+     },
+     {
+      "sid": 359,
+      "name": "成泰路4段22巷",
+      "district": "五股區",
+      "idle": 15,
+      "cap": 42,
+      "max_bikes": 27,
+      "reserve": 6
+     },
+     {
+      "sid": 287,
+      "name": "捷運秀朗橋站",
+      "district": "中和區",
+      "idle": 15,
+      "cap": 77,
+      "max_bikes": 62,
+      "reserve": 12
+     },
+     {
+      "sid": 896,
+      "name": "板橋國中",
+      "district": "板橋區",
+      "idle": 14,
+      "cap": 62,
+      "max_bikes": 48,
+      "reserve": 9
+     }
+    ]
+   },
+   "dispatch": {
+    "is_proxy": true,
+    "what_it_is": "單一分箱內庫存跳變 ≥ max(10, 容量一半) 的總量。無法區分人工調度與短時間大量借還，只能當上限量級參考。",
+    "daily_bikes_moved": 6689.6,
+    "daily_events": 373.5,
+    "top_stations": [
+     {
+      "sid": 454,
+      "name": "捷運海山站(2號出口)",
+      "district": "土城區",
+      "daily": 78.1
+     },
+     {
+      "sid": 469,
+      "name": "沛陂社區公園",
+      "district": "土城區",
+      "daily": 59.2
+     },
+     {
+      "sid": 411,
+      "name": "中山1號科技總部",
+      "district": "土城區",
+      "daily": 52.9
+     },
+     {
+      "sid": 702,
+      "name": "捷運新莊站(2號出口)",
+      "district": "新莊區",
+      "daily": 50.1
+     },
+     {
+      "sid": 164,
+      "name": "捷運三重國小站",
+      "district": "三重區",
+      "daily": 47.9
+     },
+     {
+      "sid": 1472,
+      "name": "捷運徐匯中學站(1號出口)",
+      "district": "蘆洲區",
+      "daily": 46.0
+     },
+     {
+      "sid": 1024,
+      "name": "師大林口校區誠樓前",
+      "district": "林口區",
+      "daily": 43.8
+     },
+     {
+      "sid": 1559,
+      "name": "臺鐵鳳鳴站",
+      "district": "鶯歌區",
+      "daily": 40.7
+     },
+     {
+      "sid": 845,
+      "name": "捷運府中站(3號出口)",
+      "district": "板橋區",
+      "daily": 40.2
+     },
+     {
+      "sid": 1343,
+      "name": "捷運淡水站",
+      "district": "淡水區",
+      "daily": 37.8
+     },
+     {
+      "sid": 163,
+      "name": "捷運三和國中站(2號出口)",
+      "district": "三重區",
+      "daily": 37.7
+     },
+     {
+      "sid": 97,
+      "name": "三重商工",
+      "district": "三重區",
+      "daily": 36.8
+     },
+     {
+      "sid": 166,
+      "name": "捷運三重站(3號出口)",
+      "district": "三重區",
+      "daily": 36.0
+     },
+     {
+      "sid": 168,
+      "name": "捷運菜寮站(3號出口)",
+      "district": "三重區",
+      "daily": 35.7
+     },
+     {
+      "sid": 847,
+      "name": "捷運新埔站(1號出口)",
+      "district": "板橋區",
+      "daily": 33.2
+     }
+    ]
+   },
+   "capacity_shortage": {
+    "clusters_ever_all_full": 18,
+    "clusters_ever_all_empty": 113,
+    "clusters_evaluated": 1343,
+    "top_full": [
+     {
+      "sid": 342,
+      "name": "五工五五權路口",
+      "district": "五股區",
+      "cluster_n": 2,
+      "cluster_capacity": 48,
+      "peak_bins": 1533,
+      "all_full_pct": 0.46,
+      "all_empty_pct": 2.28
+     },
+     {
+      "sid": 1145,
+      "name": "東豐街85巷口",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 27,
+      "peak_bins": 1548,
+      "all_full_pct": 0.26,
+      "all_empty_pct": 0.26
+     },
+     {
+      "sid": 1390,
+      "name": "淡金路38巷尾",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 20,
+      "peak_bins": 1548,
+      "all_full_pct": 0.26,
+      "all_empty_pct": 2.33
+     },
+     {
+      "sid": 381,
+      "name": "八里福朋喜來登酒店",
+      "district": "八里區",
+      "cluster_n": 2,
+      "cluster_capacity": 52,
+      "peak_bins": 1236,
+      "all_full_pct": 0.24,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 393,
+      "name": "渡船頭平面停車場",
+      "district": "八里區",
+      "cluster_n": 2,
+      "cluster_capacity": 55,
+      "peak_bins": 1236,
+      "all_full_pct": 0.16,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 1105,
+      "name": "中正路248巷口",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 30,
+      "peak_bins": 1548,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.78
+     },
+     {
+      "sid": 1306,
+      "name": "雍和科學園區",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 1548,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.06
+     },
+     {
+      "sid": 1346,
+      "name": "捷運竹圍站",
+      "district": "淡水區",
+      "cluster_n": 3,
+      "cluster_capacity": 92,
+      "peak_bins": 1548,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 1372,
+      "name": "民族路33巷",
+      "district": "淡水區",
+      "cluster_n": 3,
+      "cluster_capacity": 92,
+      "peak_bins": 1548,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 1400,
+      "name": "竹圍公園",
+      "district": "淡水區",
+      "cluster_n": 3,
+      "cluster_capacity": 92,
+      "peak_bins": 1548,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 402,
+      "name": "龍米路二段205巷口",
+      "district": "八里區",
+      "cluster_n": 3,
+      "cluster_capacity": 85,
+      "peak_bins": 1236,
+      "all_full_pct": 0.08,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 288,
+      "name": "新北市立中和高級中學",
+      "district": "中和區",
+      "cluster_n": 2,
+      "cluster_capacity": 52,
+      "peak_bins": 1541,
+      "all_full_pct": 0.06,
+      "all_empty_pct": 2.99
+     },
+     {
+      "sid": 616,
+      "name": "碧潭大橋(溪洲路6巷)",
+      "district": "新店區",
+      "cluster_n": 3,
+      "cluster_capacity": 104,
+      "peak_bins": 1548,
+      "all_full_pct": 0.06,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 703,
+      "name": "捷運輔大站(1號出口)",
+      "district": "新莊區",
+      "cluster_n": 2,
+      "cluster_capacity": 83,
+      "peak_bins": 1548,
+      "all_full_pct": 0.06,
+      "all_empty_pct": 0.65
+     },
+     {
+      "sid": 704,
+      "name": "捷運輔大站(4號出口)",
+      "district": "新莊區",
+      "cluster_n": 2,
+      "cluster_capacity": 83,
+      "peak_bins": 1548,
+      "all_full_pct": 0.06,
+      "all_empty_pct": 0.65
+     }
+    ],
+    "top_empty": [
+     {
+      "sid": 1386,
+      "name": "淡江大學(水源街)",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 69,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 4.33
+     },
+     {
+      "sid": 1413,
+      "name": "輕軌淡江大學站",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 69,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 4.33
+     },
+     {
+      "sid": 1308,
+      "name": "台北花園廣場社區",
+      "district": "泰山區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 3.04
+     },
+     {
+      "sid": 288,
+      "name": "新北市立中和高級中學",
+      "district": "中和區",
+      "cluster_n": 2,
+      "cluster_capacity": 52,
+      "peak_bins": 1541,
+      "all_full_pct": 0.06,
+      "all_empty_pct": 2.99
+     },
+     {
+      "sid": 1171,
+      "name": "上林里(環河東路一段)",
+      "district": "永和區",
+      "cluster_n": 2,
+      "cluster_capacity": 59,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.39
+     },
+     {
+      "sid": 1368,
+      "name": "新民新春街口",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.39
+     },
+     {
+      "sid": 1369,
+      "name": "新民街120巷",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.39
+     },
+     {
+      "sid": 1390,
+      "name": "淡金路38巷尾",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 20,
+      "peak_bins": 1548,
+      "all_full_pct": 0.26,
+      "all_empty_pct": 2.33
+     },
+     {
+      "sid": 342,
+      "name": "五工五五權路口",
+      "district": "五股區",
+      "cluster_n": 2,
+      "cluster_capacity": 48,
+      "peak_bins": 1533,
+      "all_full_pct": 0.46,
+      "all_empty_pct": 2.28
+     },
+     {
+      "sid": 1096,
+      "name": "三多國小",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.2
+     },
+     {
+      "sid": 1097,
+      "name": "三多第1市民活動中心",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.2
+     },
+     {
+      "sid": 499,
+      "name": "青雲路434巷口",
+      "district": "土城區",
+      "cluster_n": 4,
+      "cluster_capacity": 135,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.13
+     },
+     {
+      "sid": 1552,
+      "name": "新北市立鶯歌高級工商職業學校",
+      "district": "鶯歌區",
+      "cluster_n": 2,
+      "cluster_capacity": 76,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.07
+     },
+     {
+      "sid": 1297,
+      "name": "茄苳茄福街口",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 62,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.0
+     },
+     {
+      "sid": 1282,
+      "name": "汐科火車站(南)",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 140,
+      "peak_bins": 1548,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.81
+     }
+    ]
+   }
+  },
+  "m3": {
+   "label": "近三個月（4–6 月）",
+   "from": "2026-04-01",
+   "to": "2026-06-30",
+   "days": 91,
+   "idle": {
+    "definition": "閒置車＝期間內庫存最低點（那些車從沒被借走）；閒置柱＝容量減去車數最高點（那些柱從沒被停過）。兩者都取最嚴格的認定。",
+    "stations_with_idle_bikes": 22,
+    "total_idle_bikes": 36,
+    "loose_total_idle_bikes": 68,
+    "flat_stations_excluded": 1,
+    "flat_note": "期間內車數完全沒變過的站已排除——那是資料停滯（站端沒回報），不是閒置庫存。不排除的話它們會同時衝上閒置車與閒置柱兩張榜。",
+    "loose_note": "較寬鬆版：庫存 5 百分位扣掉最低保留量，給要更積極回收的情境參考。",
+    "stations_with_idle_docks": 516,
+    "total_idle_docks": 2319,
+    "top_bikes": [
+     {
+      "sid": 234,
+      "name": "中和慈惠堂",
+      "district": "中和區",
+      "idle": 4,
+      "cap": 15,
+      "min_bikes": 4,
+      "reserve": 2
+     },
+     {
+      "sid": 3,
+      "name": "三峽原住民族生活文化園區",
+      "district": "三峽區",
+      "idle": 3,
+      "cap": 31,
+      "min_bikes": 3,
+      "reserve": 5
+     },
+     {
+      "sid": 1440,
+      "name": "淡蘭吊橋",
+      "district": "石碇區",
+      "idle": 3,
+      "cap": 14,
+      "min_bikes": 3,
+      "reserve": 2
+     },
+     {
+      "sid": 1259,
+      "name": "忠山市民活動中心",
+      "district": "汐止區",
+      "idle": 3,
+      "cap": 38,
+      "min_bikes": 3,
+      "reserve": 6
+     },
+     {
+      "sid": 1514,
+      "name": "龍門運動公園",
+      "district": "貢寮區",
+      "idle": 2,
+      "cap": 20,
+      "min_bikes": 2,
+      "reserve": 3
+     },
+     {
+      "sid": 445,
+      "name": "承天路4巷(MRT社區)",
+      "district": "土城區",
+      "idle": 2,
+      "cap": 40,
+      "min_bikes": 2,
+      "reserve": 6
+     },
+     {
+      "sid": 1275,
+      "name": "汐止區農會附設老人活動中心",
+      "district": "汐止區",
+      "idle": 2,
+      "cap": 16,
+      "min_bikes": 2,
+      "reserve": 2
+     },
+     {
+      "sid": 584,
+      "name": "廣興河濱公園",
+      "district": "新店區",
+      "idle": 2,
+      "cap": 16,
+      "min_bikes": 2,
+      "reserve": 2
+     },
+     {
+      "sid": 632,
+      "name": "陽光Park社區",
+      "district": "新店區",
+      "idle": 2,
+      "cap": 21,
+      "min_bikes": 2,
+      "reserve": 3
+     },
+     {
+      "sid": 1180,
+      "name": "仁愛公園",
+      "district": "永和區",
+      "idle": 1,
+      "cap": 79,
+      "min_bikes": 1,
+      "reserve": 12
+     },
+     {
+      "sid": 1520,
+      "name": "金山立體停車場(中興路)",
+      "district": "金山區",
+      "idle": 1,
+      "cap": 15,
+      "min_bikes": 1,
+      "reserve": 2
+     },
+     {
+      "sid": 1448,
+      "name": "草里",
+      "district": "石門區",
+      "idle": 1,
+      "cap": 20,
+      "min_bikes": 1,
+      "reserve": 3
+     },
+     {
+      "sid": 1237,
+      "name": "保長公園",
+      "district": "汐止區",
+      "idle": 1,
+      "cap": 66,
+      "min_bikes": 1,
+      "reserve": 10
+     },
+     {
+      "sid": 740,
+      "name": "瓊林南路101巷口",
+      "district": "新莊區",
+      "idle": 1,
+      "cap": 33,
+      "min_bikes": 1,
+      "reserve": 5
+     },
+     {
+      "sid": 1087,
+      "name": "築禾樂社區",
+      "district": "林口區",
+      "idle": 1,
+      "cap": 15,
+      "min_bikes": 1,
+      "reserve": 2
+     },
+     {
+      "sid": 18,
+      "name": "光明路69巷口",
+      "district": "三峽區",
+      "idle": 1,
+      "cap": 17,
+      "min_bikes": 1,
+      "reserve": 3
+     },
+     {
+      "sid": 582,
+      "name": "屈尺景觀公園",
+      "district": "新店區",
+      "idle": 1,
+      "cap": 16,
+      "min_bikes": 1,
+      "reserve": 2
+     },
+     {
+      "sid": 511,
+      "name": "平溪國中",
+      "district": "平溪區",
+      "idle": 1,
+      "cap": 55,
+      "min_bikes": 1,
+      "reserve": 8
+     },
+     {
+      "sid": 380,
+      "name": "八里文昌五街",
+      "district": "八里區",
+      "idle": 1,
+      "cap": 16,
+      "min_bikes": 1,
+      "reserve": 2
+     },
+     {
+      "sid": 367,
+      "name": "永安橋下停車場",
+      "district": "五股區",
+      "idle": 1,
+      "cap": 14,
+      "min_bikes": 1,
+      "reserve": 2
+     }
+    ],
+    "top_docks": [
+     {
+      "sid": 1454,
+      "name": "野柳地質公園",
+      "district": "萬里區",
+      "idle": 42,
+      "cap": 60,
+      "max_bikes": 18,
+      "reserve": 9
+     },
+     {
+      "sid": 511,
+      "name": "平溪國中",
+      "district": "平溪區",
+      "idle": 37,
+      "cap": 55,
+      "max_bikes": 18,
+      "reserve": 8
+     },
+     {
+      "sid": 1452,
+      "name": "翡翠灣停車場",
+      "district": "萬里區",
+      "idle": 28,
+      "cap": 54,
+      "max_bikes": 26,
+      "reserve": 8
+     },
+     {
+      "sid": 509,
+      "name": "十分遊客中心",
+      "district": "平溪區",
+      "idle": 27,
+      "cap": 42,
+      "max_bikes": 15,
+      "reserve": 6
+     },
+     {
+      "sid": 554,
+      "name": "央北三中央路口(全陽大璽)",
+      "district": "新店區",
+      "idle": 27,
+      "cap": 73,
+      "max_bikes": 46,
+      "reserve": 11
+     },
+     {
+      "sid": 837,
+      "name": "忠孝國中",
+      "district": "板橋區",
+      "idle": 25,
+      "cap": 66,
+      "max_bikes": 41,
+      "reserve": 10
+     },
+     {
+      "sid": 901,
+      "name": "板橋戶政事務所海山辦事處",
+      "district": "板橋區",
+      "idle": 25,
+      "cap": 50,
+      "max_bikes": 25,
+      "reserve": 8
+     },
+     {
+      "sid": 99,
+      "name": "三重商工地下停車場",
+      "district": "三重區",
+      "idle": 24,
+      "cap": 64,
+      "max_bikes": 40,
+      "reserve": 10
+     },
+     {
+      "sid": 488,
+      "name": "金城裕民路口(中正國中)",
+      "district": "土城區",
+      "idle": 24,
+      "cap": 54,
+      "max_bikes": 30,
+      "reserve": 8
+     },
+     {
+      "sid": 1300,
+      "name": "連興龍安路口",
+      "district": "汐止區",
+      "idle": 23,
+      "cap": 70,
+      "max_bikes": 47,
+      "reserve": 10
+     },
+     {
+      "sid": 1363,
+      "name": "新市五義山路口",
+      "district": "淡水區",
+      "idle": 22,
+      "cap": 60,
+      "max_bikes": 38,
+      "reserve": 9
+     },
+     {
+      "sid": 770,
+      "name": "頭前運動公園",
+      "district": "新莊區",
+      "idle": 21,
+      "cap": 60,
+      "max_bikes": 39,
+      "reserve": 9
+     },
+     {
+      "sid": 1451,
+      "name": "翡翠灣",
+      "district": "萬里區",
+      "idle": 20,
+      "cap": 38,
+      "max_bikes": 18,
+      "reserve": 6
+     },
+     {
+      "sid": 359,
+      "name": "成泰路4段22巷",
+      "district": "五股區",
+      "idle": 20,
+      "cap": 42,
+      "max_bikes": 22,
+      "reserve": 6
+     },
+     {
+      "sid": 83,
+      "name": "淺水灣",
+      "district": "三芝區",
+      "idle": 19,
+      "cap": 48,
+      "max_bikes": 29,
+      "reserve": 7
+     },
+     {
+      "sid": 1499,
+      "name": "蘆洲國民運動中心",
+      "district": "蘆洲區",
+      "idle": 18,
+      "cap": 55,
+      "max_bikes": 37,
+      "reserve": 8
+     },
+     {
+      "sid": 430,
+      "name": "土城綜合體育場",
+      "district": "土城區",
+      "idle": 18,
+      "cap": 56,
+      "max_bikes": 38,
+      "reserve": 8
+     },
+     {
+      "sid": 510,
+      "name": "嶺腳車站",
+      "district": "平溪區",
+      "idle": 17,
+      "cap": 30,
+      "max_bikes": 13,
+      "reserve": 4
+     },
+     {
+      "sid": 231,
+      "name": "中和國民運動中心",
+      "district": "中和區",
+      "idle": 17,
+      "cap": 64,
+      "max_bikes": 47,
+      "reserve": 10
+     },
+     {
+      "sid": 357,
+      "name": "成州派出所",
+      "district": "五股區",
+      "idle": 17,
+      "cap": 49,
+      "max_bikes": 32,
+      "reserve": 7
+     }
+    ]
+   },
+   "dispatch": {
+    "is_proxy": true,
+    "what_it_is": "單一分箱內庫存跳變 ≥ max(10, 容量一半) 的總量。無法區分人工調度與短時間大量借還，只能當上限量級參考。",
+    "daily_bikes_moved": 5205.6,
+    "daily_events": 311.6,
+    "top_stations": [
+     {
+      "sid": 454,
+      "name": "捷運海山站(2號出口)",
+      "district": "土城區",
+      "daily": 101.6
+     },
+     {
+      "sid": 469,
+      "name": "沛陂社區公園",
+      "district": "土城區",
+      "daily": 63.7
+     },
+     {
+      "sid": 411,
+      "name": "中山1號科技總部",
+      "district": "土城區",
+      "daily": 56.8
+     },
+     {
+      "sid": 702,
+      "name": "捷運新莊站(2號出口)",
+      "district": "新莊區",
+      "daily": 55.4
+     },
+     {
+      "sid": 164,
+      "name": "捷運三重國小站",
+      "district": "三重區",
+      "daily": 47.4
+     },
+     {
+      "sid": 1472,
+      "name": "捷運徐匯中學站(1號出口)",
+      "district": "蘆洲區",
+      "daily": 46.9
+     },
+     {
+      "sid": 1559,
+      "name": "臺鐵鳳鳴站",
+      "district": "鶯歌區",
+      "daily": 39.7
+     },
+     {
+      "sid": 97,
+      "name": "三重商工",
+      "district": "三重區",
+      "daily": 36.0
+     },
+     {
+      "sid": 1024,
+      "name": "師大林口校區誠樓前",
+      "district": "林口區",
+      "daily": 35.4
+     },
+     {
+      "sid": 168,
+      "name": "捷運菜寮站(3號出口)",
+      "district": "三重區",
+      "daily": 34.3
+     },
+     {
+      "sid": 166,
+      "name": "捷運三重站(3號出口)",
+      "district": "三重區",
+      "daily": 33.7
+     },
+     {
+      "sid": 163,
+      "name": "捷運三和國中站(2號出口)",
+      "district": "三重區",
+      "daily": 33.0
+     },
+     {
+      "sid": 1343,
+      "name": "捷運淡水站",
+      "district": "淡水區",
+      "daily": 30.1
+     },
+     {
+      "sid": 845,
+      "name": "捷運府中站(3號出口)",
+      "district": "板橋區",
+      "daily": 30.0
+     },
+     {
+      "sid": 520,
+      "name": "中正民權路口",
+      "district": "新店區",
+      "daily": 29.0
+     }
+    ]
+   },
+   "capacity_shortage": {
+    "clusters_ever_all_full": 9,
+    "clusters_ever_all_empty": 84,
+    "clusters_evaluated": 1343,
+    "top_full": [
+     {
+      "sid": 342,
+      "name": "五工五五權路口",
+      "district": "五股區",
+      "cluster_n": 2,
+      "cluster_capacity": 48,
+      "peak_bins": 765,
+      "all_full_pct": 0.39,
+      "all_empty_pct": 2.48
+     },
+     {
+      "sid": 1145,
+      "name": "東豐街85巷口",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 27,
+      "peak_bins": 780,
+      "all_full_pct": 0.38,
+      "all_empty_pct": 0.38
+     },
+     {
+      "sid": 1390,
+      "name": "淡金路38巷尾",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 20,
+      "peak_bins": 780,
+      "all_full_pct": 0.38,
+      "all_empty_pct": 3.21
+     },
+     {
+      "sid": 381,
+      "name": "八里福朋喜來登酒店",
+      "district": "八里區",
+      "cluster_n": 2,
+      "cluster_capacity": 52,
+      "peak_bins": 780,
+      "all_full_pct": 0.26,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 288,
+      "name": "新北市立中和高級中學",
+      "district": "中和區",
+      "cluster_n": 2,
+      "cluster_capacity": 52,
+      "peak_bins": 780,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 1.67
+     },
+     {
+      "sid": 393,
+      "name": "渡船頭平面停車場",
+      "district": "八里區",
+      "cluster_n": 2,
+      "cluster_capacity": 55,
+      "peak_bins": 780,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 402,
+      "name": "龍米路二段205巷口",
+      "district": "八里區",
+      "cluster_n": 3,
+      "cluster_capacity": 85,
+      "peak_bins": 780,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 1105,
+      "name": "中正路248巷口",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 30,
+      "peak_bins": 780,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 1.03
+     },
+     {
+      "sid": 1306,
+      "name": "雍和科學園區",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 780,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 0.13
+     },
+     {
+      "sid": 1,
+      "name": "三峽區公所(三峽老街)",
+      "district": "三峽區",
+      "cluster_n": 7,
+      "cluster_capacity": 156,
+      "peak_bins": 664,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 2,
+      "name": "三峽區礁溪行政中心",
+      "district": "三峽區",
+      "cluster_n": 7,
+      "cluster_capacity": 132,
+      "peak_bins": 322,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 3,
+      "name": "三峽原住民族生活文化園區",
+      "district": "三峽區",
+      "cluster_n": 11,
+      "cluster_capacity": 286,
+      "peak_bins": 612,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 11,
+      "name": "中園國小",
+      "district": "三峽區",
+      "cluster_n": 5,
+      "cluster_capacity": 75,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 12,
+      "name": "中園國小(民權街)",
+      "district": "三峽區",
+      "cluster_n": 5,
+      "cluster_capacity": 75,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 13,
+      "name": "中園街福隆宮",
+      "district": "三峽區",
+      "cluster_n": 2,
+      "cluster_capacity": 30,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     }
+    ],
+    "top_empty": [
+     {
+      "sid": 1386,
+      "name": "淡江大學(水源街)",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 69,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 5.0
+     },
+     {
+      "sid": 1413,
+      "name": "輕軌淡江大學站",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 69,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 5.0
+     },
+     {
+      "sid": 1390,
+      "name": "淡金路38巷尾",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 20,
+      "peak_bins": 780,
+      "all_full_pct": 0.38,
+      "all_empty_pct": 3.21
+     },
+     {
+      "sid": 1308,
+      "name": "台北花園廣場社區",
+      "district": "泰山區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 3.08
+     },
+     {
+      "sid": 1368,
+      "name": "新民新春街口",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 3.08
+     },
+     {
+      "sid": 1369,
+      "name": "新民街120巷",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 3.08
+     },
+     {
+      "sid": 342,
+      "name": "五工五五權路口",
+      "district": "五股區",
+      "cluster_n": 2,
+      "cluster_capacity": 48,
+      "peak_bins": 765,
+      "all_full_pct": 0.39,
+      "all_empty_pct": 2.48
+     },
+     {
+      "sid": 499,
+      "name": "青雲路434巷口",
+      "district": "土城區",
+      "cluster_n": 4,
+      "cluster_capacity": 135,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.44
+     },
+     {
+      "sid": 1171,
+      "name": "上林里(環河東路一段)",
+      "district": "永和區",
+      "cluster_n": 2,
+      "cluster_capacity": 59,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.44
+     },
+     {
+      "sid": 1096,
+      "name": "三多國小",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.18
+     },
+     {
+      "sid": 1097,
+      "name": "三多第1市民活動中心",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 2.18
+     },
+     {
+      "sid": 288,
+      "name": "新北市立中和高級中學",
+      "district": "中和區",
+      "cluster_n": 2,
+      "cluster_capacity": 52,
+      "peak_bins": 780,
+      "all_full_pct": 0.13,
+      "all_empty_pct": 1.67
+     },
+     {
+      "sid": 1282,
+      "name": "汐科火車站(南)",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 140,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.28
+     },
+     {
+      "sid": 1297,
+      "name": "茄苳茄福街口",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 62,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.28
+     },
+     {
+      "sid": 1552,
+      "name": "新北市立鶯歌高級工商職業學校",
+      "district": "鶯歌區",
+      "cluster_n": 2,
+      "cluster_capacity": 76,
+      "peak_bins": 780,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.28
+     }
+    ]
+   }
+  },
+  "m1": {
+   "label": "近一個月（6 月）",
+   "from": "2026-06-01",
+   "to": "2026-06-30",
+   "days": 30,
+   "idle": {
+    "definition": "閒置車＝期間內庫存最低點（那些車從沒被借走）；閒置柱＝容量減去車數最高點（那些柱從沒被停過）。兩者都取最嚴格的認定。",
+    "stations_with_idle_bikes": 92,
+    "total_idle_bikes": 159,
+    "loose_total_idle_bikes": 136,
+    "flat_stations_excluded": 1,
+    "flat_note": "期間內車數完全沒變過的站已排除——那是資料停滯（站端沒回報），不是閒置庫存。不排除的話它們會同時衝上閒置車與閒置柱兩張榜。",
+    "loose_note": "較寬鬆版：庫存 5 百分位扣掉最低保留量，給要更積極回收的情境參考。",
+    "stations_with_idle_docks": 818,
+    "total_idle_docks": 4308,
+    "top_bikes": [
+     {
+      "sid": 1259,
+      "name": "忠山市民活動中心",
+      "district": "汐止區",
+      "idle": 7,
+      "cap": 38,
+      "min_bikes": 7,
+      "reserve": 6
+     },
+     {
+      "sid": 445,
+      "name": "承天路4巷(MRT社區)",
+      "district": "土城區",
+      "idle": 6,
+      "cap": 40,
+      "min_bikes": 6,
+      "reserve": 6
+     },
+     {
+      "sid": 1452,
+      "name": "翡翠灣停車場",
+      "district": "萬里區",
+      "idle": 5,
+      "cap": 54,
+      "min_bikes": 5,
+      "reserve": 8
+     },
+     {
+      "sid": 510,
+      "name": "嶺腳車站",
+      "district": "平溪區",
+      "idle": 4,
+      "cap": 30,
+      "min_bikes": 4,
+      "reserve": 4
+     },
+     {
+      "sid": 3,
+      "name": "三峽原住民族生活文化園區",
+      "district": "三峽區",
+      "idle": 4,
+      "cap": 31,
+      "min_bikes": 4,
+      "reserve": 5
+     },
+     {
+      "sid": 1440,
+      "name": "淡蘭吊橋",
+      "district": "石碇區",
+      "idle": 4,
+      "cap": 14,
+      "min_bikes": 4,
+      "reserve": 2
+     },
+     {
+      "sid": 234,
+      "name": "中和慈惠堂",
+      "district": "中和區",
+      "idle": 4,
+      "cap": 15,
+      "min_bikes": 4,
+      "reserve": 2
+     },
+     {
+      "sid": 1532,
+      "name": "北鶯停車場",
+      "district": "鶯歌區",
+      "idle": 4,
+      "cap": 20,
+      "min_bikes": 4,
+      "reserve": 3
+     },
+     {
+      "sid": 1430,
+      "name": "烏來老街",
+      "district": "烏來區",
+      "idle": 3,
+      "cap": 28,
+      "min_bikes": 3,
+      "reserve": 4
+     },
+     {
+      "sid": 511,
+      "name": "平溪國中",
+      "district": "平溪區",
+      "idle": 3,
+      "cap": 55,
+      "min_bikes": 3,
+      "reserve": 8
+     },
+     {
+      "sid": 582,
+      "name": "屈尺景觀公園",
+      "district": "新店區",
+      "idle": 3,
+      "cap": 16,
+      "min_bikes": 3,
+      "reserve": 2
+     },
+     {
+      "sid": 584,
+      "name": "廣興河濱公園",
+      "district": "新店區",
+      "idle": 3,
+      "cap": 16,
+      "min_bikes": 3,
+      "reserve": 2
+     },
+     {
+      "sid": 1435,
+      "name": "猴硐火車站",
+      "district": "瑞芳區",
+      "idle": 3,
+      "cap": 60,
+      "min_bikes": 3,
+      "reserve": 9
+     },
+     {
+      "sid": 1526,
+      "name": "中湖市民活動中心",
+      "district": "鶯歌區",
+      "idle": 3,
+      "cap": 20,
+      "min_bikes": 3,
+      "reserve": 3
+     },
+     {
+      "sid": 71,
+      "name": "龍埔三樹路98巷口",
+      "district": "三峽區",
+      "idle": 3,
+      "cap": 42,
+      "min_bikes": 3,
+      "reserve": 6
+     },
+     {
+      "sid": 68,
+      "name": "薇多綠雅社區(活動中心)",
+      "district": "三峽區",
+      "idle": 3,
+      "cap": 15,
+      "min_bikes": 3,
+      "reserve": 2
+     },
+     {
+      "sid": 1550,
+      "name": "文化館前路口",
+      "district": "鶯歌區",
+      "idle": 3,
+      "cap": 44,
+      "min_bikes": 3,
+      "reserve": 7
+     },
+     {
+      "sid": 1050,
+      "name": "東明一街121巷",
+      "district": "林口區",
+      "idle": 3,
+      "cap": 20,
+      "min_bikes": 3,
+      "reserve": 3
+     },
+     {
+      "sid": 1445,
+      "name": "白沙灣",
+      "district": "石門區",
+      "idle": 2,
+      "cap": 56,
+      "min_bikes": 2,
+      "reserve": 8
+     },
+     {
+      "sid": 631,
+      "name": "輕軌雙城站",
+      "district": "新店區",
+      "idle": 2,
+      "cap": 21,
+      "min_bikes": 2,
+      "reserve": 3
+     }
+    ],
+    "top_docks": [
+     {
+      "sid": 1454,
+      "name": "野柳地質公園",
+      "district": "萬里區",
+      "idle": 44,
+      "cap": 60,
+      "max_bikes": 16,
+      "reserve": 9
+     },
+     {
+      "sid": 896,
+      "name": "板橋國中",
+      "district": "板橋區",
+      "idle": 38,
+      "cap": 62,
+      "max_bikes": 24,
+      "reserve": 9
+     },
+     {
+      "sid": 511,
+      "name": "平溪國中",
+      "district": "平溪區",
+      "idle": 37,
+      "cap": 55,
+      "max_bikes": 18,
+      "reserve": 8
+     },
+     {
+      "sid": 83,
+      "name": "淺水灣",
+      "district": "三芝區",
+      "idle": 33,
+      "cap": 48,
+      "max_bikes": 15,
+      "reserve": 7
+     },
+     {
+      "sid": 1180,
+      "name": "仁愛公園",
+      "district": "永和區",
+      "idle": 32,
+      "cap": 79,
+      "max_bikes": 47,
+      "reserve": 12
+     },
+     {
+      "sid": 509,
+      "name": "十分遊客中心",
+      "district": "平溪區",
+      "idle": 30,
+      "cap": 42,
+      "max_bikes": 12,
+      "reserve": 6
+     },
+     {
+      "sid": 488,
+      "name": "金城裕民路口(中正國中)",
+      "district": "土城區",
+      "idle": 29,
+      "cap": 54,
+      "max_bikes": 25,
+      "reserve": 8
+     },
+     {
+      "sid": 1452,
+      "name": "翡翠灣停車場",
+      "district": "萬里區",
+      "idle": 28,
+      "cap": 54,
+      "max_bikes": 26,
+      "reserve": 8
+     },
+     {
+      "sid": 99,
+      "name": "三重商工地下停車場",
+      "district": "三重區",
+      "idle": 28,
+      "cap": 64,
+      "max_bikes": 36,
+      "reserve": 10
+     },
+     {
+      "sid": 901,
+      "name": "板橋戶政事務所海山辦事處",
+      "district": "板橋區",
+      "idle": 28,
+      "cap": 50,
+      "max_bikes": 22,
+      "reserve": 8
+     },
+     {
+      "sid": 606,
+      "name": "新店高中(中央路)",
+      "district": "新店區",
+      "idle": 28,
+      "cap": 85,
+      "max_bikes": 57,
+      "reserve": 13
+     },
+     {
+      "sid": 899,
+      "name": "板橋地政事務所",
+      "district": "板橋區",
+      "idle": 27,
+      "cap": 61,
+      "max_bikes": 34,
+      "reserve": 9
+     },
+     {
+      "sid": 554,
+      "name": "央北三中央路口(全陽大璽)",
+      "district": "新店區",
+      "idle": 27,
+      "cap": 73,
+      "max_bikes": 46,
+      "reserve": 11
+     },
+     {
+      "sid": 1300,
+      "name": "連興龍安路口",
+      "district": "汐止區",
+      "idle": 26,
+      "cap": 70,
+      "max_bikes": 44,
+      "reserve": 10
+     },
+     {
+      "sid": 430,
+      "name": "土城綜合體育場",
+      "district": "土城區",
+      "idle": 26,
+      "cap": 56,
+      "max_bikes": 30,
+      "reserve": 8
+     },
+     {
+      "sid": 837,
+      "name": "忠孝國中",
+      "district": "板橋區",
+      "idle": 26,
+      "cap": 66,
+      "max_bikes": 40,
+      "reserve": 10
+     },
+     {
+      "sid": 460,
+      "name": "斬龍山遺址文化公園",
+      "district": "土城區",
+      "idle": 24,
+      "cap": 64,
+      "max_bikes": 40,
+      "reserve": 10
+     },
+     {
+      "sid": 770,
+      "name": "頭前運動公園",
+      "district": "新莊區",
+      "idle": 24,
+      "cap": 60,
+      "max_bikes": 36,
+      "reserve": 9
+     },
+     {
+      "sid": 801,
+      "name": "健華新城社區",
+      "district": "板橋區",
+      "idle": 24,
+      "cap": 72,
+      "max_bikes": 48,
+      "reserve": 11
+     },
+     {
+      "sid": 231,
+      "name": "中和國民運動中心",
+      "district": "中和區",
+      "idle": 24,
+      "cap": 64,
+      "max_bikes": 40,
+      "reserve": 10
+     }
+    ]
+   },
+   "dispatch": {
+    "is_proxy": true,
+    "what_it_is": "單一分箱內庫存跳變 ≥ max(10, 容量一半) 的總量。無法區分人工調度與短時間大量借還，只能當上限量級參考。",
+    "daily_bikes_moved": 4390.5,
+    "daily_events": 268.3,
+    "top_stations": [
+     {
+      "sid": 454,
+      "name": "捷運海山站(2號出口)",
+      "district": "土城區",
+      "daily": 111.4
+     },
+     {
+      "sid": 702,
+      "name": "捷運新莊站(2號出口)",
+      "district": "新莊區",
+      "daily": 57.1
+     },
+     {
+      "sid": 469,
+      "name": "沛陂社區公園",
+      "district": "土城區",
+      "daily": 54.3
+     },
+     {
+      "sid": 411,
+      "name": "中山1號科技總部",
+      "district": "土城區",
+      "daily": 54.1
+     },
+     {
+      "sid": 164,
+      "name": "捷運三重國小站",
+      "district": "三重區",
+      "daily": 44.0
+     },
+     {
+      "sid": 1472,
+      "name": "捷運徐匯中學站(1號出口)",
+      "district": "蘆洲區",
+      "daily": 40.3
+     },
+     {
+      "sid": 1559,
+      "name": "臺鐵鳳鳴站",
+      "district": "鶯歌區",
+      "daily": 32.0
+     },
+     {
+      "sid": 166,
+      "name": "捷運三重站(3號出口)",
+      "district": "三重區",
+      "daily": 30.7
+     },
+     {
+      "sid": 952,
+      "name": "生態北公園",
+      "district": "板橋區",
+      "daily": 30.0
+     },
+     {
+      "sid": 168,
+      "name": "捷運菜寮站(3號出口)",
+      "district": "三重區",
+      "daily": 29.5
+     },
+     {
+      "sid": 520,
+      "name": "中正民權路口",
+      "district": "新店區",
+      "daily": 29.5
+     },
+     {
+      "sid": 756,
+      "name": "西盛公園",
+      "district": "新莊區",
+      "daily": 26.1
+     },
+     {
+      "sid": 455,
+      "name": "捷運海山站(3號出口)",
+      "district": "土城區",
+      "daily": 25.5
+     },
+     {
+      "sid": 1194,
+      "name": "捷運頂溪站(中興街)",
+      "district": "永和區",
+      "daily": 25.2
+     },
+     {
+      "sid": 163,
+      "name": "捷運三和國中站(2號出口)",
+      "district": "三重區",
+      "daily": 25.1
+     }
+    ]
+   },
+   "capacity_shortage": {
+    "clusters_ever_all_full": 3,
+    "clusters_ever_all_empty": 46,
+    "clusters_evaluated": 1343,
+    "top_full": [
+     {
+      "sid": 1390,
+      "name": "淡金路38巷尾",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 20,
+      "peak_bins": 264,
+      "all_full_pct": 0.76,
+      "all_empty_pct": 4.17
+     },
+     {
+      "sid": 1145,
+      "name": "東豐街85巷口",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 27,
+      "peak_bins": 264,
+      "all_full_pct": 0.38,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 1306,
+      "name": "雍和科學園區",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 264,
+      "all_full_pct": 0.38,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 1,
+      "name": "三峽區公所(三峽老街)",
+      "district": "三峽區",
+      "cluster_n": 7,
+      "cluster_capacity": 156,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 2,
+      "name": "三峽區礁溪行政中心",
+      "district": "三峽區",
+      "cluster_n": 7,
+      "cluster_capacity": 132,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 3,
+      "name": "三峽原住民族生活文化園區",
+      "district": "三峽區",
+      "cluster_n": 11,
+      "cluster_capacity": 286,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 11,
+      "name": "中園國小",
+      "district": "三峽區",
+      "cluster_n": 5,
+      "cluster_capacity": 75,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 12,
+      "name": "中園國小(民權街)",
+      "district": "三峽區",
+      "cluster_n": 5,
+      "cluster_capacity": 75,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 13,
+      "name": "中園街福隆宮",
+      "district": "三峽區",
+      "cluster_n": 2,
+      "cluster_capacity": 30,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 15,
+      "name": "中華愛國路口",
+      "district": "三峽區",
+      "cluster_n": 8,
+      "cluster_capacity": 158,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 16,
+      "name": "介壽國小",
+      "district": "三峽區",
+      "cluster_n": 5,
+      "cluster_capacity": 100,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 17,
+      "name": "光明停車場",
+      "district": "三峽區",
+      "cluster_n": 7,
+      "cluster_capacity": 117,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 18,
+      "name": "光明路69巷口",
+      "district": "三峽區",
+      "cluster_n": 6,
+      "cluster_capacity": 105,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 19,
+      "name": "八安大橋(清水街)",
+      "district": "三峽區",
+      "cluster_n": 5,
+      "cluster_capacity": 75,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     },
+     {
+      "sid": 20,
+      "name": "北大高中",
+      "district": "三峽區",
+      "cluster_n": 11,
+      "cluster_capacity": 251,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 0.0
+     }
+    ],
+    "top_empty": [
+     {
+      "sid": 342,
+      "name": "五工五五權路口",
+      "district": "五股區",
+      "cluster_n": 2,
+      "cluster_capacity": 48,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 4.55
+     },
+     {
+      "sid": 1390,
+      "name": "淡金路38巷尾",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 20,
+      "peak_bins": 264,
+      "all_full_pct": 0.76,
+      "all_empty_pct": 4.17
+     },
+     {
+      "sid": 1308,
+      "name": "台北花園廣場社區",
+      "district": "泰山區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 3.79
+     },
+     {
+      "sid": 1105,
+      "name": "中正路248巷口",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 30,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.89
+     },
+     {
+      "sid": 1386,
+      "name": "淡江大學(水源街)",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 69,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.89
+     },
+     {
+      "sid": 1413,
+      "name": "輕軌淡江大學站",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 69,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.89
+     },
+     {
+      "sid": 499,
+      "name": "青雲路434巷口",
+      "district": "土城區",
+      "cluster_n": 4,
+      "cluster_capacity": 135,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.52
+     },
+     {
+      "sid": 1096,
+      "name": "三多國小",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.52
+     },
+     {
+      "sid": 1097,
+      "name": "三多第1市民活動中心",
+      "district": "樹林區",
+      "cluster_n": 2,
+      "cluster_capacity": 53,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.52
+     },
+     {
+      "sid": 1368,
+      "name": "新民新春街口",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.52
+     },
+     {
+      "sid": 1369,
+      "name": "新民街120巷",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 35,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.52
+     },
+     {
+      "sid": 363,
+      "name": "新北市工商展覽中心",
+      "district": "五股區",
+      "cluster_n": 3,
+      "cluster_capacity": 83,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.14
+     },
+     {
+      "sid": 1282,
+      "name": "汐科火車站(南)",
+      "district": "汐止區",
+      "cluster_n": 2,
+      "cluster_capacity": 140,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.14
+     },
+     {
+      "sid": 1363,
+      "name": "新市五義山路口",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 98,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.14
+     },
+     {
+      "sid": 1391,
+      "name": "滬尾藝文休閒園區",
+      "district": "淡水區",
+      "cluster_n": 2,
+      "cluster_capacity": 43,
+      "peak_bins": 264,
+      "all_full_pct": 0.0,
+      "all_empty_pct": 1.14
+     }
+    ]
+   }
+  }
+ }
+}
